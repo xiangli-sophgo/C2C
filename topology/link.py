@@ -1,6 +1,6 @@
 from typing import Dict, Any
 from topology.base import BaseLink, BaseNode
-import utils.constants as constants
+import config.constants as constants
 
 
 class PCIeLink(BaseLink):

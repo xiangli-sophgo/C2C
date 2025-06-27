@@ -1,5 +1,5 @@
 from typing import Dict, Any
-from utils.constants import MAX_CREDIT_CAPACITY
+from config.constants import MAX_CREDIT_CAPACITY
 
 
 class CreditManager:

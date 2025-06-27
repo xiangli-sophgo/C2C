@@ -25,7 +25,7 @@ def demo_tree_visualization():
     print("=== 树状拓扑可视化演示 ===")
 
     # 创建输出目录
-    os.makedirs("output", exist_ok=True)
+    os.makedirs("../output", exist_ok=True)
 
     # 创建树状拓扑
     topo_logic = TreeTopologyLogic()
@@ -37,7 +37,7 @@ def demo_tree_visualization():
     fig = visualizer.visualize_tree_topology(tree_root, all_nodes)
 
     # 保存图片
-    visualizer.save_figure("output/tree_topology_demo.png")
+    visualizer.save_figure("../output/tree_topology_demo.png")
 
     # 显示性能指标
     perf = evaluate_tree_performance(tree_root, all_nodes)
@@ -64,7 +64,7 @@ def demo_torus_visualization():
     visualizer = TopologyVisualizer(figsize=(10, 8))
     fig = visualizer.visualize_torus_topology(torus_2d)
 
-    visualizer.save_figure("output/torus_2d_demo.png")
+    visualizer.save_figure("../output/torus_2d_demo.png")
     visualizer.show()
     visualizer.close()
 
@@ -76,7 +76,7 @@ def demo_torus_visualization():
     visualizer = TopologyVisualizer(figsize=(12, 8))
     fig = visualizer.visualize_torus_topology(torus_3d)
 
-    visualizer.save_figure("output/torus_3d_demo.png")
+    visualizer.save_figure("../output/torus_3d_demo.png")
     visualizer.show()
     visualizer.close()
 
@@ -130,7 +130,7 @@ def demo_mixed_topology():
     visualizer = TopologyVisualizer(figsize=(14, 10))
     fig = visualizer.visualize_topology_graph(topology, layout_type="spring")
 
-    visualizer.save_figure("output/mixed_topology_demo.png")
+    visualizer.save_figure("../output/mixed_topology_demo.png")
 
     # 显示拓扑统计
     stats = topology.get_topology_statistics()
@@ -195,10 +195,10 @@ def demo_performance_comparison():
     fig = comparator.compare_topologies(comparison_data)
 
     # 保存图表
-    fig.savefig("output/performance_comparison_demo.png", dpi=300, bbox_inches="tight")
+    fig.savefig("../output/performance_comparison_demo.png", dpi=300, bbox_inches="tight")
 
     # 生成报告
-    report = comparator.generate_performance_report("output/performance_report.md")
+    report = comparator.generate_performance_report("../output/performance_report.md")
     print("性能对比报告已生成")
 
     plt.show()
@@ -275,7 +275,7 @@ def demo_color_schemes():
         axes[i].set_axis_off()
 
     plt.tight_layout()
-    plt.savefig("output/color_schemes_demo.png", dpi=300, bbox_inches="tight")
+    plt.savefig("../output/color_schemes_demo.png", dpi=300, bbox_inches="tight")
     plt.show()
 
 
@@ -297,14 +297,14 @@ def main():
         demo_color_schemes()
 
         print("\n🎉 所有演示完成！")
-        print("生成的文件保存在 output/ 目录:")
-        print("  - output/tree_topology_demo.png")
-        print("  - output/torus_2d_demo.png")
-        print("  - output/torus_3d_demo.png")
-        print("  - output/mixed_topology_demo.png")
-        print("  - output/performance_comparison_demo.png")
-        print("  - output/performance_report.md")
-        print("  - output/color_schemes_demo.png")
+        print("生成的文件保存在 ../output/ 目录:")
+        print("  - ../output/tree_topology_demo.png")
+        print("  - ../output/torus_2d_demo.png")
+        print("  - ../output/torus_3d_demo.png")
+        print("  - ../output/mixed_topology_demo.png")
+        print("  - ../output/performance_comparison_demo.png")
+        print("  - ../output/performance_report.md")
+        print("  - ../output/color_schemes_demo.png")
 
     except Exception as e:
         print(f"❌ 演示过程中发生错误: {str(e)}")

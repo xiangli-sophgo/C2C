@@ -176,7 +176,7 @@ def performance_comparison():
     """性能对比测试"""
     print("\n=== Tree vs Torus性能对比 ===\n")
 
-    chip_counts = [16, 32, 64, 128]
+    chip_counts = list(range(4, 129))
 
     for count in chip_counts:
         print(f"芯片数量: {count}")

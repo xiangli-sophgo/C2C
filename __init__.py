@@ -30,8 +30,8 @@ from visualization.visualizer import TopologyVisualizer
 from visualization.comparison import PerformanceComparator
 
 # Import utility components
-from utils.constants import *
-from utils.exceptions import C2CException, TopologyError, ProtocolError
+from config.constants import *
+from utils.exceptions import *
 
 # Import configuration
 from config.loader import ConfigLoader
@@ -39,13 +39,12 @@ from config.loader import ConfigLoader
 __all__ = [
     # Version info
     "__version__",
-    "__author__", 
+    "__author__",
     "__email__",
     "__description__",
-    
     # Core topology classes
     "BaseNode",
-    "BaseLink", 
+    "BaseLink",
     "BaseTopology",
     "ChipNode",
     "SwitchNode",
@@ -54,7 +53,6 @@ __all__ = [
     "C2CDirectLink",
     "TopologyGraph",
     "TopologyBuilder",
-    
     # Protocol classes
     "BaseProtocol",
     "ProtocolState",
@@ -63,17 +61,14 @@ __all__ = [
     "CreditManager",
     "AddressTranslator",
     "Router",
-    
     # Visualization classes
     "TopologyVisualizer",
     "PerformanceComparator",
-    
     # Utility classes
     "C2CException",
     "TopologyError",
     "ProtocolError",
     "ConfigLoader",
-    
     # Constants
     "DEFAULT_BANDWIDTH",
     "DEFAULT_LATENCY",
