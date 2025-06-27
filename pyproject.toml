@@ -1,0 +1,153 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "C2C"
+version = "1.0.0"
+description = "A topology modeling framework for SG2260E chip-to-chip communication"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "C2C Development Team", email = "contact@c2c-topology.com"}
+]
+maintainers = [
+    {name = "C2C Development Team", email = "contact@c2c-topology.com"}
+]
+keywords = ["topology", "chip-to-chip", "communication", "modeling", "simulation", "SG2260E"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: System :: Networking",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "networkx>=2.8",
+    "matplotlib>=3.5.0",
+    "numpy>=1.21.0",
+    "pyyaml>=6.0",
+    "streamlit>=1.28.0",
+    "plotly>=5.0.0",
+    "seaborn>=0.11.0",
+    "pandas>=1.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=22.0.0",
+    "flake8>=5.0.0",
+    "mypy>=1.0.0",
+]
+docs = [
+    "sphinx>=5.0.0",
+    "sphinx-rtd-theme>=1.0.0",
+]
+
+[project.scripts]
+c2c-webapp = "C2C.scripts.run_webapp:run_webapp"
+c2c-demo = "C2C.examples.basic_demo:main"
+c2c-validate = "C2C.examples.tree_torus_validation:main"
+
+[project.urls]
+Homepage = "https://github.com/your-org/C2C"
+Documentation = "https://c2c-topology.readthedocs.io/"
+Repository = "https://github.com/your-org/C2C"
+"Bug Tracker" = "https://github.com/your-org/C2C/issues"
+
+[tool.setuptools]
+zip-safe = false
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["C2C*"]
+
+[tool.setuptools.package-data]
+"C2C" = [
+    "examples/*.py",
+    "scripts/*.py", 
+    "examples/output/*.png",
+    "examples/output/*.md",
+]
+
+[tool.black]
+line-length = 88
+target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | venv
+  | build
+  | dist
+)/
+'''
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--verbose",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+]
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "networkx.*",
+    "matplotlib.*",
+    "plotly.*",
+    "streamlit.*",
+]
+ignore_missing_imports = true
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = ["E203", "W503"]
+exclude = [
+    ".git",
+    "__pycache__",
+    "build",
+    "dist",
+    ".eggs",
+    "*.egg-info",
+    ".venv",
+    "venv",
+]

@@ -1,0 +1,54 @@
+# MANIFEST.in - Specify additional files to include in the package
+
+# Include documentation files
+include README.md
+include CLAUDE.md
+include LICENSE
+include CHANGELOG.md
+
+# Include configuration files
+include *.toml
+include *.cfg
+include *.ini
+
+# Include example files and outputs
+recursive-include examples *.py
+recursive-include examples/output *.png *.md
+recursive-include scripts *.py
+
+# Include test files (if they exist)
+recursive-include tests *.py
+
+# Include data files
+recursive-include C2C/config *.yaml *.yml *.json
+recursive-include C2C/visualization *.css *.js *.html
+
+# Include documentation source files
+recursive-include docs *.md *.rst *.txt
+
+# Exclude unnecessary files
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude *.pyd
+global-exclude __pycache__
+global-exclude .git*
+global-exclude .DS_Store
+global-exclude *.so
+global-exclude .venv
+global-exclude venv
+global-exclude .pytest_cache
+global-exclude .mypy_cache
+global-exclude *.egg-info
+global-exclude build
+global-exclude dist
+
+# Exclude specific directories
+prune .git
+prune .venv
+prune venv
+prune __pycache__
+prune *.egg-info
+prune build
+prune dist
+prune .pytest_cache
+prune .mypy_cache

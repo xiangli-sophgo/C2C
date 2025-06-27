@@ -1,0 +1,21 @@
+# C2C Topology Modeling Framework Dependencies
+
+# Core scientific computing
+networkx>=2.8
+matplotlib>=3.5.0
+numpy>=1.21.0
+pandas>=1.3.0
+
+# Configuration and data handling
+pyyaml>=6.0
+
+# Web interface and visualization
+streamlit>=1.28.0
+plotly>=5.0.0
+seaborn>=0.11.0
+
+# Optional dependencies for development
+# Install with: pip install -r requirements.txt -r requirements-dev.txt
+
+# Core dependencies are minimal and focused on essential functionality
+# Additional dependencies can be installed as needed

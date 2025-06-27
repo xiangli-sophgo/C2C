@@ -2,21 +2,25 @@ from typing import Any, Dict
 from dataclasses import dataclass
 from protocol.base import BaseProtocol, ProtocolState
 
+
 @dataclass
 class CDMAMessage:
     """CDMA消息格式"""
+
     source_id: str
     destination_id: str
-    message_type: str # e.g., "send", "receive", "ack"
-    tensor_shape: Any = None # e.g., (H, W, C)
-    data_type: str = None # e.g., "float32", "int8"
-    payload: Any = None # Actual data payload
-    reduce_op: str = None # e.g., "sum", "mean"
+    message_type: str  # e.g., "send", "receive", "ack"
+    tensor_shape: Any = None  # e.g., (H, W, C)
+    data_type: str = None  # e.g., "float32", "int8"
+    payload: Any = None  # Actual data payload
+    reduce_op: str = None  # e.g., "sum", "mean"
     sequence_number: int = 0
     transaction_id: str = None
 
+
 class CDMAProtocol(BaseProtocol):
     """CDMA协议实现"""
+
     def __init__(self, protocol_id: str, node_id: str):
         super().__init__(protocol_id)
         self._node_id = node_id
@@ -29,56 +33,45 @@ class CDMAProtocol(BaseProtocol):
 
     def process_message(self, message: CDMAMessage) -> Any:
         """处理CDMA消息"""
-        print(f"Node {self._node_id} processing CDMA message: {message.message_type} from {message.source_id} to {message.destination_id}")
+        print(f"节点 {self._node_id} 处理CDMA消息: {message.message_type} 从 {message.source_id} 到 {message.destination_id}")
         if message.destination_id != self._node_id:
-            print(f"Warning: Message not for this node. Expected {self._node_id}, got {message.destination_id}")
+            print(f"警告：消息不属于该节点。期望 {self._node_id}，实际得到 {message.destination_id}")
             return None
 
         if message.message_type == "send":
-            print(f"Received SEND request from {message.source_id}. Data: {message.payload}")
-            # Simulate data processing
+            print(f"收到来自 {message.source_id} 的SEND请求。数据：{message.payload}")
+            # 模拟数据处理
             self.set_state(ProtocolState.TRANSMITTING)
-            # Acknowledge the send
-            ack_message = CDMAMessage(
-                source_id=self._node_id,
-                destination_id=message.source_id,
-                message_type="ack",
-                transaction_id=message.transaction_id
-            )
+            # 确认发送
+            ack_message = CDMAMessage(source_id=self._node_id, destination_id=message.source_id, message_type="ack", transaction_id=message.transaction_id)
             self.set_state(ProtocolState.DONE)
             return ack_message
         elif message.message_type == "receive":
-            print(f"Received RECEIVE request from {message.source_id}. Preparing data.")
+            print(f"收到来自 {message.source_id} 的RECEIVE请求。准备数据。")
             self.set_state(ProtocolState.WAITING)
-            # Simulate data retrieval and sending back
-            response_payload = f"Data from {self._node_id} for {message.transaction_id}"
-            response_message = CDMAMessage(
-                source_id=self._node_id,
-                destination_id=message.source_id,
-                message_type="data_response",
-                payload=response_payload,
-                transaction_id=message.transaction_id
-            )
+            # 模拟数据检索和发送回复
+            response_payload = f"来自 {self._node_id} 的数据，事务ID {message.transaction_id}"
+            response_message = CDMAMessage(source_id=self._node_id, destination_id=message.source_id, message_type="data_response", payload=response_payload, transaction_id=message.transaction_id)
             self.set_state(ProtocolState.TRANSMITTING)
             return response_message
         elif message.message_type == "ack":
-            print(f"Received ACK for transaction {message.transaction_id} from {message.source_id}")
+            print(f"收到来自 {message.source_id} 的事务 {message.transaction_id} 的ACK")
             if message.transaction_id in self._pending_transactions:
                 del self._pending_transactions[message.transaction_id]
                 self.set_state(ProtocolState.DONE)
             else:
-                print(f"Warning: ACK for unknown transaction {message.transaction_id}")
+                print(f"警告：未知事务 {message.transaction_id} 的ACK")
             return None
         elif message.message_type == "data_response":
-            print(f"Received DATA_RESPONSE for transaction {message.transaction_id} from {message.source_id}. Data: {message.payload}")
+            print(f"收到来自 {message.source_id} 的事务 {message.transaction_id} 的DATA_RESPONSE。数据：{message.payload}")
             if message.transaction_id in self._pending_transactions:
                 del self._pending_transactions[message.transaction_id]
                 self.set_state(ProtocolState.DONE)
             else:
-                print(f"Warning: DATA_RESPONSE for unknown transaction {message.transaction_id}")
+                print(f"警告：未知事务 {message.transaction_id} 的DATA_RESPONSE")
             return None
         else:
-            print(f"Unknown CDMA message type: {message.message_type}")
+            print(f"未知的CDMA消息类型：{message.message_type}")
             self.set_state(ProtocolState.ERROR)
             return None
 
@@ -88,6 +81,5 @@ class CDMAProtocol(BaseProtocol):
             message.transaction_id = self._generate_transaction_id()
         self._pending_transactions[message.transaction_id] = message
         self.set_state(ProtocolState.TRANSMITTING)
-        print(f"Node {self._node_id} sending CDMA message: {message.message_type} to {message.destination_id} (Txn ID: {message.transaction_id})")
-        # In a real system, this would involve passing the message to the network layer
-
+        print(f"节点 {self._node_id} 发送CDMA消息：{message.message_type} 到 {message.destination_id} （事务ID：{message.transaction_id}）")
+        # 在实际系统中，这将涉及将消息传递给网络层

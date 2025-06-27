@@ -1,8 +1,10 @@
 from typing import Dict, Any
 from utils.constants import MAX_CREDIT_CAPACITY
 
+
 class CreditManager:
     """Credit机制管理"""
+
     def __init__(self, node_id: str):
         self._node_id = node_id
         self._credits: Dict[str, int] = {}
@@ -21,19 +23,19 @@ class CreditManager:
         """申请Credit。如果可用，则减少并返回True，否则返回False"""
         if self._credits.get(destination, 0) > 0:
             self._credits[destination] -= 1
-            print(f"Node {self._node_id}: Credit granted for {destination}. Remaining: {self._credits[destination]}")
+            print(f"节点 {self._node_id}：为 {destination} 授予信用。剩余：{self._credits[destination]}")
             return True
-        print(f"Node {self._node_id}: No credit available for {destination}.")
+        print(f"节点 {self._node_id}：没有可用于 {destination} 的信用。")
         return False
 
     def grant_credit(self, destination: str, amount: int = 1):
         """授予Credit。增加指定目的地的Credit数量，不超过最大容量"""
         current_credits = self._credits.get(destination, 0)
         self._credits[destination] = min(self._max_capacity, current_credits + amount)
-        print(f"Node {self._node_id}: Credit granted to {destination}. New total: {self._credits[destination]}")
+        print(f"节点 {self._node_id}：向 {destination} 授予信用。新总数：{self._credits[destination]}")
 
     def get_credit_status(self) -> Dict[str, int]:
         """获取所有目的地的Credit状态"""
         return self._credits
 
-    # TODO: Add timeout handling mechanism
+    # TODO: 添加超时处理机制

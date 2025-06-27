@@ -11,6 +11,10 @@ venv/
 *.egg-info/
 .pytest_cache/
 
+dist/
+build/
+output/
+
 # IDEs
 .idea/
 .vscode/
@@ -24,3 +28,9 @@ Thumbs.db
 *.log
 *.tmp
 *.swp
+
+# AI-generated files
+CLAUDE.md
+**/.claude/
+*/*/.claude/
+.gemini/
