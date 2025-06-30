@@ -12,26 +12,26 @@ __email__ = "contact@c2c-topology.com"
 __description__ = "A topology modeling framework for SG2260E chip-to-chip communication"
 
 # Import core components
-from topology.base import BaseNode, BaseLink, BaseTopology
-from topology.node import ChipNode, SwitchNode, HostNode
-from topology.link import PCIeLink, C2CDirectLink
-from topology.graph import TopologyGraph
-from topology.builder import TopologyBuilder
+from src.topology.base import BaseNode, BaseLink, BaseTopology
+from src.topology.node import ChipNode, SwitchNode, HostNode
+from src.topology.link import PCIeLink, C2CDirectLink
+from src.topology.graph import TopologyGraph
+from src.topology.builder import TopologyBuilder
 
 # Import protocol components
-from protocol.base import BaseProtocol, ProtocolState
-from protocol.cdma import CDMAProtocol, CDMAMessageType
-from protocol.credit import CreditManager
-from protocol.address import AddressTranslator
-from protocol.router import Router
+from src.protocol.base import BaseProtocol, ProtocolState
+from src.protocol.cdma import CDMAProtocol, CDMAMessageType
+from src.protocol.credit import CreditManager
+from src.protocol.address import AddressTranslator
+from src.protocol.router import Router
 
 # Import visualization components
-from visualization.visualizer import TopologyVisualizer
-from visualization.comparison import PerformanceComparator
+from src.visualization.visualizer import TopologyVisualizer
+from src.visualization.comparison import PerformanceComparator
 
 # Import utility components
 from config.constants import *
-from utils.exceptions import *
+from src.utils.exceptions import *
 
 # Import configuration
 from config.loader import ConfigLoader
@@ -87,5 +87,5 @@ __pkg_info__ = {
     "author_email": __email__,
     "url": "https://github.com/your-org/C2C",
     "license": "MIT",
-    "keywords": ["topology", "chip-to-chip", "communication", "modeling", "simulation", "SG2260E"],
+    "keywords": ["topology", "chip-to-chip", "communication", "modeling", "simulation"],
 }

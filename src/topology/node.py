@@ -1,8 +1,10 @@
 from typing import List, Dict, Any
-from topology.base import BaseNode
+from src.topology.base import BaseNode
+
 
 class ChipNode(BaseNode):
     """芯片节点 - 代表SG2260E芯片"""
+
     def __init__(self, chip_id: str, board_id: str, cdma_engines: int = 10, memory_types: List[str] = None, properties: Dict[str, Any] = None):
         super().__init__(node_id=chip_id, node_type="chip", properties=properties)
         self.add_property("board_id", board_id)
@@ -35,8 +37,10 @@ class ChipNode(BaseNode):
         print(f"ChipNode {self.node_id} receiving message from {sender_node.node_id}: {message}")
         # Placeholder for actual message receiving logic
 
+
 class SwitchNode(BaseNode):
     """PCIe Switch节点"""
+
     def __init__(self, switch_id: str, port_count: int, bandwidth: float, properties: Dict[str, Any] = None):
         super().__init__(node_id=switch_id, node_type="switch", properties=properties)
         self.add_property("port_count", port_count)
@@ -64,8 +68,10 @@ class SwitchNode(BaseNode):
         print(f"SwitchNode {self.node_id} receiving message from {sender_node.node_id}: {message}")
         # Placeholder for actual message receiving logic
 
+
 class HostNode(BaseNode):
     """Host PC节点"""
+
     def __init__(self, host_id: str, pcie_lanes: int, properties: Dict[str, Any] = None):
         super().__init__(node_id=host_id, node_type="host", properties=properties)
         self.add_property("pcie_lanes", pcie_lanes)

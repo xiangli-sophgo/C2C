@@ -10,14 +10,14 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import matplotlib.pyplot as plt
-from visualization.visualizer import TopologyVisualizer
-from visualization.comparison import PerformanceComparator
-from visualization.utils import color_manager, graphics_utils
-from topology.tree import TreeTopologyLogic, evaluate_tree_performance
-from topology.torus import TorusTopologyLogic, TorusRoutingLogic, test_torus_connectivity
-from topology.node import ChipNode, SwitchNode, HostNode
-from topology.link import C2CDirectLink, PCIeLink
-from topology.builder import TopologyBuilder
+from src.visualization.visualizer import TopologyVisualizer
+from src.visualization.comparison import PerformanceComparator
+from src.visualization.utils import color_manager, graphics_utils
+from src.topology.tree import TreeTopologyLogic, evaluate_tree_performance
+from src.topology.torus import TorusTopologyLogic, TorusRoutingLogic, test_torus_connectivity
+from src.topology.node import ChipNode, SwitchNode, HostNode
+from src.topology.link import C2CDirectLink, PCIeLink
+from src.topology.builder import TopologyBuilder
 
 
 def demo_tree_visualization():

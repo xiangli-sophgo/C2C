@@ -1,9 +1,11 @@
-from topology.graph import TopologyGraph
-from topology.base import BaseNode, BaseLink
+from src.topology.graph import TopologyGraph
+from src.topology.base import BaseNode, BaseLink
 from typing import Dict, Any
+
 
 class TopologyBuilder:
     """拓扑构建器"""
+
     def __init__(self, topology_id: str):
         self._topology_graph = TopologyGraph(topology_id)
         self._nodes: Dict[str, BaseNode] = {}

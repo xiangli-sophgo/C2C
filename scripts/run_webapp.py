@@ -11,7 +11,7 @@ import os
 
 def check_dependencies():
     """检查必需的依赖"""
-    required_packages = ["streamlit", "matplotlib", "networkx", "numpy", "pandas"]
+    required_packages = ["streamlit", "matplotlib", "networkx", "numpy", "pandas", "plotly", "seaborn"]
 
     missing_packages = []
 
@@ -56,17 +56,16 @@ def run_webapp():
 
     # 获取脚本目录
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    webapp_path = os.path.join(script_dir, "../visualization", "interactive.py")
+
+    # 选择应用版本
+    webapp_path = os.path.join(script_dir, r"../src/visualization", "interactive.py")
+    app_name = "C2C拓扑性能对比分析"
+
     project_root = os.path.dirname(script_dir)
 
-    if not os.path.exists(webapp_path):
-        print(f"❌ 找不到Web应用文件: {webapp_path}")
-        return
-
-    print("🚀 启动C2C拓扑可视化Web应用...")
+    print(f"🚀 启动{app_name}Web应用...")
     print("🌐 应用将在浏览器中自动打开")
     print("📝 使用 Ctrl+C 停止应用")
-    print("-" * 50)
 
     try:
         # 启动Streamlit应用，设置正确的工作目录
@@ -81,17 +80,24 @@ def show_usage():
     """显示使用说明"""
     print(
         """
-🖥️ C2C拓扑可视化Web应用
+🖥️ C2C拓扑性能对比分析Web应用
 
 使用方法:
-  python run_webapp.py          # 启动Web应用
-  python run_webapp.py --help   # 显示帮助信息
+  python run_webapp.py            # 启动Web应用
+  python run_webapp.py --help     # 显示帮助信息
 
-功能特性:
-  📊 交互式拓扑可视化
-  ⚡ 性能对比分析  
+增强版功能特性:
+  📊 交互式性能对比分析
+  🎯 智能拓扑优化建议
+  🌐 拓扑可视化
+  📈 实时性能指标对比
+  📋 详细分析报告生成
+  ⚡ Plotly交互式图表
   🛤️ 路径分析工具
   🔥 网络热点分析
+
+基础版功能:
+  📊 基础拓扑可视化
   🎨 多种颜色方案
   💾 图表导出功能
 
@@ -102,15 +108,24 @@ def show_usage():
   - networkx
   - numpy
   - pandas
+  - plotly (增强版)
+  - seaborn (增强版)
 
 首次使用:
-  如果缺少依赖包，脚本会提示安装命令
+  如果缺少依赖包，脚本会自动提示安装命令
+  
+建议:
+  推荐使用增强版以获得完整的对比分析功能
 """
     )
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] in ["--help", "-h"]:
-        show_usage()
+    if len(sys.argv) > 1:
+        if sys.argv[1] in ["--help", "-h"]:
+            show_usage()
+        else:
+            print(f"未知参数: {sys.argv[1]}")
+            show_usage()
     else:
         run_webapp()
