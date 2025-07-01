@@ -12,7 +12,14 @@ import time
 import json
 from io import BytesIO
 
-from utils.exceptions import CDMAError
+from src.utils.exceptions import CDMAError
+
+# 定义固定长度的字符串字段长度
+SOURCE_ID_LEN = 32
+DEST_ID_LEN = 32
+PACKET_TYPE_LEN = 16
+COMPRESSION_TYPE_LEN = 16
+TRANSACTION_ID_LEN = 32
 
 
 class PacketType(Enum):
@@ -90,9 +97,9 @@ class PacketHeader:
         """打包包头用于校验和计算"""
         # 简化的格式，排除校验和字段
         data = []
-        data.extend(self.source_id.encode('utf-8')[:32].ljust(32, b'\x00'))
-        data.extend(self.dest_id.encode('utf-8')[:32].ljust(32, b'\x00'))
-        data.extend(self.packet_type.value.encode('utf-8')[:16].ljust(16, b'\x00'))
+        data.extend(self.source_id.encode('utf-8')[:SOURCE_ID_LEN].ljust(SOURCE_ID_LEN, b'\x00'))
+        data.extend(self.dest_id.encode('utf-8')[:DEST_ID_LEN].ljust(DEST_ID_LEN, b'\x00'))
+        data.extend(self.packet_type.value.encode('utf-8')[:PACKET_TYPE_LEN].ljust(PACKET_TYPE_LEN, b'\x00'))
         data.extend(struct.pack('!I', self.sequence_number))
         data.extend(struct.pack('!I', self.header_size))
         data.extend(struct.pack('!I', self.payload_size))
@@ -100,8 +107,8 @@ class PacketHeader:
         data.extend(struct.pack('!d', self.timestamp))
         data.extend(struct.pack('!I', self.version))
         data.extend(struct.pack('!I', self.flags))
-        data.extend(self.compression.value.encode('utf-8')[:16].ljust(16, b'\x00'))
-        data.extend((self.transaction_id or '').encode('utf-8')[:32].ljust(32, b'\x00'))
+        data.extend(self.compression.value.encode('utf-8')[:COMPRESSION_TYPE_LEN].ljust(COMPRESSION_TYPE_LEN, b'\x00'))
+        data.extend((self.transaction_id or '').encode('utf-8')[:TRANSACTION_ID_LEN].ljust(TRANSACTION_ID_LEN, b'\x00'))
         
         return bytes(data)
     
@@ -273,8 +280,9 @@ class CDMAPacket:
         # 更新包头中的载荷大小
         self._update_header_payload_size()
         
-        # 计算校验和
+        # 计算载荷校验和
         self.header.payload_checksum = self.payload.calculate_checksum()
+        # 计算包头校验和 (在payload_checksum确定后)
         self.header.header_checksum = self.header.calculate_header_checksum()
     
     def _update_header_payload_size(self):
@@ -330,6 +338,8 @@ class PacketSerializer:
                 # 更新压缩后的大小
                 packet.header.payload_size = len(payload_bytes)
                 packet.header.total_size = packet.header.header_size + packet.header.payload_size
+                # 重新计算包头校验和（因为大小字段改变了）
+                packet.header.header_checksum = packet.header.calculate_header_checksum()
                 # 重新序列化包头
                 header_bytes = PacketSerializer._serialize_header(packet.header)
             
@@ -379,9 +389,9 @@ class PacketSerializer:
         """序列化包头"""
         # 使用固定128字节包头格式
         data = []
-        data.extend(header.source_id.encode('utf-8')[:32].ljust(32, b'\x00'))
-        data.extend(header.dest_id.encode('utf-8')[:32].ljust(32, b'\x00'))
-        data.extend(header.packet_type.value.encode('utf-8')[:16].ljust(16, b'\x00'))
+        data.extend(header.source_id.encode('utf-8')[:SOURCE_ID_LEN].ljust(SOURCE_ID_LEN, b'\x00'))
+        data.extend(header.dest_id.encode('utf-8')[:DEST_ID_LEN].ljust(DEST_ID_LEN, b'\x00'))
+        data.extend(header.packet_type.value.encode('utf-8')[:PACKET_TYPE_LEN].ljust(PACKET_TYPE_LEN, b'\x00'))
         data.extend(struct.pack('!I', header.sequence_number))
         data.extend(struct.pack('!I', header.header_size))
         data.extend(struct.pack('!I', header.payload_size))
@@ -389,10 +399,10 @@ class PacketSerializer:
         data.extend(struct.pack('!d', header.timestamp))
         data.extend(struct.pack('!I', header.version))
         data.extend(struct.pack('!I', header.flags))
-        data.extend(header.compression.value.encode('utf-8')[:16].ljust(16, b'\x00'))
+        data.extend(header.compression.value.encode('utf-8')[:COMPRESSION_TYPE_LEN].ljust(COMPRESSION_TYPE_LEN, b'\x00'))
         data.extend(struct.pack('!I', header.header_checksum))
         data.extend(struct.pack('!I', header.payload_checksum))
-        data.extend((header.transaction_id or '').encode('utf-8')[:32].ljust(32, b'\x00'))
+        data.extend((header.transaction_id or '').encode('utf-8')[:TRANSACTION_ID_LEN].ljust(TRANSACTION_ID_LEN, b'\x00'))
         
         # 返回实际包头数据
         result = bytes(data)
@@ -408,14 +418,14 @@ class PacketSerializer:
             offset = 0
             
             # 解析固定字段
-            source_id = data[offset:offset+32].rstrip(b'\x00').decode('utf-8')
-            offset += 32
+            source_id = data[offset:offset+SOURCE_ID_LEN].rstrip(b'\x00').decode('utf-8')
+            offset += SOURCE_ID_LEN
             
-            dest_id = data[offset:offset+32].rstrip(b'\x00').decode('utf-8')
-            offset += 32
+            dest_id = data[offset:offset+DEST_ID_LEN].rstrip(b'\x00').decode('utf-8')
+            offset += DEST_ID_LEN
             
-            packet_type_str = data[offset:offset+16].rstrip(b'\x00').decode('utf-8')
-            offset += 16
+            packet_type_str = data[offset:offset+PACKET_TYPE_LEN].rstrip(b'\x00').decode('utf-8')
+            offset += PACKET_TYPE_LEN
             
             sequence_number = struct.unpack('!I', data[offset:offset+4])[0]
             offset += 4
@@ -438,8 +448,8 @@ class PacketSerializer:
             flags = struct.unpack('!I', data[offset:offset+4])[0]
             offset += 4
             
-            compression_str = data[offset:offset+16].rstrip(b'\x00').decode('utf-8')
-            offset += 16
+            compression_str = data[offset:offset+COMPRESSION_TYPE_LEN].rstrip(b'\x00').decode('utf-8')
+            offset += COMPRESSION_TYPE_LEN
             
             header_checksum = struct.unpack('!I', data[offset:offset+4])[0]
             offset += 4
@@ -447,7 +457,7 @@ class PacketSerializer:
             payload_checksum = struct.unpack('!I', data[offset:offset+4])[0]
             offset += 4
             
-            transaction_id = data[offset:offset+32].rstrip(b'\x00').decode('utf-8') or None
+            transaction_id = data[offset:offset+TRANSACTION_ID_LEN].rstrip(b'\x00').decode('utf-8') or None
             
             # 转换枚举类型
             packet_type = PacketType.DATA
@@ -497,15 +507,15 @@ class PacketSerializer:
             
             # 读取控制信息
             control_size = int.from_bytes(buffer.read(4), 'big')
-            control_json = buffer.read(control_size).decode('utf-8')
-            control_info = json.loads(control_json)
+            control_bytes = buffer.read(control_size).decode('utf-8')
+            control_info = eval(control_bytes) # WARNING: Using eval is insecure. Only for trusted input.
             
             # 读取源地址信息
             src_size = int.from_bytes(buffer.read(4), 'big')
             src_address_info = None
             if src_size > 0:
-                src_json = buffer.read(src_size).decode('utf-8')
-                src_dict = json.loads(src_json)
+                src_bytes = buffer.read(src_size).decode('utf-8')
+                src_dict = eval(src_bytes) # WARNING: Using eval is insecure. Only for trusted input.
                 src_address_info = AddressInfo(
                     base_address=src_dict['base_address'],
                     shape=tuple(src_dict['shape']),
@@ -518,8 +528,8 @@ class PacketSerializer:
             dst_size = int.from_bytes(buffer.read(4), 'big')
             dst_address_info = None
             if dst_size > 0:
-                dst_json = buffer.read(dst_size).decode('utf-8')
-                dst_dict = json.loads(dst_json)
+                dst_bytes = buffer.read(dst_size).decode('utf-8')
+                dst_dict = eval(dst_bytes) # WARNING: Using eval is insecure. Only for trusted input.
                 dst_address_info = AddressInfo(
                     base_address=dst_dict['base_address'],
                     shape=tuple(dst_dict['shape']),
@@ -536,13 +546,13 @@ class PacketSerializer:
             
             # 读取元数据
             metadata_size = int.from_bytes(buffer.read(4), 'big')
-            metadata_json = buffer.read(metadata_size).decode('utf-8')
-            metadata = json.loads(metadata_json)
+            metadata_bytes = buffer.read(metadata_size).decode('utf-8')
+            metadata = eval(metadata_bytes) # WARNING: Using eval is insecure. Only for trusted input.
             
             # 读取Reduce参数
             reduce_size = int.from_bytes(buffer.read(4), 'big')
-            reduce_json = buffer.read(reduce_size).decode('utf-8')
-            reduce_dict = json.loads(reduce_json)
+            reduce_bytes = buffer.read(reduce_size).decode('utf-8')
+            reduce_dict = eval(reduce_bytes) # WARNING: Using eval is insecure. Only for trusted input.
             
             payload = PacketPayload(
                 control_info=control_info,

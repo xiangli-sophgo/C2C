@@ -17,20 +17,18 @@ from .credit import CreditManager, AddressInfo as CreditAddressInfo
 
 # 导入新组件
 from .message_sync import MessageSyncManager, SyncMessage, SyncMessageType, SyncState
-from .packet_format import (
-    CDMAPacket, PacketFactory, PacketSerializer, PacketType,
-    AddressInfo as PacketAddressInfo, DataType
-)
+from .packet_format import CDMAPacket, PacketFactory, PacketSerializer, PacketType, AddressInfo as PacketAddressInfo, DataType
 from .flow_control import FlowController, FlowState
 from .performance_monitor import PerformanceMonitor
 from .error_handler import ErrorHandler, ErrorRecord, ErrorType, ErrorSeverity
 
-from utils.exceptions import CDMAError, AddressError, ShapeCompatibilityError
+from src.utils.exceptions import CDMAError, AddressError, ShapeCompatibilityError
 import queue
 
 
 class CDMASystemState(Enum):
     """CDMA系统状态"""
+
     IDLE = "idle"
     INITIALIZING = "initializing"
     READY = "ready"
@@ -43,27 +41,26 @@ class CDMASystemState(Enum):
 @dataclass
 class AddressInfo:
     """地址信息结构"""
+
     address: int
     shape: Tuple[int, ...]
     mem_type: MemoryType
     data_type: str = "float32"
-    
+
     def size_bytes(self) -> int:
         """计算数据大小（字节）"""
         element_count = 1
         for dim in self.shape:
             element_count *= dim
-        
-        type_sizes = {
-            "float32": 4, "float16": 2, "int32": 4, 
-            "int16": 2, "int8": 1, "uint8": 1
-        }
+
+        type_sizes = {"float32": 4, "float16": 2, "int32": 4, "int16": 2, "int8": 1, "uint8": 1}
         return element_count * type_sizes.get(self.data_type, 4)
 
 
 @dataclass
 class CreditWithAddress:
     """携带地址信息的Credit"""
+
     credit_count: int
     dst_address_info: AddressInfo
     transaction_id: str
@@ -73,6 +70,7 @@ class CreditWithAddress:
 @dataclass
 class DMATransaction:
     """DMA传输事务"""
+
     transaction_id: str
     src_chip_id: str
     dst_chip_id: str
@@ -86,6 +84,7 @@ class DMATransaction:
 @dataclass
 class MemoryRegion:
     """内存区域描述"""
+
     start_addr: int
     size: int
     mem_type: MemoryType
@@ -96,6 +95,7 @@ class MemoryRegion:
 @dataclass
 class DMATransferRequest:
     """DMA传输请求"""
+
     request_id: str
     src_addr: int
     dst_addr: int
@@ -111,6 +111,7 @@ class DMATransferRequest:
 @dataclass
 class DMATransferResult:
     """DMA传输结果"""
+
     request_id: str
     success: bool
     start_time: float
@@ -123,6 +124,7 @@ class DMATransferResult:
 @dataclass
 class CDMAMessage:
     """简化的CDMA消息格式（为兼容性保留）"""
+
     source_id: str
     destination_id: str
     message_type: str  # e.g., "send", "receive", "ack"
@@ -137,6 +139,7 @@ class CDMAMessage:
 @dataclass
 class CDMAOperationResult:
     """CDMA操作结果"""
+
     success: bool
     transaction_id: Optional[str] = None
     error_message: Optional[str] = None
@@ -175,7 +178,7 @@ class CDMASystem:
         self._error_handler = ErrorHandler(chip_id)
 
         # 系统级连接
-        self._connected_systems: Dict[str, 'CDMASystem'] = {}
+        self._connected_systems: Dict[str, "CDMASystem"] = {}
 
         # 包序列号管理
         self._packet_sequence_counter = 0
@@ -200,61 +203,44 @@ class CDMASystem:
     def _init_cdma_engine(self):
         """初始化CDMA引擎"""
         return {
-            'credit_with_address': {},  # src_chip -> credit_info
-            'pending_receives': {},  # transaction_id -> dst_address_info
-            'active_transactions': {},
-            'transaction_counter': 0,
-            'memory_simulator': {}  # 模拟内存空间
+            "credit_with_address": {},  # src_chip -> credit_info
+            "pending_receives": {},  # transaction_id -> dst_address_info
+            "active_transactions": {},
+            "transaction_counter": 0,
+            "memory_simulator": {},  # 模拟内存空间
         }
 
     def _init_dma_controller(self):
         """初始化DMA控制器"""
         memory_regions = {
-            MemoryType.GMEM: MemoryRegion(
-                start_addr=0x00000000, size=16*1024*1024*1024, 
-                mem_type=MemoryType.GMEM, alignment=64, bandwidth_gbps=200.0
-            ),
-            MemoryType.L2M: MemoryRegion(
-                start_addr=0x40000000, size=128*1024*1024,
-                mem_type=MemoryType.L2M, alignment=32, bandwidth_gbps=800.0
-            ),
-            MemoryType.LMEM: MemoryRegion(
-                start_addr=0x80000000, size=512*1024*1024,
-                mem_type=MemoryType.LMEM, alignment=16, bandwidth_gbps=1000.0
-            )
+            MemoryType.GMEM: MemoryRegion(start_addr=0x00000000, size=16 * 1024 * 1024 * 1024, mem_type=MemoryType.GMEM, alignment=64, bandwidth_gbps=200.0),
+            MemoryType.L2M: MemoryRegion(start_addr=0x40000000, size=128 * 1024 * 1024, mem_type=MemoryType.L2M, alignment=32, bandwidth_gbps=800.0),
+            MemoryType.LMEM: MemoryRegion(start_addr=0x80000000, size=512 * 1024 * 1024, mem_type=MemoryType.LMEM, alignment=16, bandwidth_gbps=1000.0),
         }
-        
+
         return {
-            'memory_regions': memory_regions,
-            'memory_simulator': {},
-            'transfer_queue': queue.PriorityQueue(),
-            'active_transfers': {},
-            'transfer_history': {},
-            'is_running': False,
-            'worker_thread': None,
-            'transfer_counter': 0,
-            'total_bytes_transferred': 0,
-            'total_transfers': 0,
-            'total_transfer_time': 0.0
+            "memory_regions": memory_regions,
+            "memory_simulator": {},
+            "transfer_queue": queue.PriorityQueue(),
+            "active_transfers": {},
+            "transfer_history": {},
+            "is_running": False,
+            "worker_thread": None,
+            "transfer_counter": 0,
+            "total_bytes_transferred": 0,
+            "total_transfers": 0,
+            "total_transfer_time": 0.0,
         }
 
     def _setup_components(self):
         """设置组件间的连接和回调"""
         # 设置消息同步回调
-        self._message_sync.register_message_handler(
-            SyncMessageType.ACK, self._handle_sync_ack
-        )
-        self._message_sync.register_message_handler(
-            SyncMessageType.COMPLETE, self._handle_sync_complete
-        )
+        self._message_sync.register_message_handler(SyncMessageType.ACK, self._handle_sync_ack)
+        self._message_sync.register_message_handler(SyncMessageType.COMPLETE, self._handle_sync_complete)
 
         # 设置错误处理回调
-        self._error_handler.register_error_callback(
-            ErrorType.TRANSMISSION_ERROR, self._handle_transmission_error
-        )
-        self._error_handler.register_error_callback(
-            ErrorType.TIMEOUT_ERROR, self._handle_timeout_error
-        )
+        self._error_handler.register_error_callback(ErrorType.TRANSMISSION_ERROR, self._handle_transmission_error)
+        self._error_handler.register_error_callback(ErrorType.TIMEOUT_ERROR, self._handle_timeout_error)
 
         # 设置流控回调
         self._flow_controller.set_congestion_callback(self._handle_congestion_state_change)
@@ -265,47 +251,45 @@ class CDMASystem:
 
     def _start_dma_controller(self):
         """启动DMA控制器"""
-        if not self._dma_controller['is_running']:
-            self._dma_controller['is_running'] = True
-            self._dma_controller['worker_thread'] = threading.Thread(
-                target=self._dma_worker_loop, daemon=True
-            )
-            self._dma_controller['worker_thread'].start()
+        if not self._dma_controller["is_running"]:
+            self._dma_controller["is_running"] = True
+            self._dma_controller["worker_thread"] = threading.Thread(target=self._dma_worker_loop, daemon=True)
+            self._dma_controller["worker_thread"].start()
             self._logger.info(f"芯片 {self._chip_id}：DMA控制器已启动")
 
     def _stop_dma_controller(self):
         """停止DMA控制器"""
-        if self._dma_controller['is_running']:
-            self._dma_controller['is_running'] = False
-            if self._dma_controller['worker_thread']:
-                self._dma_controller['worker_thread'].join(timeout=1.0)
+        if self._dma_controller["is_running"]:
+            self._dma_controller["is_running"] = False
+            if self._dma_controller["worker_thread"]:
+                self._dma_controller["worker_thread"].join(timeout=1.0)
             self._logger.info(f"芯片 {self._chip_id}：DMA控制器已停止")
 
     def _dma_worker_loop(self):
         """DMA工作线程主循环"""
-        while self._dma_controller['is_running']:
+        while self._dma_controller["is_running"]:
             try:
                 # 获取传输请求（1秒超时）
-                _, _, request = self._dma_controller['transfer_queue'].get(timeout=1.0)
-                
+                _, _, request = self._dma_controller["transfer_queue"].get(timeout=1.0)
+
                 # 执行传输
                 result = self._perform_dma_transfer(request)
-                
+
                 # 记录结果
-                self._dma_controller['transfer_history'][request.request_id] = result
-                
+                self._dma_controller["transfer_history"][request.request_id] = result
+
                 # 更新统计信息
                 if result.success:
-                    self._dma_controller['total_bytes_transferred'] += result.bytes_transferred
-                    self._dma_controller['total_transfers'] += 1
-                    self._dma_controller['total_transfer_time'] += result.end_time - result.start_time
-                
+                    self._dma_controller["total_bytes_transferred"] += result.bytes_transferred
+                    self._dma_controller["total_transfers"] += 1
+                    self._dma_controller["total_transfer_time"] += result.end_time - result.start_time
+
                 # 从活跃传输中移除
-                if request.request_id in self._dma_controller['active_transfers']:
-                    del self._dma_controller['active_transfers'][request.request_id]
-                
-                self._dma_controller['transfer_queue'].task_done()
-                
+                if request.request_id in self._dma_controller["active_transfers"]:
+                    del self._dma_controller["active_transfers"][request.request_id]
+
+                self._dma_controller["transfer_queue"].task_done()
+
             except queue.Empty:
                 continue
             except Exception as e:
@@ -314,68 +298,54 @@ class CDMASystem:
     def _perform_dma_transfer(self, request: DMATransferRequest) -> DMATransferResult:
         """执行实际的DMA传输"""
         start_time = time.time()
-        self._dma_controller['active_transfers'][request.request_id] = request
-        
+        self._dma_controller["active_transfers"][request.request_id] = request
+
         try:
             self._logger.info(f"开始执行DMA传输 {request.request_id}")
-            
+
             # 模拟从源地址读取数据
             src_data = self._read_dma_memory(request.src_addr, request.size)
-            
+
             # 计算传输时间（基于带宽）
-            src_bandwidth = self._dma_controller['memory_regions'][request.src_mem_type].bandwidth_gbps
-            dst_bandwidth = self._dma_controller['memory_regions'][request.dst_mem_type].bandwidth_gbps
+            src_bandwidth = self._dma_controller["memory_regions"][request.src_mem_type].bandwidth_gbps
+            dst_bandwidth = self._dma_controller["memory_regions"][request.dst_mem_type].bandwidth_gbps
             effective_bandwidth = min(src_bandwidth, dst_bandwidth)
-            
+
             # 如果是跨芯片传输，考虑C2C链路带宽
             if request.src_chip_id != request.dst_chip_id:
                 c2c_bandwidth = 25.0  # 假设C2C带宽为25GB/s
                 effective_bandwidth = min(effective_bandwidth, c2c_bandwidth)
-            
+
             transfer_time = request.size / (effective_bandwidth * 1024 * 1024 * 1024)
-            
+
             # 模拟传输延迟
             time.sleep(min(transfer_time, 0.1))  # 最多延迟100ms
-            
+
             # 模拟写入目标地址
             self._write_dma_memory(request.dst_addr, src_data)
-            
+
             end_time = time.time()
             actual_bandwidth = request.size / (end_time - start_time) / (1024 * 1024 * 1024)
-            
+
             self._logger.info(f"DMA传输完成 {request.request_id}, 带宽: {actual_bandwidth:.2f} GB/s")
-            
-            return DMATransferResult(
-                request_id=request.request_id,
-                success=True,
-                start_time=start_time,
-                end_time=end_time,
-                bytes_transferred=request.size,
-                bandwidth_achieved=actual_bandwidth
-            )
-            
+
+            return DMATransferResult(request_id=request.request_id, success=True, start_time=start_time, end_time=end_time, bytes_transferred=request.size, bandwidth_achieved=actual_bandwidth)
+
         except Exception as e:
             end_time = time.time()
             error_msg = f"DMA传输失败: {str(e)}"
             self._logger.error(error_msg)
-            
-            return DMATransferResult(
-                request_id=request.request_id,
-                success=False,
-                start_time=start_time,
-                end_time=end_time,
-                bytes_transferred=0,
-                error_message=error_msg
-            )
+
+            return DMATransferResult(request_id=request.request_id, success=False, start_time=start_time, end_time=end_time, bytes_transferred=0, error_message=error_msg)
 
     def _read_dma_memory(self, address: int, size: int) -> bytes:
         """从模拟内存读取数据"""
-        memory_sim = self._dma_controller['memory_simulator']
+        memory_sim = self._dma_controller["memory_simulator"]
         if address in memory_sim:
             data = memory_sim[address]
             if len(data) >= size:
                 return data[:size]
-        
+
         # 生成模拟数据
         data = bytes([(address + i) % 256 for i in range(size)])
         memory_sim[address] = data
@@ -383,7 +353,7 @@ class CDMASystem:
 
     def _write_dma_memory(self, address: int, data: bytes):
         """向模拟内存写入数据"""
-        self._dma_controller['memory_simulator'][address] = data
+        self._dma_controller["memory_simulator"][address] = data
 
     def _validate_dma_address(self, address: int, size: int, mem_type: MemoryType) -> bool:
         """验证DMA地址合法性"""
@@ -393,20 +363,17 @@ class CDMASystem:
             return False
         return True
 
-    def execute_dma_transfer(self, src_addr: int, dst_addr: int, data_size: int,
-                           src_chip_id: str, dst_chip_id: str,
-                           src_mem_type: MemoryType, dst_mem_type: MemoryType,
-                           priority: int = 0) -> str:
+    def execute_dma_transfer(self, src_addr: int, dst_addr: int, data_size: int, src_chip_id: str, dst_chip_id: str, src_mem_type: MemoryType, dst_mem_type: MemoryType, priority: int = 0) -> str:
         """执行DMA传输"""
         # 验证地址
         if not self._validate_dma_address(src_addr, data_size, src_mem_type):
             raise CDMAError(f"源地址验证失败: 0x{src_addr:08x}")
         if not self._validate_dma_address(dst_addr, data_size, dst_mem_type):
             raise CDMAError(f"目标地址验证失败: 0x{dst_addr:08x}")
-        
+
         request_id = f"dma_{self._chip_id}_{self._dma_controller['transfer_counter']}_{int(time.time() * 1000000)}"
-        self._dma_controller['transfer_counter'] += 1
-        
+        self._dma_controller["transfer_counter"] += 1
+
         request = DMATransferRequest(
             request_id=request_id,
             src_addr=src_addr,
@@ -417,16 +384,16 @@ class CDMASystem:
             src_mem_type=src_mem_type,
             dst_mem_type=dst_mem_type,
             priority=priority,
-            created_time=time.time()
+            created_time=time.time(),
         )
-        
+
         # 加入传输队列
-        self._dma_controller['transfer_queue'].put((priority, time.time(), request))
+        self._dma_controller["transfer_queue"].put((priority, time.time(), request))
         self._logger.info(f"DMA传输请求已排队: {request_id}")
-        
+
         return request_id
 
-    def connect_to_chip(self, other_chip_id: str, other_system: 'CDMASystem'):
+    def connect_to_chip(self, other_chip_id: str, other_system: "CDMASystem"):
         """连接到其他芯片的CDMA系统"""
         with self._lock:
             self._connected_systems[other_chip_id] = other_system
@@ -438,10 +405,9 @@ class CDMASystem:
             self._packet_sequence_counter += 1
             return self._packet_sequence_counter
 
-    def cdma_receive(self, dst_addr: int, dst_shape: Tuple[int, ...],
-                    dst_mem_type: MemoryType, src_chip_id: str,
-                    data_type: str = "float32", reduce_op: str = "none",
-                    timeout: float = 30.0) -> CDMAOperationResult:
+    def cdma_receive(
+        self, dst_addr: int, dst_shape: Tuple[int, ...], dst_mem_type: MemoryType, src_chip_id: str, data_type: str = "float32", reduce_op: str = "none", timeout: float = 30.0
+    ) -> CDMAOperationResult:
         """
         执行CDMA接收操作
 
@@ -463,55 +429,31 @@ class CDMASystem:
             with self._lock:
                 # 检查系统状态
                 if self._state not in [CDMASystemState.READY, CDMASystemState.ACTIVE]:
-                    return self._create_error_result(
-                        f"系统状态不正确: {self._state.value}",
-                        operation_start_time
-                    )
+                    return self._create_error_result(f"系统状态不正确: {self._state.value}", operation_start_time)
 
                 # 检查连接
                 if src_chip_id not in self._connected_systems:
-                    return self._create_error_result(
-                        f"未连接到源芯片: {src_chip_id}",
-                        operation_start_time
-                    )
+                    return self._create_error_result(f"未连接到源芯片: {src_chip_id}", operation_start_time)
 
                 # 生成事务ID
                 transaction_id = f"cdma_recv_{self._chip_id}_{src_chip_id}_{int(time.time() * 1000000)}"
 
                 # 创建配对事务
-                transaction = self._transaction_manager.create_paired_transaction(
-                    send_chip_id=src_chip_id,
-                    recv_chip_id=self._chip_id,
-                    transaction_id=transaction_id,
-                    timeout_seconds=timeout
-                )
+                transaction = self._transaction_manager.create_paired_transaction(send_chip_id=src_chip_id, recv_chip_id=self._chip_id, transaction_id=transaction_id, timeout_seconds=timeout)
 
                 # 注册接收操作
                 success = self._transaction_manager.register_receive_operation(
-                    transaction_id=transaction_id,
-                    dst_addr=dst_addr,
-                    dst_shape=dst_shape,
-                    dst_mem_type=dst_mem_type.value,
-                    data_type=data_type
+                    transaction_id=transaction_id, dst_addr=dst_addr, dst_shape=dst_shape, dst_mem_type=dst_mem_type.value, data_type=data_type
                 )
 
                 if not success:
-                    return self._create_error_result(
-                        "注册接收操作失败",
-                        operation_start_time,
-                        transaction_id
-                    )
+                    return self._create_error_result("注册接收操作失败", operation_start_time, transaction_id)
 
                 # 创建同步会话
                 sync_session_id = self._message_sync.create_sync_session(src_chip_id, timeout)
 
                 # 创建Credit包发送地址信息
-                packet_addr_info = PacketAddressInfo(
-                    base_address=dst_addr,
-                    shape=dst_shape,
-                    data_type=DataType[data_type.upper()],
-                    memory_type=dst_mem_type.value
-                )
+                packet_addr_info = PacketAddressInfo(base_address=dst_addr, shape=dst_shape, data_type=DataType[data_type.upper()], memory_type=dst_mem_type.value)
 
                 # 创建控制包
                 control_packet = PacketFactory.create_control_packet(
@@ -519,13 +461,13 @@ class CDMASystem:
                     dest_id=src_chip_id,
                     sequence_number=self._get_next_packet_sequence(),
                     control_info={
-                        'operation': 'cdma_receive',
-                        'transaction_id': transaction_id,
-                        'dst_address_info': packet_addr_info.to_dict(),
-                        'reduce_operation': reduce_op,
-                        'sync_session_id': sync_session_id
+                        "operation": "cdma_receive",
+                        "transaction_id": transaction_id,
+                        "dst_address_info": packet_addr_info.to_dict(),
+                        "reduce_operation": reduce_op,
+                        "sync_session_id": sync_session_id,
                     },
-                    transaction_id=transaction_id
+                    transaction_id=transaction_id,
                 )
 
                 # 序列化并发送包
@@ -536,25 +478,14 @@ class CDMASystem:
                 receive_success = src_system._receive_packet(packet_data, self._chip_id)
 
                 if not receive_success:
-                    return self._create_error_result(
-                        "发送控制包失败",
-                        operation_start_time,
-                        transaction_id
-                    )
+                    return self._create_error_result("发送控制包失败", operation_start_time, transaction_id)
 
                 # 发送同步消息
-                self._message_sync.send_sync_message(
-                    session_id=sync_session_id,
-                    message_type=SyncMessageType.RX_SEND,
-                    payload={'transaction_id': transaction_id},
-                    transaction_id=transaction_id
-                )
+                self._message_sync.send_sync_message(session_id=sync_session_id, message_type=SyncMessageType.RX_SEND, payload={"transaction_id": transaction_id}, transaction_id=transaction_id)
 
                 # 记录性能
                 execution_time = time.time() - operation_start_time
-                self._performance_monitor.record_operation_end(
-                    "cdma_receive", operation_start_time, 0, True
-                )
+                self._performance_monitor.record_operation_end("cdma_receive", operation_start_time, 0, True)
 
                 self._logger.info(f"CDMA_receive操作完成: {transaction_id}")
 
@@ -563,7 +494,7 @@ class CDMASystem:
                     transaction_id=transaction_id,
                     execution_time=execution_time,
                     system_state=self._state.value,
-                    flow_state=str(self._flow_controller.get_flow_metrics().buffer_utilization)
+                    flow_state=str(self._flow_controller.get_flow_metrics().buffer_utilization),
                 )
 
         except Exception as e:
@@ -571,15 +502,13 @@ class CDMASystem:
             self._logger.error(error_msg)
 
             # 记录错误
-            self._performance_monitor.record_operation_end(
-                "cdma_receive", operation_start_time, 0, False
-            )
+            self._performance_monitor.record_operation_end("cdma_receive", operation_start_time, 0, False)
 
             return self._create_error_result(error_msg, operation_start_time)
 
-    def cdma_send(self, src_addr: int, src_shape: Tuple[int, ...],
-                 dst_chip_id: str, src_mem_type: MemoryType = MemoryType.GMEM,
-                 data_type: str = "float32", reduce_op: str = "none") -> CDMAOperationResult:
+    def cdma_send(
+        self, src_addr: int, src_shape: Tuple[int, ...], dst_chip_id: str, src_mem_type: MemoryType = MemoryType.GMEM, data_type: str = "float32", reduce_op: str = "none"
+    ) -> CDMAOperationResult:
         """
         执行CDMA发送操作
 
@@ -600,25 +529,16 @@ class CDMASystem:
             with self._lock:
                 # 检查系统状态
                 if self._state not in [CDMASystemState.READY, CDMASystemState.ACTIVE]:
-                    return self._create_error_result(
-                        f"系统状态不正确: {self._state.value}",
-                        operation_start_time
-                    )
+                    return self._create_error_result(f"系统状态不正确: {self._state.value}", operation_start_time)
 
                 # 检查连接
                 if dst_chip_id not in self._connected_systems:
-                    return self._create_error_result(
-                        f"未连接到目标芯片: {dst_chip_id}",
-                        operation_start_time
-                    )
+                    return self._create_error_result(f"未连接到目标芯片: {dst_chip_id}", operation_start_time)
 
                 # 检查流控状态
                 data_size = self._calculate_data_size(src_shape, data_type)
                 if not self._flow_controller.can_send_packet(data_size):
-                    return self._create_error_result(
-                        "流控限制，暂时无法发送",
-                        operation_start_time
-                    )
+                    return self._create_error_result("流控限制，暂时无法发送", operation_start_time)
 
                 # 检查Credit（这里需要等待receive操作的Credit信息）
                 # 实际实现中，这里会等待来自目标芯片的Credit+地址信息
@@ -634,43 +554,22 @@ class CDMASystem:
                     data = self._apply_reduce_operation(data, reduce_op, data_type)
 
                 # 创建地址信息
-                src_addr_info = PacketAddressInfo(
-                    base_address=src_addr,
-                    shape=src_shape,
-                    data_type=DataType[data_type.upper()],
-                    memory_type=src_mem_type.value
-                )
+                src_addr_info = PacketAddressInfo(base_address=src_addr, shape=src_shape, data_type=DataType[data_type.upper()], memory_type=src_mem_type.value)
 
                 # 这里需要从Credit信息中获取目标地址信息
                 # 暂时创建一个模拟的目标地址信息
-                dst_addr_info = PacketAddressInfo(
-                    base_address=0x1000,  # 模拟地址
-                    shape=src_shape,
-                    data_type=DataType[data_type.upper()],
-                    memory_type="GMEM"
-                )
+                dst_addr_info = PacketAddressInfo(base_address=0x1000, shape=src_shape, data_type=DataType[data_type.upper()], memory_type="GMEM")  # 模拟地址
 
                 # 创建数据包
                 data_packet = PacketFactory.create_data_packet(
-                    source_id=self._chip_id,
-                    dest_id=dst_chip_id,
-                    sequence_number=packet_sequence,
-                    src_address_info=src_addr_info,
-                    dst_address_info=dst_addr_info,
-                    data=data,
-                    reduce_operation=reduce_op
+                    source_id=self._chip_id, dest_id=dst_chip_id, sequence_number=packet_sequence, src_address_info=src_addr_info, dst_address_info=dst_addr_info, data=data, reduce_operation=reduce_op
                 )
 
                 # 序列化包
                 packet_data = PacketSerializer.serialize_packet(data_packet)
 
                 # 记录包发送（用于错误检测）
-                self._error_handler.process_packet_sent(
-                    packet_id=f"data_{packet_sequence}",
-                    sequence_number=packet_sequence,
-                    destination=dst_chip_id,
-                    data=packet_data
-                )
+                self._error_handler.process_packet_sent(packet_id=f"data_{packet_sequence}", sequence_number=packet_sequence, destination=dst_chip_id, data=packet_data)
 
                 # 记录流控
                 self._flow_controller.packet_sent(packet_sequence, len(packet_data))
@@ -680,16 +579,11 @@ class CDMASystem:
                 send_success = dst_system._receive_packet(packet_data, self._chip_id)
 
                 if not send_success:
-                    return self._create_error_result(
-                        "发送数据包失败",
-                        operation_start_time
-                    )
+                    return self._create_error_result("发送数据包失败", operation_start_time)
 
                 # 记录性能
                 execution_time = time.time() - operation_start_time
-                self._performance_monitor.record_operation_end(
-                    "cdma_send", operation_start_time, len(data), True
-                )
+                self._performance_monitor.record_operation_end("cdma_send", operation_start_time, len(data), True)
 
                 # 计算吞吐量
                 throughput_mbps = (len(data) / (1024 * 1024)) / max(execution_time, 0.001)
@@ -703,7 +597,7 @@ class CDMASystem:
                     latency_ms=execution_time * 1000,
                     throughput_mbps=throughput_mbps,
                     system_state=self._state.value,
-                    flow_state=str(self._flow_controller.get_flow_metrics().current_bandwidth)
+                    flow_state=str(self._flow_controller.get_flow_metrics().current_bandwidth),
                 )
 
         except Exception as e:
@@ -711,9 +605,7 @@ class CDMASystem:
             self._logger.error(error_msg)
 
             # 记录错误
-            self._performance_monitor.record_operation_end(
-                "cdma_send", operation_start_time, 0, False
-            )
+            self._performance_monitor.record_operation_end("cdma_send", operation_start_time, 0, False)
 
             return self._create_error_result(error_msg, operation_start_time)
 
@@ -738,17 +630,11 @@ class CDMASystem:
                 sequence_number=packet.header.sequence_number,
                 source=sender_chip_id,
                 data=packet_data,
-                metadata={
-                    'expected_size': packet.header.total_size,
-                    'checksum': packet.header.payload_checksum,
-                    'checksum_algorithm': 'crc32'
-                }
+                metadata={"expected_size": packet.header.total_size, "checksum": packet.header.payload_checksum, "checksum_algorithm": "crc32"},
             )
 
             # 更新流控
-            self._flow_controller.receive_packet(
-                packet_data, sender_chip_id, packet.header.sequence_number
-            )
+            self._flow_controller.receive_packet(packet_data, sender_chip_id, packet.header.sequence_number)
 
             # 根据包类型处理
             if packet.header.packet_type == PacketType.CONTROL:
@@ -757,6 +643,8 @@ class CDMASystem:
                 return self._handle_data_packet(packet, sender_chip_id)
             elif packet.header.packet_type == PacketType.SYNC:
                 return self._handle_sync_packet(packet, sender_chip_id)
+            elif packet.header.packet_type == PacketType.ACK:
+                return self._handle_ack_packet(packet, sender_chip_id)
             else:
                 self._logger.warning(f"未知包类型: {packet.header.packet_type}")
                 return False
@@ -769,12 +657,12 @@ class CDMASystem:
         """处理控制包"""
         try:
             control_info = packet.payload.control_info
-            operation = control_info.get('operation')
+            operation = control_info.get("operation")
 
-            if operation == 'cdma_receive':
+            if operation == "cdma_receive":
                 # 处理接收方发送的地址信息
-                transaction_id = control_info.get('transaction_id')
-                dst_address_info = control_info.get('dst_address_info')
+                transaction_id = control_info.get("transaction_id")
+                dst_address_info = control_info.get("dst_address_info")
 
                 # 这里可以存储地址信息，供后续send操作使用
                 self._logger.info(f"收到CDMA_receive控制包: {transaction_id}")
@@ -799,14 +687,9 @@ class CDMASystem:
                 if packet.payload.data is None:
                     self._logger.error("数据包数据为空")
                     return False
-                
+
                 # 写入数据到目标地址
-                success = self._write_tensor_data(
-                    dst_addr_info.base_address,
-                    dst_addr_info.shape,
-                    packet.payload.data,
-                    dst_addr_info.data_type.value
-                )
+                success = self._write_tensor_data(dst_addr_info.base_address, dst_addr_info.shape, packet.payload.data, dst_addr_info.data_type.value)
 
                 if success:
                     self._logger.info(f"数据包写入成功: {len(packet.payload.data)} 字节")
@@ -816,12 +699,8 @@ class CDMASystem:
                         source_id=self._chip_id,
                         dest_id=sender_chip_id,
                         sequence_number=self._get_next_packet_sequence(),
-                        ack_info={
-                            'original_sequence': packet.header.sequence_number,
-                            'bytes_received': len(packet.payload.data),
-                            'status': 'success'
-                        },
-                        transaction_id=packet.header.transaction_id
+                        ack_info={"original_sequence": packet.header.sequence_number, "bytes_received": len(packet.payload.data), "status": "success"},
+                        transaction_id=packet.header.transaction_id,
                     )
 
                     # 发送确认包
@@ -852,7 +731,7 @@ class CDMASystem:
                 message_type=SyncMessageType.ACK,  # 这里需要根据实际情况确定
                 timestamp=time.time(),
                 transaction_id=packet.header.transaction_id,
-                payload=packet.payload.control_info
+                payload=packet.payload.control_info,
             )
 
             # 交给消息同步管理器处理
@@ -862,39 +741,60 @@ class CDMASystem:
             self._logger.error(f"同步包处理失败: {e}")
             return False
 
+    def _handle_ack_packet(self, packet: CDMAPacket, sender_chip_id: str) -> bool:
+        """处理ACK包"""
+        try:
+            ack_info = packet.payload.control_info
+            original_sequence = ack_info.get("original_sequence")
+            bytes_received = ack_info.get("bytes_received")
+            status = ack_info.get("status")
+            transaction_id = packet.header.transaction_id
+
+            self._logger.info(f"收到来自 {sender_chip_id} 的ACK包: 原始序列号={original_sequence}, 状态={status}, 事务ID={transaction_id}")
+
+            # 通知重传管理器，该包已成功接收
+            self._error_handler.mark_retransmission_successful(original_sequence)
+
+            # 更新事务状态（如果需要）
+            if transaction_id:
+                self._transaction_manager.complete_transaction(transaction_id, success=True)
+
+            return True
+        except Exception as e:
+            self._logger.error(f"ACK包处理失败: {e}")
+            return False
+
     def _calculate_data_size(self, shape: Tuple[int, ...], data_type: str) -> int:
         """计算数据大小"""
         element_count = 1
         for dim in shape:
             element_count *= dim
 
-        type_sizes = {
-            'float32': 4, 'float16': 2, 'int32': 4,
-            'int16': 2, 'int8': 1, 'uint8': 1
-        }
+        type_sizes = {"float32": 4, "float16": 2, "int32": 4, "int16": 2, "int8": 1, "uint8": 1}
 
         return element_count * type_sizes.get(data_type, 4)
 
     def _read_tensor_data(self, addr: int, shape: Tuple[int, ...], data_type: str) -> bytes:
         """读取tensor数据（模拟）"""
         data_size = self._calculate_data_size(shape, data_type)
-        # 模拟数据生成
-        base_data = bytes(range(data_size % 256)) * (data_size // 256 + 1)
-        return base_data[:data_size]
+        # 生成可预测的模拟数据，确保每次读取相同地址和大小的数据时，内容一致
+        # 使用地址和大小作为种子，生成一个简单的重复模式
+        seed = (addr + data_size) % 256
+        data = bytes([(seed + i) % 256 for i in range(data_size)])
+        return data
 
-    def _write_tensor_data(self, addr: int, shape: Tuple[int, ...],
-                          data: bytes, data_type: str) -> bool:
+    def _write_tensor_data(self, addr: int, shape: Tuple[int, ...], data: bytes, data_type: str) -> bool:
         """写入tensor数据（模拟）"""
         try:
             # 检查数据有效性
             if data is None:
                 self._logger.error("数据为空，无法写入")
                 return False
-            
+
             if not isinstance(data, bytes):
                 self._logger.error(f"数据类型错误: 期望bytes, 实际{type(data)}")
                 return False
-            
+
             # 模拟数据写入
             expected_size = self._calculate_data_size(shape, data_type)
             if len(data) != expected_size:
@@ -902,6 +802,7 @@ class CDMASystem:
                 return False
 
             # 这里是实际的内存写入操作
+            self._dma_controller["memory_simulator"][addr] = data
             self._logger.debug(f"写入数据到地址 0x{addr:08x}: {len(data)} 字节")
             return True
 
@@ -919,18 +820,10 @@ class CDMASystem:
         self._logger.debug(f"应用Reduce操作: {reduce_op}")
         return data
 
-    def _create_error_result(self, error_msg: str, start_time: float,
-                           transaction_id: str = None) -> CDMAOperationResult:
+    def _create_error_result(self, error_msg: str, start_time: float, transaction_id: str = None) -> CDMAOperationResult:
         """创建错误结果"""
         execution_time = time.time() - start_time
-        return CDMAOperationResult(
-            success=False,
-            transaction_id=transaction_id,
-            error_message=error_msg,
-            execution_time=execution_time,
-            system_state=self._state.value,
-            error_count=1
-        )
+        return CDMAOperationResult(success=False, transaction_id=transaction_id, error_message=error_msg, execution_time=execution_time, system_state=self._state.value, error_count=1)
 
     # 回调处理方法
     def _handle_sync_ack(self, message: SyncMessage):
@@ -971,14 +864,14 @@ class CDMASystem:
         """获取综合系统状态"""
         with self._lock:
             return {
-                'chip_id': self._chip_id,
-                'system_state': self._state.value,
-                'performance_stats': self._performance_monitor.get_summary_stats(),
-                'flow_stats': self._flow_controller.get_comprehensive_status(),
-                'error_stats': self._error_handler.get_error_statistics(),
-                'sync_stats': self._message_sync.get_sync_statistics(),
-                'transaction_stats': self._transaction_manager.get_statistics(),
-                'connected_chips': list(self._connected_systems.keys())
+                "chip_id": self._chip_id,
+                "system_state": self._state.value,
+                "performance_stats": self._performance_monitor.get_summary_stats(),
+                "flow_stats": self._flow_controller.get_comprehensive_status(),
+                "error_stats": self._error_handler.get_error_statistics(),
+                "sync_stats": self._message_sync.get_sync_statistics(),
+                "transaction_stats": self._transaction_manager.get_statistics(),
+                "connected_chips": list(self._connected_systems.keys()),
             }
 
     def generate_performance_report(self) -> Dict[str, Any]:
@@ -1044,13 +937,7 @@ class CDMASystem:
     def send_message(self, message: CDMAMessage) -> CDMAOperationResult:
         """发送CDMA消息（简化接口，兼容旧代码）"""
         if message.message_type == "send":
-            return self.cdma_send(
-                src_addr=0x0,  # 模拟地址
-                src_shape=message.tensor_shape,
-                dst_chip_id=message.destination_id,
-                data_type=message.data_type,
-                reduce_op=message.reduce_op or "none"
-            )
+            return self.cdma_send(src_addr=0x0, src_shape=message.tensor_shape, dst_chip_id=message.destination_id, data_type=message.data_type, reduce_op=message.reduce_op or "none")  # 模拟地址
         elif message.message_type == "receive":
             return self.cdma_receive(
                 dst_addr=0x0,  # 模拟地址
@@ -1058,18 +945,15 @@ class CDMASystem:
                 dst_mem_type=MemoryType.GMEM,
                 src_chip_id=message.source_id,
                 data_type=message.data_type,
-                reduce_op=message.reduce_op or "none"
+                reduce_op=message.reduce_op or "none",
             )
         else:
-            return CDMAOperationResult(
-                success=False,
-                error_message=f"不支持的消息类型: {message.message_type}"
-            )
+            return CDMAOperationResult(success=False, error_message=f"不支持的消息类型: {message.message_type}")
 
     def process_message(self, message: CDMAMessage) -> Any:
         """处理CDMA消息（简化接口，兼容旧代码）"""
         self._logger.info(f"节点 {self._chip_id} 收到CDMA消息: {message.message_type} 从 {message.source_id} 到 {message.destination_id}")
-        
+
         if message.destination_id != self._chip_id:
             self._logger.warning(f"消息不属于该节点。期望 {self._chip_id}，实际得到 {message.destination_id}")
             return None

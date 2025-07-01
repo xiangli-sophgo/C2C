@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from protocol.cdma_system import CDMASystem, CDMASystemState, CDMAMessage
 from protocol.memory_types import MemoryType
-from utils.exceptions import CDMAError
+from src.utils.exceptions import CDMAError
 
 
 class TestCDMASystemBasics(unittest.TestCase):

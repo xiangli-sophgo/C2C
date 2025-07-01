@@ -1,7 +1,7 @@
 from src.topology.node import ChipNode, SwitchNode, HostNode
 from src.topology.link import PCIeLink, C2CDirectLink
 from src.topology.builder import TopologyBuilder
-from src.protocol.cdma import CDMAProtocol, CDMAMessage
+from src.protocol.cdma_system import CDMAProtocol, CDMAMessage
 from src.protocol.credit import CreditManager
 from src.protocol.address import AddressTranslator, AddressFormat
 from src.protocol.router import Router
@@ -56,8 +56,8 @@ def demo_cascade_topology():
 
     # 5. 模拟CDMA Send/Receive通信
     print("\n--- 模拟 CDMA 通信 ---")
-    cdma_protocol_chip0 = CDMAProtocol(protocol_id="cdma_0", node_id="chip_0")
-    cdma_protocol_chip3 = CDMAProtocol(protocol_id="cdma_3", node_id="chip_3")
+    cdma_protocol_chip0 = CDMAProtocol(chip_id="chip_0")
+    cdma_protocol_chip3 = CDMAProtocol(chip_id="chip_3")
 
     # 模拟从芯片0到芯片3的发送操作
     send_message = CDMAMessage(
@@ -162,133 +162,104 @@ def demo_cascade_topology():
 def demo_cdma_paired_protocol():
     """演示基于SG2260E的CDMA配对指令协议"""
     print("\n=== CDMA配对指令协议演示 ===")
-    
+
     # 创建两个芯片的CDMA系统
     chip_A_system = CDMASystem("chip_A")
     chip_B_system = CDMASystem("chip_B")
-    
+
     # 建立芯片间连接
     chip_A_system.connect_to_chip("chip_B", chip_B_system)
     chip_B_system.connect_to_chip("chip_A", chip_A_system)
-    
+
     print("✓ 创建并连接了两个CDMA系统")
-    
+
     # 1. 演示基本配对传输
     print("\n1. 基本配对传输演示")
     print("-" * 30)
-    
+
     # chip_A执行CDMA_receive
     print("步骤1: chip_A执行CDMA_receive...")
-    receive_result = chip_A_system.cdma_receive(
-        dst_addr=0x10000000,
-        dst_shape=(1024, 512),
-        dst_mem_type=MemoryType.GMEM,
-        src_chip_id="chip_B",
-        data_type="float32"
-    )
-    
+    receive_result = chip_A_system.cdma_receive(dst_addr=0x10000000, dst_shape=(1024, 512), dst_mem_type=MemoryType.GMEM, src_chip_id="chip_B", data_type="float32")
+
     if receive_result.success:
         print(f"✓ CDMA_receive完成，事务ID: {receive_result.transaction_id}")
     else:
         print(f"✗ CDMA_receive失败: {receive_result.error_message}")
         return
-    
+
     # 等待Credit传递
     import time
+
     time.sleep(0.1)
-    
+
     # chip_B执行CDMA_send
     print("步骤2: chip_B执行CDMA_send...")
-    send_result = chip_B_system.cdma_send(
-        src_addr=0x20000000,
-        src_shape=(1024, 512),
-        dst_chip_id="chip_A",
-        src_mem_type=MemoryType.GMEM,
-        data_type="float32"
-    )
-    
+    send_result = chip_B_system.cdma_send(src_addr=0x20000000, src_shape=(1024, 512), dst_chip_id="chip_A", src_mem_type=MemoryType.GMEM, data_type="float32")
+
     if send_result.success:
         print(f"✓ CDMA_send完成，传输了 {send_result.bytes_transferred} 字节")
         print(f"✓ 执行时间: {send_result.execution_time * 1000:.2f} ms")
     else:
         print(f"✗ CDMA_send失败: {send_result.error_message}")
-    
+
     # 2. 演示同步消息
     print("\n2. 同步消息演示")
     print("-" * 30)
-    
-    sync_result = chip_A_system.cdma_sys_send_msg("chip_B", "传输完成同步")
+
+    sync_result = chip_A_system.cdma_send("chip_B", "传输完成同步")
     if sync_result.success:
         print("✓ 同步消息发送成功")
     else:
         print(f"✗ 同步消息发送失败: {sync_result.error_message}")
-    
+
     # 3. 演示错误处理
     print("\n3. 错误处理演示")
     print("-" * 30)
-    
+
     # 尝试没有Credit的发送
     print("测试Credit不足错误...")
-    invalid_send = chip_B_system.cdma_send(
-        src_addr=0x30000000,
-        src_shape=(256,),
-        dst_chip_id="chip_A",
-        src_mem_type=MemoryType.GMEM,
-        data_type="float32"
-    )
-    
+    invalid_send = chip_B_system.cdma_send(src_addr=0x30000000, src_shape=(256,), dst_chip_id="chip_A", src_mem_type=MemoryType.GMEM, data_type="float32")
+
     if not invalid_send.success:
         print(f"✓ 正确检测到错误: {invalid_send.error_message}")
-    
+
     # 4. 演示不同内存类型
     print("\n4. 不同内存类型演示")
     print("-" * 30)
-    
+
     # L2M到LMEM的传输
     print("L2M -> LMEM 传输...")
-    l2m_receive = chip_A_system.cdma_receive(
-        dst_addr=0x80001000,
-        dst_shape=(128, 128),
-        dst_mem_type=MemoryType.LMEM,
-        src_chip_id="chip_B",
-        data_type="float16"
-    )
-    
+    l2m_receive = chip_A_system.cdma_receive(dst_addr=0x80001000, dst_shape=(128, 128), dst_mem_type=MemoryType.LMEM, src_chip_id="chip_B", data_type="float16")
+
     if l2m_receive.success:
         time.sleep(0.1)
-        l2m_send = chip_B_system.cdma_send(
-            src_addr=0x40001000,
-            src_shape=(128, 128),
-            dst_chip_id="chip_A",
-            src_mem_type=MemoryType.L2M,
-            data_type="float16"
-        )
-        
+        l2m_send = chip_B_system.cdma_send(src_addr=0x40001000, src_shape=(128, 128), dst_chip_id="chip_A", src_mem_type=MemoryType.L2M, data_type="float16")
+
         if l2m_send.success:
             print(f"✓ L2M->LMEM传输完成，{l2m_send.bytes_transferred} 字节")
         else:
             print(f"✗ L2M->LMEM传输失败: {l2m_send.error_message}")
-    
+
     # 5. 显示系统状态
     print("\n5. 系统状态信息")
     print("-" * 30)
-    
+
     print("\nchip_A 状态:")
     chip_A_status = chip_A_system.get_system_status()
     print(f"  系统状态: {chip_A_status['state']}")
     print(f"  DMA传输次数: {chip_A_status['dma_performance']['total_transfers']}")
     print(f"  总传输字节: {chip_A_status['dma_performance']['total_bytes_transferred']}")
-    
+
     print("\nchip_B 状态:")
     chip_B_status = chip_B_system.get_system_status()
     print(f"  系统状态: {chip_B_status['state']}")
     print(f"  DMA传输次数: {chip_B_status['dma_performance']['total_transfers']}")
     print(f"  总传输字节: {chip_B_status['dma_performance']['total_bytes_transferred']}")
-    
+
     # 清理系统
     chip_A_system.cleanup()
     chip_B_system.cleanup()
-    
+
     print("\n✓ CDMA配对协议演示完成！")
 
 
