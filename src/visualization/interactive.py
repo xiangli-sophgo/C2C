@@ -576,12 +576,12 @@ def main():
         with col1:
             chip_count = st.number_input("芯片数量", min_value=4, max_value=512, value=32, step=4)
             budget_constraint = st.slider("预算限制", 0.1, 1.0, 0.8, 0.1)
-            latency_req = st.selectbox("延迟要求", ["低", "中", "高"])
-            reliability_req = st.selectbox("可靠性要求", ["低", "中", "高"])
+            latency_req = st.selectbox("延迟要求", ["low", "medium", "high"])
+            reliability_req = st.selectbox("可靠性要求", ["low", "medium", "high"])
 
         with col2:
-            scalability_req = st.selectbox("扩展性要求", ["低", "中", "高"])
-            management_complexity = st.selectbox("管理复杂度", ["简单", "中等", "复杂"])
+            scalability_req = st.selectbox("扩展性要求", ["low", "medium", "high"])
+            management_complexity = st.selectbox("管理复杂度", ["simple", "moderate", "complex"])
             power_constraint = st.slider("功耗限制", 0.1, 1.0, 0.7, 0.1)
 
         if st.button("生成建议"):
