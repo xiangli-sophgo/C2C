@@ -7,10 +7,12 @@ Setup script for package installation
 from setuptools import setup, find_packages
 import os
 
+
 # 读取README文件
 def read_readme():
     with open("README.md", "r", encoding="utf-8") as fh:
         return fh.read()
+
 
 # 读取requirements
 def read_requirements():
@@ -20,15 +22,16 @@ def read_requirements():
             requirements = [line.strip() for line in f if line.strip() and not line.startswith("#")]
     return requirements
 
+
 setup(
     name="C2C",
     version="1.0.0",
     author="C2C Development Team",
-    author_email="contact@c2c-topology.com",
-    description="A topology modeling framework for SG2260E chip-to-chip communication",
+    author_email="xiang.li@sophgo.com",
+    description="A topology modeling framework chip-to-chip communication",
     long_description=read_readme(),
     long_description_content_type="text/markdown",
-    url="https://github.com/your-org/C2C",
+    url="http://10.129.4.209/xiang.li/C2C.git",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 4 - Beta",
@@ -86,10 +89,8 @@ setup(
         ],
     },
     zip_safe=False,
-    keywords="topology, chip-to-chip, communication, modeling, simulation, SG2260E",
+    keywords="topology, chip-to-chip, communication, modeling, simulation",
     project_urls={
-        "Bug Reports": "https://github.com/your-org/C2C/issues",
-        "Source": "https://github.com/your-org/C2C",
-        "Documentation": "https://c2c-topology.readthedocs.io/",
+        "Source": "http://10.129.4.209/xiang.li/C2C.git",
     },
 )

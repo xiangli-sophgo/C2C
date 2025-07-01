@@ -20,7 +20,7 @@ from src.topology.builder import TopologyBuilder
 
 # Import protocol components
 from src.protocol.base import BaseProtocol, ProtocolState
-from src.protocol.cdma import CDMAProtocol, CDMAMessageType
+from src.protocol.cdma_system import CDMAProtocol, CDMAMessageType
 from src.protocol.credit import CreditManager
 from src.protocol.address import AddressTranslator
 from src.protocol.router import Router
