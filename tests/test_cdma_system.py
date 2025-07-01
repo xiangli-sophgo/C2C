@@ -9,8 +9,10 @@ import threading
 import sys
 import os
 
-# 添加src目录到路径
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+# 将仓库根目录加入sys.path，便于导入src包
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, REPO_ROOT)
+sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
 
 from protocol.cdma_system import CDMASystem, CDMASystemState, CDMAMessage
 from protocol.memory_types import MemoryType
