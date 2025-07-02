@@ -2,15 +2,10 @@ import unittest
 import sys
 import os
 
-# 将仓库根目录加入sys.path，便于导入src包
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, REPO_ROOT)
-sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
-
-from topology.builder import TopologyBuilder
-from topology.node import ChipNode
-from topology.link import C2CDirectLink
-from protocol.cdma_system import CDMASystem, MemoryType
+from src.topology.builder import TopologyBuilder
+from src.topology.node import ChipNode
+from src.topology.link import C2CDirectLink
+from src.protocol.cdma_system import CDMASystem, MemoryType
 
 
 class TestTopologyProtocolIntegration(unittest.TestCase):

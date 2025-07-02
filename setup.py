@@ -80,14 +80,6 @@ setup(
         ],
     },
     include_package_data=True,
-    package_data={
-        "C2C": [
-            "examples/*.py",
-            "scripts/*.py",
-            "examples/output/*.png",
-            "examples/output/*.md",
-        ],
-    },
     zip_safe=False,
     keywords="topology, chip-to-chip, communication, modeling, simulation",
     project_urls={

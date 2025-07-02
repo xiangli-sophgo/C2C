@@ -625,12 +625,14 @@ class CDMASystem:
             packet = PacketSerializer.deserialize_packet(packet_data)
 
             # 记录包接收（用于错误检测）
+            # 提取载荷数据用于校验
+            payload_data = packet_data[packet.header.header_size:packet.header.total_size]
             errors = self._error_handler.process_packet_received(
                 packet_id=f"{packet.header.packet_type.value}_{packet.header.sequence_number}",
                 sequence_number=packet.header.sequence_number,
                 source=sender_chip_id,
-                data=packet_data,
-                metadata={"expected_size": packet.header.total_size, "checksum": packet.header.payload_checksum, "checksum_algorithm": "crc32"},
+                data=payload_data,  # 只传递载荷数据
+                metadata={"expected_size": packet.header.payload_size, "checksum": packet.header.payload_checksum, "checksum_algorithm": "crc32"},
             )
 
             # 更新流控

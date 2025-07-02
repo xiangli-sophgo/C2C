@@ -514,7 +514,7 @@ class IntegrityChecker:
         """
         try:
             if algorithm == "crc32":
-                return str(zlib.crc32(data) & 0xFFFFFFFF)
+                return zlib.crc32(data) & 0xFFFFFFFF
             elif algorithm == "md5":
                 return hashlib.md5(data).hexdigest()
             elif algorithm == "sha256":
@@ -525,13 +525,13 @@ class IntegrityChecker:
             self._logger.error(f"校验和计算失败: {e}")
             return ""
 
-    def verify_checksum(self, data: bytes, expected_checksum: str, algorithm: str = "crc32") -> bool:
+    def verify_checksum(self, data: bytes, expected_checksum, algorithm: str = "crc32") -> bool:
         """
         验证校验和
 
         Args:
             data: 数据
-            expected_checksum: 期望的校验和
+            expected_checksum: 期望的校验和 (支持int或str类型)
             algorithm: 算法类型
 
         Returns:
@@ -542,6 +542,17 @@ class IntegrityChecker:
 
             try:
                 calculated_checksum = self.calculate_checksum(data, algorithm)
+                
+                # 确保类型一致性
+                if algorithm == "crc32":
+                    # CRC32应该统一为整数类型进行比较
+                    if isinstance(expected_checksum, str):
+                        try:
+                            expected_checksum = int(expected_checksum)
+                        except ValueError:
+                            self._failed_checks += 1
+                            self._logger.error(f"无效的校验和格式: {expected_checksum}")
+                            return False
 
                 if calculated_checksum == expected_checksum:
                     self._passed_checks += 1

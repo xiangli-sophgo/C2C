@@ -8,14 +8,13 @@ import time
 import threading
 import sys
 import os
+import sys
 
-# 将仓库根目录加入sys.path，便于导入src包
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, REPO_ROOT)
-sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
+# Add the parent directory to sys.path to allow importing modules from src
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from protocol.cdma_system import CDMASystem, CDMASystemState, CDMAMessage
-from protocol.memory_types import MemoryType
+from src.protocol.cdma_system import CDMASystem, CDMASystemState, CDMAMessage
+from src.protocol.memory_types import MemoryType
 from src.utils.exceptions import CDMAError
 
 

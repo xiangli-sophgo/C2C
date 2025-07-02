@@ -215,21 +215,21 @@ class PacketPayload:
         # 创建一个包含所有载荷数据的字节序列
         buffer = BytesIO()
         
-        # 控制信息
-        control_json = json.dumps(self.control_info, sort_keys=True).encode('utf-8')
+        # 控制信息 - 使用确定性序列化
+        control_json = json.dumps(self.control_info, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('utf-8')
         buffer.write(len(control_json).to_bytes(4, 'big'))
         buffer.write(control_json)
         
         # 地址信息
         if self.src_address_info:
-            src_json = json.dumps(self.src_address_info.to_dict(), sort_keys=True).encode('utf-8')
+            src_json = json.dumps(self.src_address_info.to_dict(), sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('utf-8')
             buffer.write(len(src_json).to_bytes(4, 'big'))
             buffer.write(src_json)
         else:
             buffer.write((0).to_bytes(4, 'big'))
         
         if self.dst_address_info:
-            dst_json = json.dumps(self.dst_address_info.to_dict(), sort_keys=True).encode('utf-8')
+            dst_json = json.dumps(self.dst_address_info.to_dict(), sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('utf-8')
             buffer.write(len(dst_json).to_bytes(4, 'big'))
             buffer.write(dst_json)
         else:
@@ -243,7 +243,7 @@ class PacketPayload:
             buffer.write((0).to_bytes(4, 'big'))
         
         # 元数据
-        metadata_json = json.dumps(self.metadata, sort_keys=True).encode('utf-8')
+        metadata_json = json.dumps(self.metadata, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('utf-8')
         buffer.write(len(metadata_json).to_bytes(4, 'big'))
         buffer.write(metadata_json)
         
@@ -251,7 +251,7 @@ class PacketPayload:
         reduce_json = json.dumps({
             'operation': self.reduce_operation,
             'params': self.reduce_params
-        }, sort_keys=True).encode('utf-8')
+        }, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('utf-8')
         buffer.write(len(reduce_json).to_bytes(4, 'big'))
         buffer.write(reduce_json)
         
@@ -284,6 +284,9 @@ class CDMAPacket:
         self.header.payload_checksum = self.payload.calculate_checksum()
         # 计算包头校验和 (在payload_checksum确定后)
         self.header.header_checksum = self.header.calculate_header_checksum()
+        
+        # 缓存序列化后的载荷数据，确保校验和一致性
+        self._serialized_payload = None
     
     def _update_header_payload_size(self):
         """更新包头中的载荷大小信息"""
@@ -297,8 +300,13 @@ class CDMAPacket:
         if not self.header.validate():
             return False
         
-        # 验证载荷
-        calculated_payload_checksum = self.payload.calculate_checksum()
+        # 验证载荷校验和
+        # 如果有缓存的序列化数据，使用缓存数据计算校验和
+        if hasattr(self, '_serialized_payload') and self._serialized_payload is not None:
+            calculated_payload_checksum = zlib.crc32(self._serialized_payload) & 0xffffffff
+        else:
+            calculated_payload_checksum = self.payload.calculate_checksum()
+        
         if calculated_payload_checksum != self.header.payload_checksum:
             return False
         
@@ -326,11 +334,11 @@ class PacketSerializer:
     def serialize_packet(packet: CDMAPacket) -> bytes:
         """序列化CDMA包为字节流"""
         try:
-            # 序列化包头
-            header_bytes = PacketSerializer._serialize_header(packet.header)
-            
-            # 序列化载荷
+            # 序列化载荷 - 先序列化载荷以确保一致性
             payload_bytes = PacketSerializer._serialize_payload(packet.payload)
+            
+            # 缓存序列化后的载荷数据
+            packet._serialized_payload = payload_bytes
             
             # 应用压缩（如果指定）
             if packet.header.compression != CompressionType.NONE:
@@ -340,8 +348,9 @@ class PacketSerializer:
                 packet.header.total_size = packet.header.header_size + packet.header.payload_size
                 # 重新计算包头校验和（因为大小字段改变了）
                 packet.header.header_checksum = packet.header.calculate_header_checksum()
-                # 重新序列化包头
-                header_bytes = PacketSerializer._serialize_header(packet.header)
+            
+            # 序列化包头
+            header_bytes = PacketSerializer._serialize_header(packet.header)
             
             return header_bytes + payload_bytes
             
@@ -372,12 +381,16 @@ class PacketSerializer:
             # 反序列化载荷
             payload = PacketSerializer._deserialize_payload(payload_data)
             
-            # 创建包对象
-            packet = CDMAPacket(header, payload)
+            # 创建包对象，但不重新计算校验和
+            packet = CDMAPacket.__new__(CDMAPacket)
+            packet.header = header
+            packet.payload = payload
+            packet._serialized_payload = payload_data  # 保存原始载荷数据
             
-            # 验证包完整性
-            if not packet.validate():
-                raise CDMAError("包校验失败")
+            # 验证包完整性 - 使用原始数据进行校验
+            calculated_payload_checksum = zlib.crc32(payload_data) & 0xffffffff
+            if calculated_payload_checksum != header.payload_checksum:
+                raise CDMAError(f"载荷校验和验证失败: 期望={header.payload_checksum}, 实际={calculated_payload_checksum}")
             
             return packet
             
@@ -508,14 +521,14 @@ class PacketSerializer:
             # 读取控制信息
             control_size = int.from_bytes(buffer.read(4), 'big')
             control_bytes = buffer.read(control_size).decode('utf-8')
-            control_info = eval(control_bytes) # WARNING: Using eval is insecure. Only for trusted input.
+            control_info = json.loads(control_bytes)  # 使用安全的json.loads替代eval
             
             # 读取源地址信息
             src_size = int.from_bytes(buffer.read(4), 'big')
             src_address_info = None
             if src_size > 0:
                 src_bytes = buffer.read(src_size).decode('utf-8')
-                src_dict = eval(src_bytes) # WARNING: Using eval is insecure. Only for trusted input.
+                src_dict = json.loads(src_bytes)  # 使用安全的json.loads替代eval
                 src_address_info = AddressInfo(
                     base_address=src_dict['base_address'],
                     shape=tuple(src_dict['shape']),
@@ -529,7 +542,7 @@ class PacketSerializer:
             dst_address_info = None
             if dst_size > 0:
                 dst_bytes = buffer.read(dst_size).decode('utf-8')
-                dst_dict = eval(dst_bytes) # WARNING: Using eval is insecure. Only for trusted input.
+                dst_dict = json.loads(dst_bytes)  # 使用安全的json.loads替代eval
                 dst_address_info = AddressInfo(
                     base_address=dst_dict['base_address'],
                     shape=tuple(dst_dict['shape']),
@@ -547,12 +560,12 @@ class PacketSerializer:
             # 读取元数据
             metadata_size = int.from_bytes(buffer.read(4), 'big')
             metadata_bytes = buffer.read(metadata_size).decode('utf-8')
-            metadata = eval(metadata_bytes) # WARNING: Using eval is insecure. Only for trusted input.
+            metadata = json.loads(metadata_bytes)  # 使用安全的json.loads替代eval
             
             # 读取Reduce参数
             reduce_size = int.from_bytes(buffer.read(4), 'big')
             reduce_bytes = buffer.read(reduce_size).decode('utf-8')
-            reduce_dict = eval(reduce_bytes) # WARNING: Using eval is insecure. Only for trusted input.
+            reduce_dict = json.loads(reduce_bytes)  # 使用安全的json.loads替代eval
             
             payload = PacketPayload(
                 control_info=control_info,
