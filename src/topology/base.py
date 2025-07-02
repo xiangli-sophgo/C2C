@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 class BaseNode(ABC):
     """节点抽象基类"""
@@ -125,7 +125,7 @@ class BaseTopology(ABC):
         if node.node_id not in self._nodes:
             self._nodes[node.node_id] = node
 
-    def get_node(self, node_id: str) -> BaseNode | None:
+    def get_node(self, node_id: str) -> Optional[BaseNode]:
         """根据ID获取节点"""
         return self._nodes.get(node_id)
 
@@ -141,7 +141,7 @@ class BaseTopology(ABC):
             link.endpoint_a.add_neighbor(link.endpoint_b)
             link.endpoint_b.add_neighbor(link.endpoint_a)
 
-    def get_link(self, link_id: str) -> BaseLink | None:
+    def get_link(self, link_id: str) -> Optional[BaseLink]:
         """根据ID获取链路"""
         return self._links.get(link_id)
 

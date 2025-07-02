@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from src.topology.graph import TopologyGraph
 from src.topology.base import BaseNode
 from src.protocol.cdma_system import CDMAMessage
@@ -16,11 +16,11 @@ class Router:
         """更新路由表"""
         self._routing_table[destination_node_id] = next_hop_node_id
 
-    def get_next_hop(self, destination_node_id: str) -> str | None:
+    def get_next_hop(self, destination_node_id: str) -> Optional[str]:
         """获取下一跳节点ID"""
         return self._routing_table.get(destination_node_id)
 
-    def route_message(self, message: CDMAMessage, current_node: BaseNode) -> BaseNode | None:
+    def route_message(self, message: CDMAMessage, current_node: BaseNode) -> Optional[BaseNode]:
         """路由消息到下一跳节点"""
         destination_id = message.destination_id
 
