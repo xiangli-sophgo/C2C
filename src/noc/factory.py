@@ -77,8 +77,6 @@ class CrossRingTopologyValidator(TopologyValidator):
 
     def validate(self, config: BaseNoCConfig) -> ValidationResult:
         """验证CrossRing拓扑配置。"""
-        if not isinstance(config, CrossRingCompatibleConfig):
-            return False, "CrossRing拓扑需要CrossRingCompatibleConfig配置"
 
         # 验证CrossRing特定参数
         if config.NUM_NODE != config.NUM_ROW * config.NUM_COL:
@@ -113,9 +111,9 @@ class NoCTopologyFactory:
 
     # 默认配置参数
     _default_configs: Dict[TopologyType, ConfigDict] = {
-        TopologyType.MESH: {"num_nodes": 16, "routing_strategy": "shortest", "buffer_depth": 8, "link_bandwidth": 1.0},
-        TopologyType.RING: {"num_nodes": 8, "routing_strategy": "load_balanced", "buffer_depth": 4, "link_bandwidth": 1.0},
-        TopologyType.CROSSRING: {"NUM_NODE": 20, "NUM_COL": 2, "NUM_IP": 16, "buffer_depth": 8, "link_bandwidth": 1.0},
+        TopologyType.MESH: {"num_nodes": 16, "routing_strategy": "shortest", "buffer_depth": 8, "link_bandwidth": 256.0},
+        TopologyType.RING: {"num_nodes": 8, "routing_strategy": "load_balanced", "buffer_depth": 4, "link_bandwidth": 256.0},
+        TopologyType.CROSSRING: {"NUM_NODE": 20, "NUM_COL": 2, "NUM_IP": 16, "buffer_depth": 8, "link_bandwidth": 256.0},
     }
 
     @classmethod
@@ -218,10 +216,7 @@ class NoCTopologyFactory:
             return cls._config_creators[topology_type](**kwargs)
 
         # 使用默认配置创建器
-        if topology_type == TopologyType.CROSSRING:
-            config = CrossRingCompatibleConfig()
-        else:
-            config = BaseNoCConfig(topology_type)
+        config = BaseNoCConfig(topology_type)
 
         # 应用默认配置
         if topology_type in cls._default_configs:

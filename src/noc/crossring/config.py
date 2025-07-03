@@ -9,8 +9,8 @@ from typing import Dict, Any, List, Optional, Tuple
 import json
 from dataclasses import dataclass, field
 
-from src.noc.base.config import BaseNoCConfig
-from src.noc.types import TopologyType, ValidationResult
+from ..base.config import BaseNoCConfig
+from ..types import TopologyType, ValidationResult
 
 
 @dataclass

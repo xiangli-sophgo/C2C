@@ -85,7 +85,6 @@ __pkg_info__ = {
     "description": __description__,
     "author": __author__,
     "author_email": __email__,
-    "url": "https://github.com/your-org/C2C",
     "license": "MIT",
     "keywords": ["topology", "chip-to-chip", "communication", "modeling", "simulation"],
 }
