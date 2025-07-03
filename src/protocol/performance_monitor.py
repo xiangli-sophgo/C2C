@@ -105,7 +105,7 @@ class LatencyStats:
 
 
 class LatencyTracker:
-    """延迟跟踪器"""
+    """延迟 Tracker"""
 
     def __init__(self, source_id: str, max_samples: int = 10000):
         self._source_id = source_id
