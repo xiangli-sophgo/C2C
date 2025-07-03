@@ -604,3 +604,301 @@ class CrossRingConfig(BaseNoCConfig):
     def __repr__(self) -> str:
         """详细字符串表示。"""
         return f"CrossRingConfig(name='{self.config_name}', topology={self.num_row}×{self.num_col})"
+    
+    # ========== 新增的NoC专用功能 ==========
+    
+    def create_simulation_config(self, 
+                               max_cycles: int = 10000,
+                               warmup_cycles: int = 1000,
+                               stats_start_cycle: int = 1000) -> Dict[str, Any]:
+        """
+        创建仿真配置
+        
+        Args:
+            max_cycles: 最大仿真周期
+            warmup_cycles: 热身周期
+            stats_start_cycle: 统计开始周期
+            
+        Returns:
+            仿真配置字典
+        """
+        return {
+            "simulation": {
+                "max_cycles": max_cycles,
+                "warmup_cycles": warmup_cycles,
+                "stats_start_cycle": stats_start_cycle,
+                "cycle_frequency": self.basic_config.network_frequency,
+            },
+            "topology": self.get_topology_params(),
+            "resources": self.get_resource_config(),
+            "traffic": self.get_traffic_config(),
+        }
+    
+    def get_resource_config(self) -> Dict[str, Any]:
+        """获取资源配置信息"""
+        return {
+            "rn_resources": {
+                "read_tracker_count": self.tracker_config.rn_r_tracker_ostd,
+                "write_tracker_count": self.tracker_config.rn_w_tracker_ostd,
+                "rdb_size": self.rn_rdb_size,
+                "wdb_size": self.rn_wdb_size,
+            },
+            "sn_resources": {
+                "ddr": {
+                    "read_tracker_count": self.tracker_config.sn_ddr_r_tracker_ostd,
+                    "write_tracker_count": self.tracker_config.sn_ddr_w_tracker_ostd,
+                    "wdb_size": self.sn_ddr_wdb_size,
+                },
+                "l2m": {
+                    "read_tracker_count": self.tracker_config.sn_l2m_r_tracker_ostd,
+                    "write_tracker_count": self.tracker_config.sn_l2m_w_tracker_ostd,
+                    "wdb_size": self.sn_l2m_wdb_size,
+                },
+                "tracker_release_latency": self.tracker_config.sn_tracker_release_latency,
+            },
+            "fifo_depths": {
+                "rb_in": self.fifo_config.rb_in_depth,
+                "rb_out": self.fifo_config.rb_out_depth,
+                "iq_out": self.fifo_config.iq_out_depth,
+                "eq_in": self.fifo_config.eq_in_depth,
+                "iq_ch": self.fifo_config.iq_ch_depth,
+                "eq_ch": self.fifo_config.eq_ch_depth,
+            }
+        }
+    
+    def get_traffic_config(self) -> Dict[str, Any]:
+        """获取流量配置信息"""
+        return {
+            "burst_length": self.basic_config.burst,
+            "ip_bandwidth_limits": {
+                "gdma": self.ip_config.gdma_bw_limit,
+                "sdma": self.ip_config.sdma_bw_limit,
+                "cdma": self.ip_config.cdma_bw_limit,
+                "ddr": self.ip_config.ddr_bw_limit,
+                "l2m": self.ip_config.l2m_bw_limit,
+            },
+            "latencies": {
+                "ddr_read": self.latency_config.ddr_r_latency,
+                "ddr_write": self.latency_config.ddr_w_latency,
+                "l2m_read": self.latency_config.l2m_r_latency,
+                "l2m_write": self.latency_config.l2m_w_latency,
+            }
+        }
+    
+    def get_etag_config(self) -> Dict[str, Any]:
+        """获取ETag配置信息"""
+        return {
+            "bothside_upgrade": self.tag_config.etag_bothside_upgrade,
+            "tl_settings": {
+                "t1_ue_max": self.tag_config.tl_etag_t1_ue_max,
+                "t2_ue_max": self.tag_config.tl_etag_t2_ue_max,
+            },
+            "tr_settings": {
+                "t2_ue_max": self.tag_config.tr_etag_t2_ue_max,
+            },
+            "tu_settings": {
+                "t1_ue_max": self.tag_config.tu_etag_t1_ue_max,
+                "t2_ue_max": self.tag_config.tu_etag_t2_ue_max,
+            },
+            "td_settings": {
+                "t2_ue_max": self.tag_config.td_etag_t2_ue_max,
+            }
+        }
+    
+    def get_itag_config(self) -> Dict[str, Any]:
+        """获取ITag配置信息"""
+        return {
+            "horizontal": {
+                "trigger_threshold": self.tag_config.itag_trigger_th_h,
+                "max_num": self.tag_config.itag_max_num_h,
+            },
+            "vertical": {
+                "trigger_threshold": self.tag_config.itag_trigger_th_v,
+                "max_num": self.tag_config.itag_max_num_v,
+            }
+        }
+    
+    def optimize_for_workload(self, workload_type: str) -> None:
+        """
+        根据工作负载类型优化配置
+        
+        Args:
+            workload_type: 工作负载类型 ("compute_intensive", "memory_intensive", "balanced")
+        """
+        if workload_type == "compute_intensive":
+            # 计算密集型：增加读tracker，减少写tracker
+            self.tracker_config.rn_r_tracker_ostd = min(128, self.tracker_config.rn_r_tracker_ostd * 2)
+            self.tracker_config.rn_w_tracker_ostd = max(16, self.tracker_config.rn_w_tracker_ostd // 2)
+            # 增加读延迟缓冲
+            self.tag_config.tl_etag_t1_ue_max = min(self.fifo_config.rb_in_depth - 1, 
+                                                   self.tag_config.tl_etag_t1_ue_max + 2)
+            
+        elif workload_type == "memory_intensive":
+            # 内存密集型：增加写tracker和写缓冲
+            self.tracker_config.rn_w_tracker_ostd = min(64, self.tracker_config.rn_w_tracker_ostd * 2)
+            self.tracker_config.sn_ddr_w_tracker_ostd = min(96, self.tracker_config.sn_ddr_w_tracker_ostd * 2)
+            # 增加写带宽限制
+            self.ip_config.gdma_bw_limit *= 1.5
+            self.ip_config.sdma_bw_limit *= 1.5
+            
+        elif workload_type == "balanced":
+            # 平衡型：保持默认配置，但优化Tag设置
+            self.tag_config.tl_etag_t2_ue_max = min(self.tag_config.tl_etag_t1_ue_max - 1, 
+                                                   self.tag_config.tl_etag_t2_ue_max + 1)
+            self.tag_config.tu_etag_t2_ue_max = min(self.tag_config.tu_etag_t1_ue_max - 1,
+                                                   self.tag_config.tu_etag_t2_ue_max + 1)
+        
+        # 重新生成派生配置
+        self._generate_derived_config()
+    
+    def scale_for_size(self, target_nodes: int) -> None:
+        """
+        根据目标节点数自动调整配置
+        
+        Args:
+            target_nodes: 目标节点数
+        """
+        if target_nodes <= 9:  # 3x3及以下
+            scale_factor = 0.5
+        elif target_nodes <= 16:  # 4x4
+            scale_factor = 0.75
+        elif target_nodes <= 25:  # 5x5
+            scale_factor = 1.0
+        else:  # 更大规模
+            scale_factor = min(2.0, target_nodes / 25.0)
+        
+        # 按比例调整tracker数量
+        self.tracker_config.rn_r_tracker_ostd = max(32, int(self.tracker_config.rn_r_tracker_ostd * scale_factor))
+        self.tracker_config.rn_w_tracker_ostd = max(16, int(self.tracker_config.rn_w_tracker_ostd * scale_factor))
+        self.tracker_config.sn_ddr_r_tracker_ostd = max(48, int(self.tracker_config.sn_ddr_r_tracker_ostd * scale_factor))
+        self.tracker_config.sn_ddr_w_tracker_ostd = max(24, int(self.tracker_config.sn_ddr_w_tracker_ostd * scale_factor))
+        
+        # 按比例调整FIFO深度
+        self.fifo_config.rb_in_depth = max(8, int(self.fifo_config.rb_in_depth * scale_factor))
+        self.fifo_config.eq_in_depth = max(8, int(self.fifo_config.eq_in_depth * scale_factor))
+        
+        # 重新生成派生配置
+        self._generate_derived_config()
+    
+    def enable_debug_mode(self) -> None:
+        """启用调试模式"""
+        # 减少FIFO深度以加快调试
+        self.fifo_config.rb_in_depth = max(4, self.fifo_config.rb_in_depth // 2)
+        self.fifo_config.eq_in_depth = max(4, self.fifo_config.eq_in_depth // 2)
+        
+        # 减少tracker数量以便观察
+        self.tracker_config.rn_r_tracker_ostd = min(16, self.tracker_config.rn_r_tracker_ostd)
+        self.tracker_config.rn_w_tracker_ostd = min(8, self.tracker_config.rn_w_tracker_ostd)
+        
+        # 降低带宽限制
+        for attr in ["gdma_bw_limit", "sdma_bw_limit", "cdma_bw_limit", "ddr_bw_limit", "l2m_bw_limit"]:
+            setattr(self.ip_config, attr, getattr(self.ip_config, attr) / 4)
+        
+        # 重新生成派生配置
+        self._generate_derived_config()
+    
+    def get_recommended_simulation_cycles(self) -> Dict[str, int]:
+        """
+        根据配置推荐仿真周期数
+        
+        Returns:
+            推荐的仿真参数
+        """
+        # 基于拓扑大小和资源配置推荐周期数
+        base_cycles = self.num_nodes * 1000
+        
+        # 根据tracker数量调整
+        tracker_factor = (self.tracker_config.rn_r_tracker_ostd + self.tracker_config.rn_w_tracker_ostd) / 96
+        cycles = int(base_cycles * tracker_factor)
+        
+        return {
+            "warmup_cycles": min(5000, cycles // 10),
+            "stats_start_cycle": min(5000, cycles // 10),
+            "max_cycles": cycles,
+            "recommended_min_cycles": cycles // 2,
+            "recommended_max_cycles": cycles * 2,
+        }
+
+
+# ========== 便捷函数 ==========
+
+def create_crossring_config_2260e() -> CrossRingConfig:
+    """创建2260E芯片的CrossRing配置"""
+    config = CrossRingConfig(num_row=3, num_col=3, config_name="2260E")
+    config.set_preset_configuration("2260E")
+    return config
+
+
+def create_crossring_config_2262() -> CrossRingConfig:
+    """创建2262芯片的CrossRing配置"""
+    config = CrossRingConfig(num_row=5, num_col=4, config_name="2262")
+    config.set_preset_configuration("2262")
+    return config
+
+
+def create_crossring_config_custom(num_row: int, 
+                                  num_col: int,
+                                  config_name: str = "custom",
+                                  **kwargs) -> CrossRingConfig:
+    """
+    创建自定义CrossRing配置
+    
+    Args:
+        num_row: 行数
+        num_col: 列数
+        config_name: 配置名称
+        **kwargs: 其他配置参数
+        
+    Returns:
+        CrossRing配置实例
+    """
+    config = CrossRingConfig(num_row=num_row, num_col=num_col, config_name=config_name)
+    
+    # 应用自定义参数
+    for key, value in kwargs.items():
+        if hasattr(config, key):
+            setattr(config, key, value)
+        elif hasattr(config.basic_config, key):
+            setattr(config.basic_config, key, value)
+        elif hasattr(config.ip_config, key):
+            setattr(config.ip_config, key, value)
+        elif hasattr(config.fifo_config, key):
+            setattr(config.fifo_config, key, value)
+        elif hasattr(config.tag_config, key):
+            setattr(config.tag_config, key, value)
+        elif hasattr(config.tracker_config, key):
+            setattr(config.tracker_config, key, value)
+        elif hasattr(config.latency_config, key):
+            setattr(config.latency_config, key, value)
+    
+    # 重新生成派生配置
+    config._generate_derived_config()
+    return config
+
+
+def load_crossring_config_from_file(file_path: str) -> CrossRingConfig:
+    """
+    从文件加载CrossRing配置
+    
+    Args:
+        file_path: 配置文件路径
+        
+    Returns:
+        CrossRing配置实例
+    """
+    import json
+    
+    with open(file_path, 'r') as f:
+        config_dict = json.load(f)
+    
+    # 创建基础配置
+    config = CrossRingConfig(
+        num_row=config_dict.get("num_row", 5),
+        num_col=config_dict.get("num_col", 4),
+        config_name=config_dict.get("config_name", "loaded")
+    )
+    
+    # 从字典加载
+    config.from_dict(config_dict)
+    
+    return config
