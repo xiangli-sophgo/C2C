@@ -10,8 +10,8 @@ import logging
 from abc import ABC, abstractmethod
 
 from .types import TopologyType, ValidationResult, ConfigDict
-from .base.topology import BaseNoCTopology
-from .base.config import BaseNoCConfig
+from ..base.topology import BaseNoCTopology
+from ..base.config import BaseNoCConfig
 
 
 class TopologyRegistryError(Exception):
@@ -118,7 +118,11 @@ class NoCTopologyFactory:
 
     @classmethod
     def register_topology(
-        cls, topology_type: TopologyType, topology_class: Type[BaseNoCTopology], config_creator: Optional[Callable[..., BaseNoCConfig]] = None, validator: Optional[TopologyValidator] = None
+        cls,
+        topology_type: TopologyType,
+        topology_class: Type[BaseNoCTopology],
+        config_creator: Optional[Callable[..., BaseNoCConfig]] = None,
+        validator: Optional[TopologyValidator] = None,
     ) -> None:
         """
         注册新的拓扑类型。
