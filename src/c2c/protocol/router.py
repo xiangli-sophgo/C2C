@@ -1,7 +1,7 @@
 from typing import List, Dict, Any, Optional
-from src.topology.graph import TopologyGraph
-from src.topology.base import BaseNode
-from src.protocol.cdma_system import CDMAMessage
+from src.c2c.topology.graph import TopologyGraph
+from src.c2c.topology.base import BaseNode
+from src.c2c.protocol.cdma_system import CDMAMessage
 
 
 class Router:

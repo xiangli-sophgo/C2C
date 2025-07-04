@@ -9,9 +9,17 @@ import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.topology.tree import TreeTopologyLogic, TreeAddressRoutingLogic, TreeConfigGenerationLogic, TreeFaultToleranceLogic, validate_tree_topology, evaluate_tree_performance, optimize_tree_structure
+from src.c2c.topology.tree import (
+    TreeTopologyLogic,
+    TreeAddressRoutingLogic,
+    TreeConfigGenerationLogic,
+    TreeFaultToleranceLogic,
+    validate_tree_topology,
+    evaluate_tree_performance,
+    optimize_tree_structure,
+)
 
-from src.topology.torus import (
+from src.c2c.topology.torus import (
     TorusTopologyLogic,
     TorusRoutingLogic,
     TorusC2CMappingLogic,

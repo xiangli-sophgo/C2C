@@ -10,8 +10,8 @@ import time
 # 添加src目录到Python路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from protocol.cdma_system import CDMASystem
-from protocol.memory_types import MemoryType
+from src.c2c.protocol.cdma_system import CDMASystem
+from src.c2c.protocol.memory_types import MemoryType
 
 
 def simple_cdma_test():

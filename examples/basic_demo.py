@@ -1,11 +1,11 @@
-from src.topology.node import ChipNode, SwitchNode, HostNode
-from src.topology.link import PCIeLink, C2CDirectLink
-from src.topology.builder import TopologyBuilder
-from src.protocol.cdma_system import CDMAProtocol, CDMAMessage
-from src.protocol.credit import CreditManager
-from src.protocol.address import AddressTranslator, AddressFormat
-from src.protocol.router import Router
-from src.protocol.cdma_system import CDMASystem, MemoryType
+from src.c2c.topology.node import ChipNode, SwitchNode, HostNode
+from src.c2c.topology.link import PCIeLink, C2CDirectLink
+from src.c2c.topology.builder import TopologyBuilder
+from src.c2c.protocol.cdma_system import CDMAProtocol, CDMAMessage
+from src.c2c.protocol.credit import CreditManager
+from src.c2c.protocol.address import AddressTranslator, AddressFormat
+from src.c2c.protocol.router import Router
+from src.c2c.protocol.cdma_system import CDMASystem, MemoryType
 
 
 def demo_cascade_topology():

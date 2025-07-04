@@ -10,7 +10,7 @@ import json
 from dataclasses import dataclass, field
 
 from ..base.config import BaseNoCConfig
-from ..types import TopologyType, ValidationResult
+from src.noc.utils.types import TopologyType, ValidationResult
 
 
 @dataclass
@@ -290,9 +290,7 @@ class CrossRingConfig(BaseNoCConfig):
                 errors.append(f"SN Tracker OSTD必须为正数 (sn_ddr_r_tracker_ostd={tracker.sn_ddr_r_tracker_ostd}, sn_l2m_r_tracker_ostd={tracker.sn_l2m_r_tracker_ostd})")
             # 缓冲区大小一致性验证
             if hasattr(self, "rn_rdb_size") and self.rn_rdb_size != tracker.rn_r_tracker_ostd * self.basic_config.burst:
-                errors.append(
-                    f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (rn_rdb_size={self.rn_rdb_size}, rn_r_tracker_ostd={tracker.rn_r_tracker_ostd}, burst={self.basic_config.burst})"
-                )
+                errors.append(f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (rn_rdb_size={self.rn_rdb_size}, rn_r_tracker_ostd={tracker.rn_r_tracker_ostd}, burst={self.basic_config.burst})")
         elif isinstance(tracker, dict):
             rn_r_ostd = tracker.get("rn_r_tracker_ostd", 64)
             rn_w_ostd = tracker.get("rn_w_tracker_ostd", 32)

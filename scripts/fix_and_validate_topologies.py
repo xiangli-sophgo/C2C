@@ -10,12 +10,12 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import math
-from src.topology.tree import TreeTopologyLogic, validate_tree_topology, evaluate_tree_performance
-from src.topology.torus import TorusTopologyLogic, test_torus_connectivity
-from src.topology.node import ChipNode, SwitchNode
-from src.topology.link import C2CDirectLink
-from src.topology.builder import TopologyBuilder
-from src.protocol.cdma import CDMAProtocol, CDMAMessage
+from src.c2c.topology.tree import TreeTopologyLogic, validate_tree_topology, evaluate_tree_performance
+from src.c2c.topology.torus import TorusTopologyLogic, test_torus_connectivity
+from src.c2c.topology.node import ChipNode, SwitchNode
+from src.c2c.topology.link import C2CDirectLink
+from src.c2c.topology.builder import TopologyBuilder
+from src.c2c.protocol.cdma import CDMAProtocol, CDMAMessage
 
 
 def validate_tree_topology_demo():
@@ -94,7 +94,7 @@ def validate_torus_topology_demo():
                 print(f"✗ 环形拓扑连通性验证失败：{connectivity_result.get('error', '未知错误')}")
 
             # 测试路由算法
-            from src.topology.torus import TorusRoutingLogic
+            from src.c2c.topology.torus import TorusRoutingLogic
 
             routing_logic = TorusRoutingLogic()
 

@@ -21,7 +21,7 @@ from typing import List, Dict, Tuple
 
 from src.noc.crossring.topology import CrossRingTopology
 from src.noc.crossring.config import CrossRingConfig
-from src.noc.types import RoutingStrategy, TopologyType
+from src.noc.utils.types import RoutingStrategy, TopologyType
 from src.noc.utils.adjacency import create_crossring_adjacency_matrix, validate_adjacency_matrix
 
 

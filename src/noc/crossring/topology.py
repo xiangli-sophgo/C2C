@@ -14,7 +14,7 @@ from collections import deque, defaultdict
 import logging
 
 from ..base.topology import BaseNoCTopology
-from ..types import NodeId, Path, Position, ValidationResult, AdjacencyMatrix, RoutingStrategy, TopologyType, LinkId, MetricsDict
+from src.noc.utils.types import NodeId, Path, Position, ValidationResult, AdjacencyMatrix, RoutingStrategy, TopologyType, LinkId, MetricsDict
 from .config import CrossRingConfig
 from ..utils.adjacency import create_crossring_adjacency_matrix, validate_adjacency_matrix
 

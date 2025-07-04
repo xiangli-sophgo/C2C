@@ -13,7 +13,7 @@ from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import deque, defaultdict
 from enum import Enum
 
-from ..types import NodeId, Position, NodeType, Priority, NodeMetrics, MetricsDict, ConfigDict
+from src.noc.utils.types import NodeId, Position, NodeType, Priority, NodeMetrics, MetricsDict, ConfigDict
 
 
 class NodeState(Enum):

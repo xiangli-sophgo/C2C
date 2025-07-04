@@ -2,10 +2,10 @@ import unittest
 import sys
 import os
 
-from src.topology.builder import TopologyBuilder
-from src.topology.node import ChipNode
-from src.topology.link import C2CDirectLink
-from src.protocol.cdma_system import CDMASystem, MemoryType
+from src.c2c.topology.builder import TopologyBuilder
+from src.c2c.topology.node import ChipNode
+from src.c2c.topology.link import C2CDirectLink
+from src.c2c.protocol.cdma_system import CDMASystem, MemoryType
 
 
 class TestTopologyProtocolIntegration(unittest.TestCase):

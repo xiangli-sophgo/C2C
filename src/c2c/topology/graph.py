@@ -1,6 +1,6 @@
 import networkx as nx
 from typing import Dict, Any, List
-from src.topology.base import BaseNode, BaseLink, BaseTopology
+from src.c2c.topology.base import BaseNode, BaseLink, BaseTopology
 
 
 class TopologyGraph(BaseTopology):

@@ -9,9 +9,9 @@ from typing import Type, Dict, Any, Optional, List, Callable
 import logging
 from abc import ABC, abstractmethod
 
-from .types import TopologyType, ValidationResult, ConfigDict
-from ..base.topology import BaseNoCTopology
-from ..base.config import BaseNoCConfig
+from src.noc.utils.types import TopologyType, ValidationResult, ConfigDict
+from src.noc.base.topology import BaseNoCTopology
+from src.noc.base.config import BaseNoCConfig
 
 
 class TopologyRegistryError(Exception):

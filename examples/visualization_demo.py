@@ -13,11 +13,11 @@ import matplotlib.pyplot as plt
 from src.visualization.visualizer import TopologyVisualizer
 from src.visualization.comparison import PerformanceComparator
 from src.visualization.utils import color_manager, graphics_utils
-from src.topology.tree import TreeTopologyLogic, evaluate_tree_performance
-from src.topology.torus import TorusTopologyLogic, TorusRoutingLogic, test_torus_connectivity
-from src.topology.node import ChipNode, SwitchNode, HostNode
-from src.topology.link import C2CDirectLink, PCIeLink
-from src.topology.builder import TopologyBuilder
+from src.c2c.topology.tree import TreeTopologyLogic, evaluate_tree_performance
+from src.c2c.topology.torus import TorusTopologyLogic, TorusRoutingLogic, test_torus_connectivity
+from src.c2c.topology.node import ChipNode, SwitchNode, HostNode
+from src.c2c.topology.link import C2CDirectLink, PCIeLink
+from src.c2c.topology.builder import TopologyBuilder
 
 
 def demo_tree_visualization():

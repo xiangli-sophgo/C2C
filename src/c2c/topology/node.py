@@ -1,5 +1,5 @@
 from typing import List, Dict, Any
-from src.topology.base import BaseNode
+from src.c2c.topology.base import BaseNode
 
 
 class ChipNode(BaseNode):

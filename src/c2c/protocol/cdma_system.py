@@ -22,7 +22,7 @@ from .flow_control import FlowController, FlowState
 from .performance_monitor import PerformanceMonitor
 from .error_handler import ErrorHandler, ErrorRecord, ErrorType, ErrorSeverity
 
-from src.utils.exceptions import CDMAError, AddressError, ShapeCompatibilityError
+from src.c2c.utils.exceptions import CDMAError, AddressError, ShapeCompatibilityError
 import queue
 
 
@@ -626,7 +626,7 @@ class CDMASystem:
 
             # 记录包接收（用于错误检测）
             # 提取载荷数据用于校验
-            payload_data = packet_data[packet.header.header_size:packet.header.total_size]
+            payload_data = packet_data[packet.header.header_size : packet.header.total_size]
             errors = self._error_handler.process_packet_received(
                 packet_id=f"{packet.header.packet_type.value}_{packet.header.sequence_number}",
                 sequence_number=packet.header.sequence_number,

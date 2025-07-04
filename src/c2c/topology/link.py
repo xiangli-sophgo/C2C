@@ -1,5 +1,5 @@
 from typing import Dict, Any
-from src.topology.base import BaseLink, BaseNode
+from src.c2c.topology.base import BaseLink, BaseNode
 import config.constants as constants
 
 

@@ -5,7 +5,7 @@
 import unittest
 from dataclasses import asdict
 
-from src.noc.types import (
+from src.noc.utils.types import (
     TopologyType,
     RoutingStrategy,
     FlowControlType,
@@ -143,7 +143,7 @@ class TestConstants(unittest.TestCase):
 
     def test_default_values(self):
         """测试默认值常量。"""
-        from src.noc.types import DEFAULT_FLIT_SIZE, DEFAULT_PACKET_SIZE, DEFAULT_BUFFER_SIZE, DEFAULT_LINK_BANDWIDTH, DEFAULT_CLOCK_FREQUENCY, MAX_NODES, MAX_DIMENSIONS
+        from src.noc.utils.types import DEFAULT_FLIT_SIZE, DEFAULT_PACKET_SIZE, DEFAULT_BUFFER_SIZE, DEFAULT_LINK_BANDWIDTH, DEFAULT_CLOCK_FREQUENCY, MAX_NODES, MAX_DIMENSIONS
 
         self.assertEqual(DEFAULT_FLIT_SIZE, 64)
         self.assertEqual(DEFAULT_PACKET_SIZE, 512)

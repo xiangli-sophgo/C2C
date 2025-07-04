@@ -11,8 +11,8 @@ import matplotlib.pyplot as plt
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.visualization.comparison import PerformanceComparator
-from src.topology.tree import TreeTopologyLogic, evaluate_tree_performance
-from src.topology.torus import TorusTopologyLogic, TorusRoutingLogic
+from src.c2c.topology.tree import TreeTopologyLogic, evaluate_tree_performance
+from src.c2c.topology.torus import TorusTopologyLogic, TorusRoutingLogic
 import numpy as np
 import seaborn as sns
 

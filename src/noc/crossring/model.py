@@ -13,7 +13,7 @@ from collections import defaultdict
 from .config import CrossRingConfig
 from .ip_interface import CrossRingIPInterface
 from .flit import CrossRingFlit, get_crossring_flit_pool_stats
-from .types import NodeId
+from src.noc.utils.types import NodeId
 
 
 class CrossRingModel:
@@ -829,8 +829,7 @@ class CrossRingModel:
         print("\nIP接口状态:")
         for ip_key, ip_status in status.items():
             print(
-                f"  {ip_key}: RN({ip_status['rn_read_active']}R+{ip_status['rn_write_active']}W), "
-                + f"SN({ip_status['sn_active']}), 重试({ip_status['read_retries']}R+{ip_status['write_retries']}W)"
+                f"  {ip_key}: RN({ip_status['rn_read_active']}R+{ip_status['rn_write_active']}W), " + f"SN({ip_status['sn_active']}), 重试({ip_status['read_retries']}R+{ip_status['write_retries']}W)"
             )
 
     def inject_test_traffic(self, source: NodeId, destination: NodeId, req_type: str, count: int = 1, burst_length: int = 4) -> List[str]:
@@ -920,12 +919,7 @@ class CrossRingModel:
 
     def __repr__(self) -> str:
         """字符串表示"""
-        return (
-            f"CrossRingModel({self.config.config_name}, "
-            f"{self.config.num_row}x{self.config.num_col}, "
-            f"cycle={self.cycle}, "
-            f"active_requests={self.get_active_request_count()})"
-        )
+        return f"CrossRingModel({self.config.config_name}, " f"{self.config.num_row}x{self.config.num_col}, " f"cycle={self.cycle}, " f"active_requests={self.get_active_request_count()})"
 
 
 def create_crossring_model(config_name: str = "default", num_row: int = 5, num_col: int = 4, **config_kwargs) -> CrossRingModel:

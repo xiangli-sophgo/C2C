@@ -8,7 +8,7 @@ import numpy as np
 from typing import List, Tuple, Optional, Set
 from collections import deque
 
-from src.noc.types import AdjacencyMatrix, ValidationResult
+from src.noc.utils.types import AdjacencyMatrix, ValidationResult
 
 
 def create_crossring_adjacency_matrix(num_rows: int, num_cols: int) -> AdjacencyMatrix:

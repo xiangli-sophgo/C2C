@@ -26,7 +26,7 @@ NoC（Network-on-Chip）抽象层。
     )
 """
 
-from .types import (
+from .utils.types import (
     # 枚举类型
     TopologyType,
     RoutingStrategy,
@@ -81,7 +81,7 @@ from .base.node import (
     BufferStatus,
 )
 
-from .factory import (
+from .utils.factory import (
     NoCTopologyFactory,
     TopologyRegistryError,
     TopologyCreationError,

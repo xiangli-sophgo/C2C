@@ -14,7 +14,7 @@ import logging
 import json
 import os
 
-from src.utils.exceptions import CDMAError
+from src.c2c.utils.exceptions import CDMAError
 
 
 class MetricType(Enum):

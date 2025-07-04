@@ -11,7 +11,7 @@ import threading
 from collections import defaultdict, deque
 import logging
 
-from src.utils.exceptions import CDMAError
+from src.c2c.utils.exceptions import CDMAError
 
 
 class SyncState(Enum):

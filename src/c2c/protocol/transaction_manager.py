@@ -4,7 +4,7 @@ from enum import Enum
 import time
 import threading
 from collections import defaultdict
-from src.utils.exceptions import CDMAError
+from src.c2c.utils.exceptions import CDMAError
 
 
 class TransactionState(Enum):

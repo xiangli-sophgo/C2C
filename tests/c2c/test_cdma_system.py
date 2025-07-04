@@ -13,9 +13,9 @@ import sys
 # Add the parent directory to sys.path to allow importing modules from src
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.protocol.cdma_system import CDMASystem, CDMASystemState, CDMAMessage
-from src.protocol.memory_types import MemoryType
-from src.utils.exceptions import CDMAError
+from src.c2c.protocol.cdma_system import CDMASystem, CDMASystemState, CDMAMessage
+from src.c2c.protocol.memory_types import MemoryType
+from src.c2c.utils.exceptions import CDMAError
 
 
 class TestCDMASystemBasics(unittest.TestCase):

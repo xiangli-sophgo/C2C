@@ -23,10 +23,10 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # 导入项目模块
 from src.visualization.comparison import PerformanceComparator
 from src.visualization.config import init_visualization_config, get_label, get_color_scheme
-from src.topology.topology_optimizer import TopologyOptimizer, ApplicationRequirements
-from src.topology.tree import TreeTopologyLogic
-from src.topology.torus import TorusTopologyLogic, TorusRoutingLogic
-from src.topology.graph import TopologyGraph
+from src.c2c.topology.topology_optimizer import TopologyOptimizer, ApplicationRequirements
+from src.c2c.topology.tree import TreeTopologyLogic
+from src.c2c.topology.torus import TorusTopologyLogic, TorusRoutingLogic
+from src.c2c.topology.graph import TopologyGraph
 
 # 初始化可视化配置
 init_visualization_config()

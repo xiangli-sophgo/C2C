@@ -12,18 +12,18 @@ __email__ = "contact@c2c-topology.com"
 __description__ = "A topology modeling framework for SG2260E chip-to-chip communication"
 
 # Import core components
-from src.topology.base import BaseNode, BaseLink, BaseTopology
-from src.topology.node import ChipNode, SwitchNode, HostNode
-from src.topology.link import PCIeLink, C2CDirectLink
-from src.topology.graph import TopologyGraph
-from src.topology.builder import TopologyBuilder
+from src.c2c.topology.base import BaseNode, BaseLink, BaseTopology
+from src.c2c.topology.node import ChipNode, SwitchNode, HostNode
+from src.c2c.topology.link import PCIeLink, C2CDirectLink
+from src.c2c.topology.graph import TopologyGraph
+from src.c2c.topology.builder import TopologyBuilder
 
 # Import protocol components
-from src.protocol.base import BaseProtocol, ProtocolState
-from src.protocol.cdma_system import CDMAProtocol, CDMAMessageType
-from src.protocol.credit import CreditManager
-from src.protocol.address import AddressTranslator
-from src.protocol.router import Router
+from src.c2c.protocol.base import BaseProtocol, ProtocolState
+from src.c2c.protocol.cdma_system import CDMAProtocol, CDMAMessageType
+from src.c2c.protocol.credit import CreditManager
+from src.c2c.protocol.address import AddressTranslator
+from src.c2c.protocol.router import Router
 
 # Import visualization components
 from src.visualization.visualizer import TopologyVisualizer
@@ -31,7 +31,7 @@ from src.visualization.comparison import PerformanceComparator
 
 # Import utility components
 from config.constants import *
-from src.utils.exceptions import *
+from src.c2c.utils.exceptions import *
 
 # Import configuration
 from config.loader import ConfigLoader

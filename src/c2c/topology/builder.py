@@ -1,5 +1,5 @@
-from src.topology.graph import TopologyGraph
-from src.topology.base import BaseNode, BaseLink
+from src.c2c.topology.graph import TopologyGraph
+from src.c2c.topology.base import BaseNode, BaseLink
 from typing import Dict, Any
 
 

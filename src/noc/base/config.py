@@ -12,7 +12,7 @@ import json
 import os
 from pathlib import Path
 
-from ..types import TopologyType, RoutingStrategy, FlowControlType, BufferType, TrafficPattern, NoCConfiguration, ConfigDict, ValidationResult
+from src.noc.utils.types import TopologyType, RoutingStrategy, FlowControlType, BufferType, TrafficPattern, NoCConfiguration, ConfigDict, ValidationResult
 
 
 class BaseNoCConfig(ABC):

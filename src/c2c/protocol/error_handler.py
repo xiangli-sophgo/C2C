@@ -14,7 +14,7 @@ import zlib
 import logging
 import random
 
-from src.utils.exceptions import CDMAError
+from src.c2c.utils.exceptions import CDMAError
 
 
 class ErrorType(Enum):
@@ -542,7 +542,7 @@ class IntegrityChecker:
 
             try:
                 calculated_checksum = self.calculate_checksum(data, algorithm)
-                
+
                 # 确保类型一致性
                 if algorithm == "crc32":
                     # CRC32应该统一为整数类型进行比较

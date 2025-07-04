@@ -11,7 +11,7 @@ import numpy as np
 from dataclasses import dataclass, field
 
 from ..base.flit import BaseFlit
-from ..types import NodeId
+from src.noc.utils.types import NodeId
 
 
 @dataclass
@@ -477,3 +477,10 @@ def get_crossring_flit_pool_stats() -> Dict[str, Any]:
         统计信息字典
     """
     return _global_flit_pool.get_stats()
+
+
+def reset(self):
+    self._reset_for_reuse()
+
+
+CrossRingFlit.reset = reset

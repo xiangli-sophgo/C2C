@@ -16,7 +16,7 @@ from typing import Dict, Any
 
 from src.noc.crossring.config import CrossRingConfig, IPConfiguration, FIFOConfiguration
 from src.noc.crossring.config_factory import CrossRingConfigFactory
-from src.noc.types import TopologyType
+from src.noc.utils.types import TopologyType
 
 
 class TestCrossRingConfig(unittest.TestCase):
