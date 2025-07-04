@@ -7,9 +7,9 @@
 
 ## 核心功能
 
-- **拓扑建模**: 支持多种拓扑结构，如树状（Tree）和环形（Torus），并提供灵活的节点和链路定义。
+- **拓扑建模**: 支持多种拓扑结构，如树状（Tree）、环形（Torus）、CrossRing等，并提供灵活的节点和链路定义。
 - **协议实现**: 完整的CDMA协议栈，包括消息同步、流量控制、错误处理和性能监控。
-- **仿真引擎**: 全新的事件驱动仿真系统，支持cycle级精确的C2C通信仿真。
+- **仿真引擎**: 事件驱动仿真系统，支持cycle级精确的C2C通信仿真。
 - **性能分析**: 对不同的拓扑结构进行全面的性能评估和对比，包括路径长度、带宽、成本和容错能力。
 - **可视化**: 提供静态和交互式的拓扑可视化工具，帮助用户直观地理解网络结构。
 - **可扩展性**: 框架设计灵活，易于扩展，可以支持新的拓扑类型、协议和分析指标。
@@ -19,25 +19,20 @@
 ```
 .
 ├── src/
-│   ├── topology/         # 拓扑层核心逻辑
-│   ├── protocol/         # 协议层实现（CDMA等）
-│   ├── simulation/       # ✨ 新增：仿真引擎
-│   ├── visualization/    # 可视化工具
-│   ├── utils/            # 工具和常量
-│   └── config/           # 配置管理
-├── examples/
-│   ├── basic_demo.py         # 基础功能演示
-│   ├── simulation_demo.py    # ✨ 新增：仿真功能演示
-│   ├── enhanced_topology_comparison.py # 拓扑对比分析
-│   ├── tree_torus_validation.py # 拓扑算法验证
-│   └── visualization_demo.py  # 可视化功能演示
-├── scripts/
-│   └── run_webapp.py         # 启动Web应用的脚本
-├── output/                   # 生成的报告和图表
+│   ├── c2c/                # C2C核心模块（拓扑、协议、工具）
+│   │   ├── topology/       # 拓扑建模相关
+│   │   ├── protocol/       # 协议实现（CDMA等）
+│   │   └── utils/          # 工具和异常
+│   ├── noc/                # NoC实现
+│   ├── simulation/         # 仿真引擎
+│   ├── visualization/      # 可视化工具
+│   └── config/             # 配置管理
+├── examples/               # 示例与演示脚本
+├── scripts/                # 辅助脚本
+├── output/                 # 生成的报告和图表
 ├── README.md
-├── setup.py                  # 项目安装脚本
-├── pyproject.toml            # 项目构建配置
-└── requirements.txt          # 依赖库列表
+├── setup.py
+└── requirements.txt
 ```
 
 ## 安装
@@ -53,7 +48,7 @@
 
     ```bash
     python -m venv venv
-    source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
+    source venv/bin/activate  # Windows下用 venv\Scripts\activate
     ```
 
 3.  **安装依赖**
@@ -68,11 +63,42 @@
     pip install -e .
     ```
 
-## 如何使用
+## 快速上手
 
-### 直接运行脚本
+### 典型用法
 
-你也可以直接运行 `examples` 目录中的脚本：
+以新版C2C模块为例：
+
+```python
+from src.c2c.topology.builder import TopologyBuilder
+from src.c2c.topology.node import ChipNode
+from src.c2c.topology.link import C2CDirectLink
+from src.c2c.protocol.cdma_system import CDMASystem
+
+# 1. 创建拓扑
+builder = TopologyBuilder("my_topo")
+chip0 = ChipNode("chip_0", "board_A")
+chip1 = ChipNode("chip_1", "board_A")
+builder.add_node(chip0)
+builder.add_node(chip1)
+builder.add_link(C2CDirectLink("link_0_1", chip0, chip1))
+topology = builder.build()
+
+# 2. 创建CDMA系统并连接
+sys0 = CDMASystem("chip_0")
+sys1 = CDMASystem("chip_1")
+sys0.connect_to_chip("chip_1", sys1)
+
+# 3. 发送/接收CDMA事务
+recv_result = sys1.cdma_receive(
+    dst_addr=0x1000, dst_shape=(64,), dst_mem_type="GMEM", src_chip_id="chip_0", data_type="float32"
+)
+send_result = sys0.cdma_send(
+    src_addr=0x2000, src_shape=(64,), dst_chip_id="chip_1", src_mem_type="GMEM", data_type="float32"
+)
+```
+
+### 运行示例脚本
 
 -   **基础演示**:
 
@@ -80,16 +106,22 @@
     python examples/basic_demo.py
     ```
 
--   **✨ 仿真功能演示** (新增):
+-   **仿真功能演示**:
 
     ```bash
     python examples/simulation_demo.py
     ```
 
+-   **CrossRing NoC演示**:
+
+    ```bash
+    python examples/crossring_noc_demo.py
+    ```
+
 -   **拓扑对比分析**:
 
     ```bash
-    python examples/enhanced_topology_comparison.py
+    python examples/topology_comparison.py
     ```
 
 -   **启动Web应用**:
@@ -98,78 +130,18 @@
     streamlit run src/visualization/interactive.py
     ```
 
-## ✨ 仿真引擎 (新功能)
+## 主要模块说明
 
-全新的事件驱动仿真系统，支持cycle级精确的C2C通信仿真：
+- `src/c2c/topology/`  拓扑建模、节点、链路、构建器、拓扑优化
+- `src/c2c/protocol/`  CDMA协议、信用管理、地址转换、流控、性能监控、错误处理
+- `src/c2c/utils/`     异常、类型定义、通用工具
+- `src/simulation/`    仿真引擎、事件、芯片模型
+- `src/visualization/` 可视化与交互式分析
 
-### 核心组件
+## 贡献与反馈
 
-- **C2CSimulationEngine**: 事件驱动的仿真引擎核心
-- **FakeChip**: 简化的芯片模型，继承现有ChipNode
-- **SimulationEvent**: 完整的事件系统，支持多种事件类型
-- **SimulationStats**: 全面的统计收集和性能分析
+欢迎提交issue、PR或建议！
 
-### 功能特性
+---
 
-- 🎯 **事件驱动仿真**: 支持CDMA发送/接收、链路传输等多种事件
-- 📊 **性能统计**: 吞吐量、延迟、利用率等关键性能指标
-- 🔄 **周期性流量**: 支持复杂的流量模式和负载测试
-- 🌐 **多芯片拓扑**: 支持复杂的芯片间通信拓扑
-- 📈 **实时监控**: 仿真过程中的实时性能监控
-
-### 快速开始
-
-```python
-from src.simulation import C2CSimulationEngine, FakeChip
-from src.topology.builder import TopologyBuilder
-from src.topology.node import ChipNode
-from src.topology.link import C2CDirectLink
-
-# 1. 创建拓扑
-builder = TopologyBuilder("my_simulation")
-chip0 = ChipNode("chip_0", "board_A")
-chip1 = ChipNode("chip_1", "board_A") 
-builder.add_node(chip0)
-builder.add_node(chip1)
-builder.add_link(C2CDirectLink("link_0_1", chip0, chip1))
-
-# 2. 创建仿真引擎
-simulator = C2CSimulationEngine(builder)
-
-# 3. 添加仿真事件
-simulator.add_cdma_send_event(
-    timestamp_ns=1000,
-    source_chip_id="chip_0",
-    target_chip_id="chip_1", 
-    data_size=1024
-)
-
-# 4. 运行仿真
-stats = simulator.run_simulation(simulation_time_ns=1_000_000)
-stats.print_summary()
-```
-
-### 仿真示例
-
-运行完整的仿真演示：
-
-```bash
-python examples/simulation_demo.py
-```
-
-示例包含：
-- 基础双芯片通信仿真
-- 复杂4芯片环形拓扑仿真
-- 周期性流量模式测试
-- 性能统计和分析
-
-## 可视化与分析
-
--   **静态图表**: `visualization_demo.py` 演示了如何生成各种拓扑的静态图表。
--   **交互式Web应用**: `interactive.py` 提供了一个基于 `streamlit` 的Web界面，允许用户：
-    -   动态配置拓扑参数。
-    -   实时查看拓扑结构图。
-    -   进行多维度性能对比分析。
-    -   根据应用需求获取拓扑优化建议。
-
-所有生成的图表和报告都将保存在 `output/` 目录下。
+如需详细API文档和进阶用法，请参考各子模块下的README或docstring。
