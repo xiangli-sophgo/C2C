@@ -52,8 +52,6 @@ __all__ = [
     "AddressTranslator",
     "Router",
     # 异常类
-    "C2CException",
-    "TopologyError",
     "ProtocolError",
     "CDMAError",
     "AddressError",

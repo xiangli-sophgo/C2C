@@ -20,6 +20,10 @@ class BasicConfiguration:
     burst: int = 4
     network_frequency: int = 2.0
     slice_per_link: int = 8
+    
+    # IP接口FIFO深度配置
+    ip_l2h_fifo_depth: int = 4
+    ip_h2l_fifo_depth: int = 4
 
 
 @dataclass
@@ -468,8 +472,6 @@ class CrossRingConfig(BaseNoCConfig):
             "num_row": self.num_row,
             "num_ip": self.num_ip,
             "topo_type": self.topology_type,
-            # "burst": self.basic_config.burst,
-            # "network_frequency": self.network_frequency,
             # 组合配置
             "basic_config": self.basic_config.__dict__,
             "ip_config": self.ip_config.__dict__,
@@ -511,12 +513,6 @@ class CrossRingConfig(BaseNoCConfig):
             self.num_row = config_dict["num_row"]
         if "num_ip" in config_dict:
             self.num_ip = config_dict["num_ip"]
-        # if "topo_type" in config_dict:
-        #     self.topo_type = config_dict["topo_type"]
-        # if "burst" in config_dict:
-        #     self.basic_config.burst = config_dict["burst"]
-        # if "network_frequency" in config_dict:
-        #     self.network_frequency = config_dict["network_frequency"]
 
         # 确保配置对象已初始化
         if not hasattr(self, "basic_config") or self.ip_config is None:

@@ -9,7 +9,7 @@ Mesh拓扑NoC实现。
 
 # TODO: 实现以下组件
 # from .flit import MeshFlit
-# from .ip_interface import MeshIPInterface  
+# from .ip_interface import MeshIPInterface
 # from .model import MeshModel
 # from .config import MeshConfig
 
@@ -19,24 +19,32 @@ __author__ = "C2C Mesh Team"
 # TODO: 待实现的组件将在后续添加到__all__中
 __all__ = [
     # "MeshFlit",
-    # "MeshIPInterface", 
+    # "MeshIPInterface",
     # "MeshModel",
     # "MeshConfig",
 ]
 
+
 # 占位符类定义，防止导入错误
 class MeshFlit:
     """Mesh Flit占位符类，待实现"""
+
     pass
+
 
 class MeshIPInterface:
     """Mesh IP接口占位符类，待实现"""
+
     pass
+
 
 class MeshModel:
     """Mesh模型占位符类，待实现"""
+
     pass
+
 
 class MeshConfig:
     """Mesh配置占位符类，待实现"""
+
     pass

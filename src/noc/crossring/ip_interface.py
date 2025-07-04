@@ -13,9 +13,10 @@ import logging
 from .flit import CrossRingFlit, create_crossring_flit
 from .config import CrossRingConfig
 from src.noc.utils.types import NodeId
+from src.noc.base.ip_interface import BaseIPInterface, PipelinedFIFO
 
 
-class CrossRingIPInterface:
+class CrossRingIPInterface(BaseIPInterface):
     """
     CrossRing专用IP接口，集成资源管理和STI协议处理。
 
@@ -36,31 +37,11 @@ class CrossRingIPInterface:
             node_id: 节点ID
             model: 主模型实例（用于注册和全局访问）
         """
+        # 调用父类构造函数
+        super().__init__(ip_type, node_id, config, model, CrossRingFlit)
+
+        # CrossRing特有的配置
         self.config = config
-        self.ip_type = ip_type
-        self.node_id = node_id
-        self.model = model
-        self.current_cycle = 0
-
-        # ========== 时钟域转换（1GHz ↔ 2GHz） ==========
-        self.clock_ratio = config.basic_config.network_frequency
-        self.l2h_fifos = {
-            "req": deque(maxlen=getattr(config, "IP_L2H_FIFO_DEPTH", 4)),
-            "rsp": deque(maxlen=getattr(config, "IP_L2H_FIFO_DEPTH", 4)),
-            "data": deque(maxlen=getattr(config, "IP_L2H_FIFO_DEPTH", 4)),
-        }
-        self.h2l_fifos = {
-            "req": deque(maxlen=getattr(config, "IP_H2L_FIFO_DEPTH", 4)),
-            "rsp": deque(maxlen=getattr(config, "IP_H2L_FIFO_DEPTH", 4)),
-            "data": deque(maxlen=getattr(config, "IP_H2L_FIFO_DEPTH", 4)),
-        }
-
-        # L2H和H2L的预缓冲区
-        self.l2h_pre_buffers = {"req": None, "rsp": None, "data": None}
-        self.h2l_pre_buffers = {"req": None, "rsp": None, "data": None}
-
-        # IP inject/eject FIFO（1GHz域）
-        self.inject_fifos = {"req": deque(), "rsp": deque(), "data": deque()}
 
         # ========== RN资源管理 ==========
         # RN Tracker
@@ -119,60 +100,87 @@ class CrossRingIPInterface:
         self.data_cir_h_num = 0
         self.data_cir_v_num = 0
 
-        # 注册到模型
-        if hasattr(model, "register_ip_interface"):
-            model.register_ip_interface(self)
+        # 注册到模型已在父类中完成
 
-    def step(self, cycle: int) -> None:
-        """
-        执行一个周期（包含时钟域处理）
+    def _setup_resource_managers(self) -> None:
+        """设置CrossRing特有的资源管理器"""
+        # 资源管理已在__init__中完成
+        pass
 
-        Args:
-            cycle: 当前仿真周期
-        """
-        self.current_cycle = cycle
+    def _get_destination_ip_type(self, destination: NodeId) -> str:
+        """根据目标节点ID推断目标IP类型"""
+        # 这里需要根据实际的节点-IP映射来实现
+        # 简化实现：假设前半部分是ddr，后半部分是l2m
+        if destination < self.config.num_nodes // 2:
+            return "ddr"
+        else:
+            return "l2m"
 
+    def _check_and_reserve_resources(self, flit) -> bool:
+        """检查并预占RN端资源"""
+        if flit.req_type == "read":
+            # 检查读资源：tracker + rdb + reserve
+            rdb_available = self.rn_rdb_count >= flit.burst_length
+            tracker_available = self.rn_tracker_count["read"] > 0
+            reserve_ok = self.rn_rdb_count > self.rn_rdb_reserve * flit.burst_length
+
+            if not (rdb_available and tracker_available and reserve_ok):
+                return False
+
+            # 预占资源
+            self.rn_rdb_count -= flit.burst_length
+            self.rn_tracker_count["read"] -= 1
+            self.rn_rdb[flit.packet_id] = []
+            self.rn_tracker["read"].append(flit)
+            self.rn_tracker_pointer["read"] += 1
+
+        elif flit.req_type == "write":
+            # 检查写资源：tracker + wdb
+            wdb_available = self.rn_wdb_count >= flit.burst_length
+            tracker_available = self.rn_tracker_count["write"] > 0
+
+            if not (wdb_available and tracker_available):
+                return False
+
+            # 预占资源
+            self.rn_wdb_count -= flit.burst_length
+            self.rn_tracker_count["write"] -= 1
+            self.rn_wdb[flit.packet_id] = []
+            self.rn_tracker["write"].append(flit)
+            self.rn_tracker_pointer["write"] += 1
+
+            # 创建写数据包
+            self._create_write_packet(flit)
+
+        return True
+
+    def _inject_to_topology_network(self, flit, channel: str) -> None:
+        """注入到CrossRing网络"""
+        # 这里应该调用网络的inject方法
+        # 模拟注入到网络（实际实现中需要与网络模块对接）
+        flit.flit_position = "IQ_CH"
+
+        # 更新时间戳
+        if channel == "req" and hasattr(flit, "req_attr") and flit.req_attr == "new":
+            flit.cmd_entry_noc_from_cake0_cycle = self.current_cycle
+        elif channel == "rsp":
+            flit.cmd_entry_noc_from_cake1_cycle = self.current_cycle
+        elif channel == "data":
+            if flit.req_type == "read":
+                flit.data_entry_noc_from_cake1_cycle = self.current_cycle
+            elif flit.req_type == "write":
+                flit.data_entry_noc_from_cake0_cycle = self.current_cycle
+
+    def _eject_from_topology_network(self, channel: str):
+        """从CrossRing网络弹出"""
+        # 这里应该从网络的EQ获取flit
+        # 暂时返回None，实际实现中需要与网络模块对接
+        return None
+
+    def _process_delayed_resource_release(self) -> None:
+        """处理延迟释放的资源（重写父类方法）"""
         # 处理SN tracker延迟释放
         self._process_sn_tracker_release()
-
-        # 1GHz操作（IP频率）
-        if cycle % self.clock_ratio == 0:
-            self._step_1ghz()
-
-        # 2GHz操作（网络频率）
-        self._step_2ghz()
-
-        # 预缓冲区移动（每周期都执行）
-        self._move_pre_to_fifo()
-
-    def _step_1ghz(self) -> None:
-        """1GHz域操作"""
-        # IP发起新请求（实际应用中由外部调用enqueue_request）
-        # self._ip_generate_requests()
-
-        # H2L FIFO → IP完成
-        self._h2l_to_ip_completion()
-
-    def _step_2ghz(self) -> None:
-        """2GHz域操作"""
-        # L2H FIFO → 网络注入
-        self._l2h_to_network()
-
-        # 网络 → H2L FIFO接收
-        self._network_to_h2l()
-
-    def _move_pre_to_fifo(self) -> None:
-        """预缓冲区到正式FIFO的移动"""
-        for channel in ["req", "rsp", "data"]:
-            # L2H预缓冲区 → L2H FIFO
-            if self.l2h_pre_buffers[channel] is not None and len(self.l2h_fifos[channel]) < self.l2h_fifos[channel].maxlen:
-                self.l2h_fifos[channel].append(self.l2h_pre_buffers[channel])
-                self.l2h_pre_buffers[channel] = None
-
-            # H2L预缓冲区 → H2L FIFO
-            if self.h2l_pre_buffers[channel] is not None and len(self.h2l_fifos[channel]) < self.h2l_fifos[channel].maxlen:
-                self.h2l_fifos[channel].append(self.h2l_pre_buffers[channel])
-                self.h2l_pre_buffers[channel] = None
 
     def enqueue_request(self, source: NodeId, destination: NodeId, req_type: str, burst_length: int = 4, packet_id: str = None, **kwargs) -> bool:
         """
@@ -211,109 +219,7 @@ class CrossRingIPInterface:
         flit.original_source_type = flit.source_type
         flit.original_destination_type = flit.destination_type
 
-        self.inject_fifos["req"].append(flit)
-        return True
-
-    def _get_destination_type(self, destination: NodeId) -> str:
-        """根据目标节点ID推断目标IP类型"""
-        # 这里需要根据实际的节点-IP映射来实现
-        # 简化实现：假设前半部分是ddr，后半部分是l2m
-        if destination < self.config.num_nodes // 2:
-            return "ddr"
-        else:
-            return "l2m"
-
-    def _inject_to_l2h_pre(self, channel: str) -> None:
-        """
-        1GHz: inject_fifo → l2h_pre_buffer
-
-        Args:
-            channel: 通道名称
-        """
-        if not self.inject_fifos[channel] or len(self.l2h_fifos[channel]) >= self.l2h_fifos[channel].maxlen or self.l2h_pre_buffers[channel] is not None:
-            return
-
-        flit = self.inject_fifos[channel][0]
-
-        # 根据通道类型进行不同的处理
-        if channel == "req":
-            # 检查并预占资源
-            if flit.req_attr == "new" and not self._check_and_reserve_rn_resources(flit):
-                return  # 资源不足，保持在inject_fifo中
-
-            flit.flit_position = "L2H_FIFO"
-            flit.start_inject = True
-            self.l2h_pre_buffers[channel] = self.inject_fifos[channel].popleft()
-
-        elif channel == "rsp":
-            # 响应直接移动
-            flit.flit_position = "L2H_FIFO"
-            flit.start_inject = True
-            self.l2h_pre_buffers[channel] = self.inject_fifos[channel].popleft()
-
-        elif channel == "data":
-            # 检查发送时间
-            if hasattr(flit, "departure_cycle") and flit.departure_cycle > self.current_cycle:
-                return
-
-            flit.flit_position = "L2H_FIFO"
-            flit.start_inject = True
-            self.l2h_pre_buffers[channel] = self.inject_fifos[channel].popleft()
-
-    def _l2h_to_network(self) -> None:
-        """2GHz: l2h_fifo → 网络IQ"""
-        for channel in ["req", "rsp", "data"]:
-            if not self.l2h_fifos[channel]:
-                continue
-
-            # 模拟注入到网络（实际实现中需要与网络模块对接）
-            flit = self.l2h_fifos[channel].popleft()
-            flit.flit_position = "IQ_CH"
-
-            # 更新时间戳
-            if channel == "req" and flit.req_attr == "new":
-                flit.cmd_entry_noc_from_cake0_cycle = self.current_cycle
-            elif channel == "rsp":
-                flit.cmd_entry_noc_from_cake1_cycle = self.current_cycle
-            elif channel == "data":
-                if flit.req_type == "read":
-                    flit.data_entry_noc_from_cake1_cycle = self.current_cycle
-                elif flit.req_type == "write":
-                    flit.data_entry_noc_from_cake0_cycle = self.current_cycle
-
-            # 这里应该调用网络的inject方法
-            # network.inject_flit(flit, channel)
-
-    def _network_to_h2l(self) -> None:
-        """2GHz: 网络EQ → h2l_pre_buffer"""
-        for channel in ["req", "rsp", "data"]:
-            if self.h2l_pre_buffers[channel] is not None:
-                continue
-
-            # 这里应该从网络的EQ获取flit
-            # flit = network.eject_flit(self.ip_type, self.node_id, channel)
-            # if flit:
-            #     flit.is_arrive = True
-            #     flit.flit_position = "H2L_FIFO"
-            #     self.h2l_pre_buffers[channel] = flit
-
-    def _h2l_to_ip_completion(self) -> None:
-        """1GHz: h2l_fifo → IP处理完成"""
-        for channel in ["req", "rsp", "data"]:
-            if not self.h2l_fifos[channel]:
-                continue
-
-            flit = self.h2l_fifos[channel].popleft()
-            flit.flit_position = "IP_eject"
-            flit.is_finish = True
-
-            # 根据通道类型进行处理
-            if channel == "req":
-                self._handle_received_request(flit)
-            elif channel == "rsp":
-                self._handle_received_response(flit)
-            elif channel == "data":
-                self._handle_received_data(flit)
+        return self.inject_fifos["req"].write_input(flit)
 
     def _check_and_reserve_rn_resources(self, req: CrossRingFlit) -> bool:
         """
@@ -575,6 +481,7 @@ class CrossRingIPInterface:
             req.is_arrive = False
 
             # 重新放入请求队列
+            # 重新入队到队首（高优先级重试）
             self.inject_fifos["req"].appendleft(req)
             self.rn_rdb_reserve -= 1
 
@@ -594,12 +501,13 @@ class CrossRingIPInterface:
             req.path_index = 0
             req.is_new_on_network = True
             req.is_arrive = False
+            # 重新入队到队首（高优先级重试）
             self.inject_fifos["req"].appendleft(req)
 
         elif rsp.rsp_type == "datasend":
             # 发送写数据
             for flit in self.rn_wdb[rsp.packet_id]:
-                self.inject_fifos["data"].append(flit)
+                self.inject_fifos["data"].write_input(flit)
 
             # 释放RN write tracker
             if req in self.rn_tracker["write"]:
@@ -671,7 +579,7 @@ class CrossRingIPInterface:
             data_flit.original_destination_type = req.original_source_type
             data_flit.is_last_flit = i == req.burst_length - 1
 
-            self.inject_fifos["data"].append(data_flit)
+            self.inject_fifos["data"].write_input(data_flit)
 
     def _create_negative_response(self, req: CrossRingFlit) -> None:
         """创建negative响应"""
@@ -691,7 +599,7 @@ class CrossRingIPInterface:
         rsp.destination_type = req.source_type
         rsp.sn_rsp_generate_cycle = self.current_cycle
 
-        self.inject_fifos["rsp"].append(rsp)
+        self.inject_fifos["rsp"].write_input(rsp)
 
     def _create_datasend_response(self, req: CrossRingFlit) -> None:
         """创建datasend响应"""
@@ -711,7 +619,7 @@ class CrossRingIPInterface:
         rsp.destination_type = req.source_type
         rsp.sn_rsp_generate_cycle = self.current_cycle
 
-        self.inject_fifos["rsp"].append(rsp)
+        self.inject_fifos["rsp"].write_input(rsp)
 
     def _release_completed_sn_tracker(self, req: CrossRingFlit) -> None:
         """释放完成的SN tracker"""
@@ -777,7 +685,7 @@ class CrossRingIPInterface:
         rsp.destination_type = req.source_type
         rsp.sn_rsp_generate_cycle = self.current_cycle
 
-        self.inject_fifos["rsp"].append(rsp)
+        self.inject_fifos["rsp"].write_input(rsp)
 
     def _process_sn_tracker_release(self) -> None:
         """处理SN tracker的延迟释放"""

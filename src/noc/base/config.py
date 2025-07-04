@@ -362,7 +362,12 @@ def create_config_from_type(topology_type: TopologyType, **kwargs) -> BaseNoCCon
     Returns:
         Configuration instance appropriate for the topology type
     """
-    config = BaseNoCConfig(topology_type)
+    if topology_type == TopologyType.CROSSRING:
+        from src.noc.crossring.config import CrossRingConfig  # 延迟导入，避免循环依赖
+
+        config = CrossRingConfig(**kwargs)
+    else:
+        raise NotImplementedError(f"暂不支持的拓扑类型: {topology_type}")
     for key, value in kwargs.items():
         config.set_parameter(key, value)
     return config

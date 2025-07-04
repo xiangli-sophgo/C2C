@@ -95,6 +95,16 @@ class BaseFlit(ABC):
     total_latency: float = np.inf
     queuing_delay: float = 0.0
 
+    cmd_entry_cake0_cycle: float = np.inf  # RN端发出请求
+    cmd_entry_noc_from_cake0_cycle: float = np.inf  # 进入网络
+    cmd_entry_noc_from_cake1_cycle: float = np.inf  # SN端处理
+    cmd_received_by_cake0_cycle: float = np.inf  # RN端收到响应
+    cmd_received_by_cake1_cycle: float = np.inf  # SN端收到请求
+    data_entry_noc_from_cake0_cycle: float = np.inf  # 数据进网络(写)
+    data_entry_noc_from_cake1_cycle: float = np.inf  # 数据进网络(读)
+    data_received_complete_cycle: float = np.inf  # 数据传输完成
+    sn_rsp_generate_cycle: float = np.inf  # SN响应生成时间
+
     # ========== 位置和链路状态 ==========
     flit_position: str = "created"  # "created", "inject_queue", "network", "eject_queue", "completed"
     current_buffer: Optional[str] = None  # 当前缓冲区
@@ -342,6 +352,44 @@ class BaseFlit(ABC):
         for key, value in other_flit.custom_fields.items():
             if key not in self.custom_fields:
                 self.custom_fields[key] = value
+
+        # 同步时间戳
+        if other_flit.req_type == "read":
+            self.cmd_entry_cake0_cycle = min(other_flit.cmd_entry_cake0_cycle, self.cmd_entry_cake0_cycle)
+            self.cmd_entry_noc_from_cake0_cycle = min(other_flit.cmd_entry_noc_from_cake0_cycle, self.cmd_entry_noc_from_cake0_cycle)
+            self.cmd_received_by_cake1_cycle = min(other_flit.cmd_received_by_cake1_cycle, self.cmd_received_by_cake1_cycle)
+            self.data_entry_noc_from_cake1_cycle = min(other_flit.data_entry_noc_from_cake1_cycle, self.data_entry_noc_from_cake1_cycle)
+            self.data_received_complete_cycle = min(other_flit.data_received_complete_cycle, self.data_received_complete_cycle)
+        elif other_flit.req_type == "write":
+            self.cmd_entry_cake0_cycle = min(other_flit.cmd_entry_cake0_cycle, self.cmd_entry_cake0_cycle)
+            self.cmd_entry_noc_from_cake0_cycle = min(other_flit.cmd_entry_noc_from_cake0_cycle, self.cmd_entry_noc_from_cake0_cycle)
+            self.cmd_received_by_cake1_cycle = min(other_flit.cmd_received_by_cake1_cycle, self.cmd_received_by_cake1_cycle)
+            self.cmd_entry_noc_from_cake1_cycle = min(other_flit.cmd_entry_noc_from_cake1_cycle, self.cmd_entry_noc_from_cake1_cycle)
+            self.cmd_received_by_cake0_cycle = min(other_flit.cmd_received_by_cake0_cycle, self.cmd_received_by_cake0_cycle)
+            self.data_entry_noc_from_cake0_cycle = min(other_flit.data_entry_noc_from_cake0_cycle, self.data_entry_noc_from_cake0_cycle)
+            self.data_received_complete_cycle = min(other_flit.data_received_complete_cycle, self.data_received_complete_cycle)
+
+    def calculate_latencies(self) -> Dict[str, float]:
+        """计算延迟指标"""
+        latencies = {}
+
+        # 命令延迟
+        if self.cmd_entry_noc_from_cake0_cycle < np.inf and self.cmd_received_by_cake1_cycle < np.inf:
+            latencies["cmd_latency"] = self.cmd_received_by_cake1_cycle - self.cmd_entry_noc_from_cake0_cycle
+
+        # 数据延迟
+        if self.req_type == "read":
+            if self.data_entry_noc_from_cake1_cycle < np.inf and self.data_received_complete_cycle < np.inf:
+                latencies["data_latency"] = self.data_received_complete_cycle - self.data_entry_noc_from_cake1_cycle
+        elif self.req_type == "write":
+            if self.data_entry_noc_from_cake0_cycle < np.inf and self.data_received_complete_cycle < np.inf:
+                latencies["data_latency"] = self.data_received_complete_cycle - self.data_entry_noc_from_cake0_cycle
+
+        # 事务延迟
+        if self.cmd_entry_cake0_cycle < np.inf and self.data_received_complete_cycle < np.inf:
+            latencies["transaction_latency"] = self.data_received_complete_cycle - self.cmd_entry_cake0_cycle
+
+        return latencies
 
     def get_coordinates(self, grid_width: int) -> tuple[int, int]:
         """

@@ -54,17 +54,6 @@ class CrossRingFlit(BaseFlit):
     current_link: Optional[tuple] = None
     is_on_station: bool = False
 
-    # ========== CrossRing特有时间戳 ==========
-    cmd_entry_cake0_cycle: float = np.inf  # RN端发出请求
-    cmd_entry_noc_from_cake0_cycle: float = np.inf  # 进入网络
-    cmd_entry_noc_from_cake1_cycle: float = np.inf  # SN端处理
-    cmd_received_by_cake0_cycle: float = np.inf  # RN端收到响应
-    cmd_received_by_cake1_cycle: float = np.inf  # SN端收到请求
-    data_entry_noc_from_cake0_cycle: float = np.inf  # 数据进网络(写)
-    data_entry_noc_from_cake1_cycle: float = np.inf  # 数据进网络(读)
-    data_received_complete_cycle: float = np.inf  # 数据传输完成
-    sn_rsp_generate_cycle: float = np.inf  # SN响应生成时间
-
     # 特有的tracker信息
     rn_tracker_type: Optional[str] = None  # RN端tracker类型
     sn_tracker_type: Optional[str] = None  # SN端tracker类型("ro", "share")
@@ -172,8 +161,8 @@ class CrossRingFlit(BaseFlit):
         elif direction == "vertical":
             self.wait_cycle_v += cycles
 
-    def reset_for_crossring_retry(self) -> None:
-        """CrossRing特有的重试重置"""
+    def reset_for_retry(self) -> None:
+        """重试重置"""
         # 调用基类重试方法
         self.prepare_for_retry("crossring_retry")
 
@@ -188,49 +177,6 @@ class CrossRingFlit(BaseFlit):
         self.current_link = None
         self.is_on_station = False
 
-    def sync_crossring_latency_record(self, other_flit: "CrossRingFlit") -> None:
-        """同步CrossRing特有的延迟记录"""
-        # 先调用基类同步方法
-        self.sync_latency_record(other_flit)
-
-        # 同步CrossRing特有时间戳
-        if other_flit.req_type == "read":
-            self.cmd_entry_cake0_cycle = min(other_flit.cmd_entry_cake0_cycle, self.cmd_entry_cake0_cycle)
-            self.cmd_entry_noc_from_cake0_cycle = min(other_flit.cmd_entry_noc_from_cake0_cycle, self.cmd_entry_noc_from_cake0_cycle)
-            self.cmd_received_by_cake1_cycle = min(other_flit.cmd_received_by_cake1_cycle, self.cmd_received_by_cake1_cycle)
-            self.data_entry_noc_from_cake1_cycle = min(other_flit.data_entry_noc_from_cake1_cycle, self.data_entry_noc_from_cake1_cycle)
-            self.data_received_complete_cycle = min(other_flit.data_received_complete_cycle, self.data_received_complete_cycle)
-        elif other_flit.req_type == "write":
-            self.cmd_entry_cake0_cycle = min(other_flit.cmd_entry_cake0_cycle, self.cmd_entry_cake0_cycle)
-            self.cmd_entry_noc_from_cake0_cycle = min(other_flit.cmd_entry_noc_from_cake0_cycle, self.cmd_entry_noc_from_cake0_cycle)
-            self.cmd_received_by_cake1_cycle = min(other_flit.cmd_received_by_cake1_cycle, self.cmd_received_by_cake1_cycle)
-            self.cmd_entry_noc_from_cake1_cycle = min(other_flit.cmd_entry_noc_from_cake1_cycle, self.cmd_entry_noc_from_cake1_cycle)
-            self.cmd_received_by_cake0_cycle = min(other_flit.cmd_received_by_cake0_cycle, self.cmd_received_by_cake0_cycle)
-            self.data_entry_noc_from_cake0_cycle = min(other_flit.data_entry_noc_from_cake0_cycle, self.data_entry_noc_from_cake0_cycle)
-            self.data_received_complete_cycle = min(other_flit.data_received_complete_cycle, self.data_received_complete_cycle)
-
-    def calculate_crossring_latencies(self) -> Dict[str, float]:
-        """计算CrossRing特有的延迟指标"""
-        latencies = {}
-
-        # 命令延迟
-        if self.cmd_entry_noc_from_cake0_cycle < np.inf and self.cmd_received_by_cake1_cycle < np.inf:
-            latencies["cmd_latency"] = self.cmd_received_by_cake1_cycle - self.cmd_entry_noc_from_cake0_cycle
-
-        # 数据延迟
-        if self.req_type == "read":
-            if self.data_entry_noc_from_cake1_cycle < np.inf and self.data_received_complete_cycle < np.inf:
-                latencies["data_latency"] = self.data_received_complete_cycle - self.data_entry_noc_from_cake1_cycle
-        elif self.req_type == "write":
-            if self.data_entry_noc_from_cake0_cycle < np.inf and self.data_received_complete_cycle < np.inf:
-                latencies["data_latency"] = self.data_received_complete_cycle - self.data_entry_noc_from_cake0_cycle
-
-        # 事务延迟
-        if self.cmd_entry_cake0_cycle < np.inf and self.data_received_complete_cycle < np.inf:
-            latencies["transaction_latency"] = self.data_received_complete_cycle - self.cmd_entry_cake0_cycle
-
-        return latencies
-
     def get_crossring_status(self) -> Dict[str, Any]:
         """获取CrossRing状态摘要"""
         status = self.get_status_summary()
@@ -244,7 +190,7 @@ class CrossRingFlit(BaseFlit):
                 "wait_cycles": {"h": self.wait_cycle_h, "v": self.wait_cycle_v},
                 "coordinates": {"dest_x": self.dest_xid, "dest_y": self.dest_yid},
                 "tracker_types": {"rn": self.rn_tracker_type, "sn": self.sn_tracker_type},
-                "crossring_latencies": self.calculate_crossring_latencies(),
+                "crossring_latencies": self.calculate_latencies(),
             }
         )
 

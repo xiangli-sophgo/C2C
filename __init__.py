@@ -65,8 +65,6 @@ __all__ = [
     "TopologyVisualizer",
     "PerformanceComparator",
     # Utility classes
-    "C2CException",
-    "TopologyError",
     "ProtocolError",
     "ConfigLoader",
     # Constants

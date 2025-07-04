@@ -9,8 +9,8 @@ from .layouts import TreeLayout, TorusLayout
 from .comparison import PerformanceComparator
 
 __all__ = [
-    'TopologyVisualizer',
-    'TreeLayout', 
-    'TorusLayout',
-    'PerformanceComparator'
+    "TopologyVisualizer",
+    "TreeLayout",
+    "TorusLayout",
+    "PerformanceComparator",
 ]

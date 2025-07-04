@@ -42,26 +42,22 @@ __author__ = "C2C CrossRing Team"
 __all__ = [
     # 配置类
     "CrossRingConfig",
-    "BasicConfiguration", 
+    "BasicConfiguration",
     "IPConfiguration",
     "FIFOConfiguration",
     "TagConfiguration",
     "TrackerConfiguration",
     "LatencyConfiguration",
-    
     # Flit相关
     "CrossRingFlit",
     "CrossRingFlitPool",
-    
     # IP接口
     "CrossRingIPInterface",
-    
     # 主模型
     "CrossRingModel",
-    
     # 便捷函数
     "create_crossring_config_2260e",
-    "create_crossring_config_2262", 
+    "create_crossring_config_2262",
     "create_crossring_config_custom",
     "load_crossring_config_from_file",
     "create_crossring_flit",
@@ -70,18 +66,17 @@ __all__ = [
     "create_crossring_model",
 ]
 
+
 # 模块级别便捷函数
-def quick_start_simulation(config_name: str = "2262",
-                         max_cycles: int = 10000,
-                         num_test_requests: int = 100) -> dict:
+def quick_start_simulation(config_name: str = "2262", max_cycles: int = 10000, num_test_requests: int = 100) -> dict:
     """
     快速启动CrossRing仿真的便捷函数
-    
+
     Args:
         config_name: 配置名称 ("2260E", "2262", "custom")
         max_cycles: 最大仿真周期
         num_test_requests: 测试请求数量
-        
+
     Returns:
         仿真结果字典
     """
@@ -92,30 +87,27 @@ def quick_start_simulation(config_name: str = "2262",
         config = create_crossring_config_2262()
     else:
         config = create_crossring_config_custom(5, 4, config_name)
-    
+
     # 创建模型
     model = create_crossring_model(config.config_name, config.num_row, config.num_col)
-    
+
     # 注入测试流量
     import random
+
     for i in range(num_test_requests):
         source = random.randint(0, config.num_nodes - 1)
         destination = random.randint(0, config.num_nodes - 1)
         if source != destination:
             req_type = random.choice(["read", "write"])
             model.inject_test_traffic(source, destination, req_type)
-    
+
     # 运行仿真
     recommended_cycles = config.get_recommended_simulation_cycles()
-    results = model.run_simulation(
-        max_cycles=max_cycles,
-        warmup_cycles=recommended_cycles["warmup_cycles"],
-        stats_start_cycle=recommended_cycles["stats_start_cycle"]
-    )
-    
+    results = model.run_simulation(max_cycles=max_cycles, warmup_cycles=recommended_cycles["warmup_cycles"], stats_start_cycle=recommended_cycles["stats_start_cycle"])
+
     # 清理
     model.cleanup()
-    
+
     return results
 
 
@@ -139,7 +131,7 @@ def get_module_info() -> dict:
             "请求重试机制",
             "ETag/ITag优先级控制",
             "性能统计和调试支持",
-        ]
+        ],
     }
 
 
@@ -149,16 +141,16 @@ def validate_installation() -> bool:
         # 测试基本功能
         config = create_crossring_config_custom(3, 3, "test")
         model = create_crossring_model("test", 3, 3)
-        
+
         # 测试基本操作
         test_flit = create_crossring_flit(0, 8, [0, 1, 8])
         return_crossring_flit(test_flit)
-        
+
         # 清理
         model.cleanup()
-        
+
         return True
-        
+
     except Exception as e:
         print(f"CrossRing模块验证失败: {e}")
         return False
@@ -182,5 +174,6 @@ _check_dependencies()
 
 # 模块级日志
 import logging
+
 _logger = logging.getLogger(__name__)
 _logger.info(f"CrossRing NoC模块加载完成 (v{__version__})")

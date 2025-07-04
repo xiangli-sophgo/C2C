@@ -40,7 +40,7 @@
 1.  **克隆仓库**
 
     ```bash
-    git clone https://github.com/your-org/C2C.git
+    git clone http://10.129.4.209/xiang.li/C2C.git
     cd C2C
     ```
 
@@ -67,7 +67,7 @@
 
 ### 典型用法
 
-以新版C2C模块为例：
+以C2C模块为例：
 
 ```python
 from src.c2c.topology.builder import TopologyBuilder

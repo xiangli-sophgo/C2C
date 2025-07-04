@@ -29,16 +29,15 @@ __author__ = "C2C NoC Team"
 __all__ = [
     # Flit相关
     "BaseFlit",
-    "FlitPool", 
+    "FlitPool",
     "create_flit",
-    
     # IP接口相关
     "BaseIPInterface",
     "BaseResourceManager",
-    
     # 模型相关
     "BaseNoCModel",
 ]
+
 
 # 模块信息
 def get_base_module_info() -> dict:
@@ -63,33 +62,25 @@ def get_base_module_info() -> dict:
             "仿真循环控制",
             "对象池优化",
             "调试和监控支持",
-        ]
+        ],
     }
 
 
 # 便捷工厂函数
-def create_basic_flit(source: int, 
-                     destination: int, 
-                     req_type: str = "read",
-                     **kwargs) -> BaseFlit:
+def create_basic_flit(source: int, destination: int, req_type: str = "read", **kwargs) -> BaseFlit:
     """
     创建基础Flit的便捷函数
-    
+
     Args:
         source: 源节点
         destination: 目标节点
         req_type: 请求类型
         **kwargs: 其他参数
-        
+
     Returns:
         BaseFlit实例
     """
-    return BaseFlit(
-        source=source,
-        destination=destination,
-        req_type=req_type,
-        **kwargs
-    )
+    return BaseFlit(source=source, destination=destination, req_type=req_type, **kwargs)
 
 
 def validate_base_module() -> bool:
@@ -97,20 +88,20 @@ def validate_base_module() -> bool:
     try:
         # 测试Flit创建
         flit = create_basic_flit(0, 8, "read")
-        
+
         # 测试STI协议功能
         response = flit.create_response("ack")
         data_flit = flit.create_data_flit(0)
-        
+
         # 测试重试机制
         if flit.can_retry():
             flit.prepare_for_retry("test")
-        
+
         # 测试对象池
         pool = FlitPool(BaseFlit)
         test_flit = pool.get_flit(source=0, destination=1)
         pool.return_flit(test_flit)
-        
+
         return True
     except Exception as e:
         print(f"基础模块验证失败: {e}")
@@ -136,5 +127,6 @@ _check_base_dependencies()
 
 # 模块级日志
 import logging
+
 _logger = logging.getLogger(__name__)
 _logger.info(f"NoC基础模块加载完成 (v{__version__})")
