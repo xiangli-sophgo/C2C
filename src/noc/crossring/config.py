@@ -20,10 +20,16 @@ class BasicConfiguration:
     burst: int = 4
     network_frequency: int = 2.0
     slice_per_link: int = 8
-    
+
     # IP接口FIFO深度配置
     ip_l2h_fifo_depth: int = 4
     ip_h2l_fifo_depth: int = 4
+
+    # 环形拓扑专用配置
+    ring_buffer_depth: int = 8
+    inject_buffer_depth: int = 8
+    eject_buffer_depth: int = 8
+    crosspoint_buffer_depth: int = 4
 
 
 @dataclass
@@ -153,9 +159,11 @@ class CrossRingConfig(BaseNoCConfig):
         }
 
         # Ring网络缓冲区深度配置
-        self.ring_buffer_depth = 8
-        self.inject_buffer_depth = 16
-        self.eject_buffer_depth = 16
+        self.ring_buffer_depth = self.basic_config.ring_buffer_depth
+        self.inject_buffer_depth = self.basic_config.inject_buffer_depth
+        self.eject_buffer_depth = self.basic_config.eject_buffer_depth
+        self.crosspoint_buffer_depth = self.basic_config.crosspoint_buffer_depth
+        self.slice_per_link = self.basic_config.slice_per_link
 
         # 自动生成相关配置
         self._generate_derived_config()

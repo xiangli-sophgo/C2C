@@ -58,6 +58,12 @@ class CrossRingFlit(BaseFlit):
     rn_tracker_type: Optional[str] = None  # RN端tracker类型
     sn_tracker_type: Optional[str] = None  # SN端tracker类型("ro", "share")
 
+    # 四方向系统相关（新增）
+    current_ring_direction: Optional[Any] = None  # 当前环形方向
+    remaining_directions: List[Any] = field(default_factory=list)  # 剩余路由方向
+    dimension_turn_cycle: int = -1  # 维度转换周期
+    current_direction: str = ""  # 当前传输方向（"horizontal"或"vertical"）
+
     def __post_init__(self):
         """初始化后处理"""
         super().__post_init__()

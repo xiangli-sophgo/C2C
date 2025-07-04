@@ -3,6 +3,7 @@ CrossRing主模型类实现。
 
 基于C2C仓库的架构，提供完整的CrossRing NoC仿真模型，
 包括IP接口管理、网络组件和仿真循环控制。
+集成真实的环形拓扑、环形桥接和四方向系统。
 """
 
 from __future__ import annotations
@@ -13,6 +14,8 @@ from collections import defaultdict
 from .config import CrossRingConfig
 from .ip_interface import CrossRingIPInterface
 from .flit import CrossRingFlit, get_crossring_flit_pool_stats
+from .ring_bridge import RingBridge, CrossPointModule
+from .ring_directions import RingDirectionMapper, RingDirection
 from src.noc.utils.types import NodeId
 
 
@@ -42,9 +45,15 @@ class CrossRingModel:
         self.ip_interfaces: Dict[str, CrossRingIPInterface] = {}
         self._ip_registry: Dict[str, CrossRingIPInterface] = {}  # 全局debug视图
 
-        # CrossRing网络组件（暂时为骨架，后续实现）
+        # CrossRing网络组件 - 真实的环形拓扑实现
         self.crossring_pieces: Dict[NodeId, Any] = {}  # {node_id: CrossRingPiece}
-        self.networks = {"req": None, "rsp": None, "data": None}  # REQ网络（后续实现）  # RSP网络（后续实现）  # DATA网络（后续实现）
+        self.networks = {"req": None, "rsp": None, "data": None}  # REQ网络  # RSP网络  # DATA网络
+
+        # 环形桥接系统
+        self.ring_bridge = RingBridge(config)
+
+        # 环形方向映射器
+        self.direction_mapper = RingDirectionMapper(config.num_row, config.num_col)
 
         # 性能统计
         self.stats = {
@@ -56,6 +65,9 @@ class CrossRingModel:
             "average_latency": 0.0,
             "peak_active_requests": 0,
             "current_active_requests": 0,
+            "dimension_turns": 0,
+            "ring_transmissions": 0,
+            "wrap_around_hops": 0,
         }
 
         # 仿真状态
@@ -69,7 +81,12 @@ class CrossRingModel:
         self._setup_ip_interfaces()
         self._setup_crossring_networks()
 
-        self.logger.info(f"CrossRing模型初始化完成: {config.num_row}x{config.num_col}, {len(self.ip_interfaces)}个IP接口")
+        # 验证环形连接
+        if not self.direction_mapper.validate_ring_connectivity():
+            self.logger.error("环形连接验证失败")
+            raise RuntimeError("CrossRing环形拓扑初始化失败")
+
+        self.logger.info(f"CrossRing模型初始化完成: {config.num_row}x{config.num_col}, {len(self.ip_interfaces)}个IP接口, 真实环形拓扑")
 
     def _setup_ip_interfaces(self) -> None:
         """设置所有IP接口"""
@@ -89,44 +106,52 @@ class CrossRingModel:
                 self.logger.debug(f"创建IP接口: {key} at node {node_id}")
 
     def _setup_crossring_networks(self) -> None:
-        """设置CrossRing网络组件的完整实现"""
-        # 创建CrossRing网络的真实组件
+        """设置CrossRing网络组件的完整实现 - 真实环形拓扑"""
+        # 创建CrossRing网络的真实组件，支持环形连接和四方向系统
 
         for node_id in range(self.config.num_nodes):
             coordinates = self._get_node_coordinates(node_id)
 
-            # 为每个节点创建完整的CrossRing piece
+            # 为每个节点创建完整的CrossRing piece，支持四方向系统
             self.crossring_pieces[node_id] = {
                 "node_id": node_id,
                 "coordinates": coordinates,
                 # Inject/Eject队列（每个通道独立）
                 "inject_queues": {"req": [], "rsp": [], "data": []},
                 "eject_queues": {"req": [], "rsp": [], "data": []},
-                # Ring缓冲区（水平和垂直方向）
+                # Ring缓冲区（使用四方向系统：TL/TR/TU/TD）
                 "ring_buffers": {
-                    "horizontal": {
-                        "req": {"clockwise": [], "counter_clockwise": []},
-                        "rsp": {"clockwise": [], "counter_clockwise": []},
-                        "data": {"clockwise": [], "counter_clockwise": []},
-                    },
-                    "vertical": {
-                        "req": {"clockwise": [], "counter_clockwise": []},
-                        "rsp": {"clockwise": [], "counter_clockwise": []},
-                        "data": {"clockwise": [], "counter_clockwise": []},
-                    },
+                    "TL": {"req": [], "rsp": [], "data": []},  # Top-Left: 逆时针水平，向上垂直
+                    "TR": {"req": [], "rsp": [], "data": []},  # Top-Right: 顺时针水平，向上垂直
+                    "TU": {"req": [], "rsp": [], "data": []},  # Top-Up: 与TL相同，用于垂直移动
+                    "TD": {"req": [], "rsp": [], "data": []},  # Top-Down: 与TR相同，用于垂直移动
                 },
-                # ETag/ITag状态管理
-                "etag_status": {"horizontal": {"req": False, "rsp": False, "data": False}, "vertical": {"req": False, "rsp": False, "data": False}},
-                "itag_status": {"horizontal": {"req": False, "rsp": False, "data": False}, "vertical": {"req": False, "rsp": False, "data": False}},
-                # 仲裁状态
+                # ETag/ITag状态管理（按四方向）
+                "etag_status": {
+                    "TL": {"req": False, "rsp": False, "data": False},
+                    "TR": {"req": False, "rsp": False, "data": False},
+                    "TU": {"req": False, "rsp": False, "data": False},
+                    "TD": {"req": False, "rsp": False, "data": False},
+                },
+                "itag_status": {
+                    "TL": {"req": False, "rsp": False, "data": False},
+                    "TR": {"req": False, "rsp": False, "data": False},
+                    "TU": {"req": False, "rsp": False, "data": False},
+                    "TD": {"req": False, "rsp": False, "data": False},
+                },
+                # 仲裁状态（支持四方向仲裁）
                 "arbitration_state": {
-                    "horizontal_priority": "inject",  # inject, ring_cw, ring_ccw
-                    "vertical_priority": "inject",
-                    "last_arbitration": {"horizontal": 0, "vertical": 0},
+                    "current_priority": "inject",  # inject, TL, TR, TU, TD
+                    "arbitration_counter": 0,
+                    "last_winner": None,
                 },
+                # 环形连接信息（真实的环形拓扑）
+                "ring_connections": self._get_ring_connections(node_id),
+                # 交叉点模块引用
+                "cross_point": self.ring_bridge.cross_points[node_id],
             }
 
-        self.logger.info(f"CrossRing网络组件创建完成: {len(self.crossring_pieces)}个节点")
+        self.logger.info(f"CrossRing真实环形网络创建完成: {len(self.crossring_pieces)}个节点，支持四方向系统和环形连接")
 
     def _get_node_coordinates(self, node_id: NodeId) -> Tuple[int, int]:
         """
@@ -141,6 +166,25 @@ class CrossRingModel:
         x = node_id % self.config.num_col
         y = node_id // self.config.num_col
         return x, y
+
+    def _get_ring_connections(self, node_id: NodeId) -> Dict[str, NodeId]:
+        """
+        获取节点的环形连接信息（真实环形拓扑）
+
+        Args:
+            node_id: 节点ID
+
+        Returns:
+            环形连接字典，包含四个方向的邻居节点
+        """
+        connections = {}
+
+        # 使用方向映射器获取四个方向的邻居节点
+        for direction in [RingDirection.TL, RingDirection.TR, RingDirection.TU, RingDirection.TD]:
+            neighbor_id = self.direction_mapper.get_next_node_in_direction(node_id, direction)
+            connections[direction.value] = neighbor_id
+
+        return connections
 
     def register_ip_interface(self, ip_interface: CrossRingIPInterface) -> None:
         """
@@ -174,39 +218,44 @@ class CrossRingModel:
 
     def _step_crossring_networks(self) -> None:
         """
-        处理CrossRing网络的完整传输逻辑
+        处理CrossRing网络的完整传输逻辑 - 真实环形拓扑实现
 
         实现真实的CrossRing网络传输：
-        1. 重置仲裁状态
-        2. inject_queue → ring网络注入
-        3. ring网络内部传输（水平和垂直）
-        4. ring网络 → eject_queue提取
-        5. ETag/ITag处理和拥塞控制
+        1. 处理环形桥接系统
+        2. 重置仲裁状态
+        3. inject_queue → ring网络注入（四方向系统）
+        4. ring网络内部传输（真实环形连接）
+        5. ring网络 → eject_queue提取
+        6. ETag/ITag处理和拥塞控制
         """
-        # 第零阶段：重置每个节点的仲裁状态
+        # 第零阶段：处理环形桥接系统
+        self.ring_bridge.process_all_cross_points(self.cycle)
+
+        # 第一阶段：重置每个节点的仲裁状态
         self._reset_arbitration_states()
 
-        # 第一阶段：处理inject队列到ring网络的注入
-        self._process_inject_to_ring()
+        # 第二阶段：处理inject队列到ring网络的注入（四方向系统）
+        self._process_inject_to_ring_four_directions()
 
-        # 第二阶段：处理ring网络内部传输
-        self._process_ring_transmission()
+        # 第三阶段：处理ring网络内部传输（真实环形连接）
+        self._process_ring_transmission_true_topology()
 
-        # 第三阶段：处理ring网络到eject队列的提取
+        # 第四阶段：处理ring网络到eject队列的提取
         self._process_ring_to_eject()
 
-        # 第四阶段：更新ETag/ITag状态
+        # 第五阶段：更新ETag/ITag状态
         self._update_etag_itag_status()
 
     def _reset_arbitration_states(self) -> None:
-        """重置所有节点的仲裁状态"""
+        """重置所有节点的仲裁状态 - 四方向系统"""
         for piece in self.crossring_pieces.values():
-            # 重置仲裁优先级为初始状态
-            piece["arbitration_state"]["horizontal_priority"] = "inject"
-            piece["arbitration_state"]["vertical_priority"] = "inject"
+            # 重置仲裁优先级为初始状态（四方向系统）
+            piece["arbitration_state"]["current_priority"] = "inject"
+            piece["arbitration_state"]["arbitration_counter"] += 1
+            piece["arbitration_state"]["last_winner"] = None
 
-    def _process_inject_to_ring(self) -> None:
-        """处理inject队列到ring网络的注入"""
+    def _process_inject_to_ring_four_directions(self) -> None:
+        """处理inject队列到ring网络的注入 - 四方向系统"""
         for node_id, piece in self.crossring_pieces.items():
             for channel in ["req", "rsp", "data"]:
                 inject_queue = piece["inject_queues"][channel]
@@ -215,101 +264,191 @@ class CrossRingModel:
                 while inject_queue:
                     flit = inject_queue[0]  # 查看队首flit
 
-                    # 确定路由方向（水平或垂直优先）
-                    route_direction = self._determine_route_direction(node_id, flit.destination)
+                    # 使用四方向系统确定路由方向
+                    ring_directions = self._determine_ring_directions_four_way(node_id, flit.destination)
 
-                    if route_direction is None:
+                    if not ring_directions:
                         # 目标就是当前节点，直接移到eject队列
                         flit = inject_queue.pop(0)
                         piece["eject_queues"][channel].append(flit)
                         flit.is_arrive = True
                         flit.arrival_network_cycle = self.cycle
+                        self.logger.debug(f"周期{self.cycle}：数据包{flit.packet_id}到达目标节点{node_id}")
                         continue
 
-                    # 尝试注入到ring网络
-                    if self._try_inject_to_ring(piece, flit, channel, route_direction):
+                    # 尝试注入到ring网络（四方向系统）
+                    if self._try_inject_to_ring_four_directions(piece, flit, channel, ring_directions):
                         inject_queue.pop(0)  # 成功注入，移除flit
+                        self.logger.debug(f"周期{self.cycle}：数据包{flit.packet_id}成功注入到环形网络，方向{ring_directions}")
                     else:
                         break  # 注入失败，等待下个周期
 
-    def _determine_route_direction(self, source: NodeId, destination: NodeId) -> Optional[str]:
-        """确定路由方向（水平或垂直优先）"""
+    def _determine_ring_directions_four_way(self, source: NodeId, destination: NodeId) -> List[RingDirection]:
+        """确定路由方向（四方向系统）- XY维度顺序路由"""
         if source == destination:
-            return None
+            return []
 
-        src_x, src_y = self._get_node_coordinates(source)
-        dst_x, dst_y = self._get_node_coordinates(destination)
+        # 使用方向映射器确定路由方向
+        horizontal_direction, vertical_direction = self.direction_mapper.determine_ring_direction(source, destination)
 
-        # CrossRing使用XY路由：先水平后垂直
-        if src_x != dst_x:
-            return "horizontal"
-        elif src_y != dst_y:
-            return "vertical"
-        else:
-            return None
+        directions = []
 
-    def _try_inject_to_ring(self, piece: Dict, flit: Any, channel: str, direction: str) -> bool:
-        """尝试将flit注入到ring网络（增强拥塞控制）"""
+        # XY路由：先水平后垂直
+        if horizontal_direction:
+            directions.append(horizontal_direction)
+        if vertical_direction:
+            directions.append(vertical_direction)
+
+        return directions
+
+    def _try_inject_to_ring_four_directions(self, piece: Dict, flit: Any, channel: str, directions: List[RingDirection]) -> bool:
+        """尝试将flit注入到ring网络（四方向系统，增强拥塞控制）"""
+        if not directions:
+            return False
+
+        # 选择第一个方向进行注入（XY路由）
+        target_direction = directions[0]
+        direction_str = target_direction.value
+
         # 1. 检查本地ETag状态（拥塞控制）
-        if piece["etag_status"][direction][channel]:
-            self._record_congestion_event(piece["node_id"], "etag_block", direction, channel)
+        if piece["etag_status"][direction_str][channel]:
+            self._record_congestion_event(piece["node_id"], "etag_block", direction_str, channel)
             return False  # 本地拥塞，无法注入
 
         # 2. 检查下游路径的拥塞状态
-        if self._check_downstream_path_congestion(piece["node_id"], flit.destination, direction, channel):
-            self._record_congestion_event(piece["node_id"], "downstream_congestion", direction, channel)
+        if self._check_downstream_path_congestion_four_directions(piece["node_id"], flit.destination, target_direction, channel):
+            self._record_congestion_event(piece["node_id"], "downstream_congestion", direction_str, channel)
             return False  # 下游路径拥塞
 
-        # 3. 确定ring方向（顺时针或逆时针）
-        ring_direction = self._determine_ring_direction(piece["node_id"], flit.destination, direction)
-
-        # 4. 检查ring缓冲区是否有空间
-        ring_buffer = piece["ring_buffers"][direction][channel][ring_direction]
+        # 3. 检查ring缓冲区是否有空间
+        ring_buffer = piece["ring_buffers"][direction_str][channel]
         if len(ring_buffer) >= self.config.ring_buffer_depth:
-            self._record_congestion_event(piece["node_id"], "buffer_full", direction, channel)
+            self._record_congestion_event(piece["node_id"], "buffer_full", direction_str, channel)
             return False  # 缓冲区满
 
-        # 5. 执行仲裁
-        if not self._arbitrate_ring_access(piece, direction, "inject"):
-            self._record_congestion_event(piece["node_id"], "arbitration_fail", direction, channel)
+        # 4. 执行仲裁（四方向系统）
+        if not self._arbitrate_ring_access_four_directions(piece, target_direction, "inject"):
+            self._record_congestion_event(piece["node_id"], "arbitration_fail", direction_str, channel)
             return False  # 仲裁失败
 
-        # 6. 成功注入到ring
+        # 5. 成功注入到ring
         ring_buffer.append(flit)
         flit.network_entry_cycle = self.cycle
-        self._record_injection_success(piece["node_id"], direction, channel)
+        flit.current_ring_direction = target_direction
+        flit.remaining_directions = directions[1:]  # 剩余的路由方向
+        self._record_injection_success(piece["node_id"], direction_str, channel)
 
         return True
 
-    def _determine_ring_direction(self, source: NodeId, destination: NodeId, direction: str) -> str:
-        """确定ring传输方向（顺时针或逆时针）"""
-        src_x, src_y = self._get_node_coordinates(source)
-        dst_x, dst_y = self._get_node_coordinates(destination)
+    def _arbitrate_ring_access_four_directions(self, piece: Dict, direction: RingDirection, requester: str) -> bool:
+        """四方向系统的环形访问仲裁机制"""
+        direction_str = direction.value
+        arbitration_state = piece["arbitration_state"]
 
-        if direction == "horizontal":
-            # 水平方向：选择最短路径
-            if dst_x > src_x:
-                # 目标在右侧
-                right_distance = dst_x - src_x
-                left_distance = src_x + (self.config.num_col - dst_x)
-                return "clockwise" if right_distance <= left_distance else "counter_clockwise"
-            else:
-                # 目标在左侧
-                left_distance = src_x - dst_x
-                right_distance = dst_x + (self.config.num_col - src_x)
-                return "counter_clockwise" if left_distance <= right_distance else "clockwise"
-        else:  # vertical
-            # 垂直方向：选择最短路径
-            if dst_y > src_y:
-                # 目标在下方
-                down_distance = dst_y - src_y
-                up_distance = src_y + (self.config.num_row - dst_y)
-                return "clockwise" if down_distance <= up_distance else "counter_clockwise"
-            else:
-                # 目标在上方
-                up_distance = src_y - dst_y
-                down_distance = dst_y + (self.config.num_row - src_y)
-                return "counter_clockwise" if up_distance <= down_distance else "clockwise"
+        # 简化仲裁：轮询机制
+        if requester == "inject":
+            # 注入请求需要检查是否有其他方向的流量
+            for dir_name in ["TL", "TR", "TU", "TD"]:
+                if dir_name != direction_str:
+                    for channel in ["req", "rsp", "data"]:
+                        if piece["ring_buffers"][dir_name][channel]:
+                            # 有其他方向的流量，注入失败
+                            return False
+
+            # 没有冲突，允许注入
+            arbitration_state["last_winner"] = direction_str
+            return True
+
+        else:
+            # 环形传输请求总是被允许（优先级高于注入）
+            arbitration_state["last_winner"] = direction_str
+            return True
+
+    def _process_ring_transmission_true_topology(self) -> None:
+        """处理真实环形拓扑的ring网络内部传输"""
+        # 处理四个方向的环形传输
+        for direction in [RingDirection.TL, RingDirection.TR, RingDirection.TU, RingDirection.TD]:
+            self._process_ring_direction_transmission(direction)
+
+    def _process_ring_direction_transmission(self, direction: RingDirection) -> None:
+        """处理指定方向的环形传输"""
+        direction_str = direction.value
+
+        # 获取该方向上的所有节点
+        nodes_in_direction = self._get_nodes_in_ring_direction(direction)
+
+        # 按传输顺序处理每个节点（从后往前避免冲突）
+        for i in reversed(range(len(nodes_in_direction))):
+            current_node = nodes_in_direction[i]
+            next_node = nodes_in_direction[(i + 1) % len(nodes_in_direction)]
+
+            current_piece = self.crossring_pieces[current_node]
+            next_piece = self.crossring_pieces[next_node]
+
+            # 处理每个通道
+            for channel in ["req", "rsp", "data"]:
+                self._try_move_flit_in_ring_direction(current_piece, next_piece, direction_str, channel)
+
+    def _get_nodes_in_ring_direction(self, direction: RingDirection) -> List[NodeId]:
+        """获取指定方向上的环形节点列表"""
+        if direction in [RingDirection.TL, RingDirection.TR]:
+            # 水平环：按行组织
+            nodes = []
+            for row in range(self.config.num_row):
+                row_nodes = [row * self.config.num_col + col for col in range(self.config.num_col)]
+                if direction == RingDirection.TL:
+                    row_nodes.reverse()  # 逆时针
+                nodes.extend(row_nodes)
+            return nodes
+        else:
+            # 垂直环：按列组织
+            nodes = []
+            for col in range(self.config.num_col):
+                col_nodes = [row * self.config.num_col + col for row in range(self.config.num_row)]
+                if direction == RingDirection.TU:
+                    col_nodes.reverse()  # 向上
+                nodes.extend(col_nodes)
+            return nodes
+
+    def _try_move_flit_in_ring_direction(self, current_piece: Dict, next_piece: Dict, direction_str: str, channel: str) -> None:
+        """尝试在指定方向的环形中移动flit"""
+        current_buffer = current_piece["ring_buffers"][direction_str][channel]
+        next_buffer = next_piece["ring_buffers"][direction_str][channel]
+
+        if not current_buffer:
+            return
+
+        flit = current_buffer[0]  # 查看队首flit
+
+        # 检查是否到达最终目标节点
+        if self._should_eject_flit_four_directions(next_piece["node_id"], flit):
+            # 尝试移动到eject队列
+            if self._try_move_to_eject(next_piece, flit, channel):
+                current_buffer.pop(0)  # 成功eject，移除flit
+                self.stats["ring_transmissions"] += 1
+            return
+
+        # 检查是否需要维度转换
+        if self._should_transfer_to_another_direction(next_piece["node_id"], flit, direction_str):
+            # 尝试维度转换
+            if self._try_dimension_turning(next_piece, flit, direction_str, channel):
+                current_buffer.pop(0)  # 成功转换，移除flit
+                self.stats["dimension_turns"] += 1
+            return
+
+        # 检查下一个节点的缓冲区是否有空间
+        if len(next_buffer) >= self.config.ring_buffer_depth:
+            return  # 缓冲区满，无法移动
+
+        # 移动flit到下一个节点
+        flit = current_buffer.pop(0)
+        next_buffer.append(flit)
+        self.stats["ring_transmissions"] += 1
+
+        # 检查是否是环绕连接
+        if self._is_wrap_around_connection(current_piece["node_id"], next_piece["node_id"], direction_str):
+            self.stats["wrap_around_hops"] += 1
+            self.logger.debug(f"周期{self.cycle}：数据包{flit.packet_id}通过环绕连接从节点{current_piece['node_id']}到节点{next_piece['node_id']}")
 
     def _arbitrate_ring_access(self, piece: Dict, direction: str, requester: str) -> bool:
         """Ring访问仲裁机制（简化版：优先级固定）"""
@@ -337,6 +476,116 @@ class CrossRingModel:
             return not has_ring_traffic
 
         return False
+
+    def _should_eject_flit_four_directions(self, node_id: NodeId, flit: Any) -> bool:
+        """判断flit是否应该在当前节点eject（四方向系统）"""
+        return node_id == flit.destination
+
+    def _should_transfer_to_another_direction(self, node_id: NodeId, flit: Any, current_direction: str) -> bool:
+        """判断是否需要转换到另一个方向（维度转换）"""
+        if not hasattr(flit, "remaining_directions") or not flit.remaining_directions:
+            return False
+
+        # 检查当前方向是否已完成路由
+        node_x, node_y = self._get_node_coordinates(node_id)
+        dst_x, dst_y = self._get_node_coordinates(flit.destination)
+
+        if current_direction in ["TL", "TR"]:
+            # 水平方向：检查是否到达目标列
+            return node_x == dst_x and node_y != dst_y
+        else:
+            # 垂直方向：检查是否到达目标行
+            return node_y == dst_y and node_x != dst_x
+
+    def _try_dimension_turning(self, piece: Dict, flit: Any, from_direction: str, channel: str) -> bool:
+        """尝试维度转换"""
+        if not hasattr(flit, "remaining_directions") or not flit.remaining_directions:
+            return False
+
+        next_direction = flit.remaining_directions[0]
+        to_direction = next_direction.value
+
+        # 使用交叉点模块进行维度转换
+        cross_point = piece["cross_point"]
+
+        # 确定转换类型
+        if from_direction in ["TL", "TR"] and to_direction in ["TU", "TD"]:
+            # 水平到垂直
+            success = cross_point.process_dimension_turning(flit, "horizontal", "vertical", self.cycle)
+        elif from_direction in ["TU", "TD"] and to_direction in ["TL", "TR"]:
+            # 垂直到水平
+            success = cross_point.process_dimension_turning(flit, "vertical", "horizontal", self.cycle)
+        else:
+            return False
+
+        if success:
+            # 更新flit的方向信息
+            flit.current_ring_direction = next_direction
+            flit.remaining_directions = flit.remaining_directions[1:]
+
+            # 将flit移动到新方向的缓冲区
+            target_buffer = piece["ring_buffers"][to_direction][channel]
+            if len(target_buffer) < self.config.ring_buffer_depth:
+                target_buffer.append(flit)
+                return True
+
+        return False
+
+    def _is_wrap_around_connection(self, from_node: NodeId, to_node: NodeId, direction: str) -> bool:
+        """检查是否是环绕连接"""
+        from_x, from_y = self._get_node_coordinates(from_node)
+        to_x, to_y = self._get_node_coordinates(to_node)
+
+        if direction in ["TL", "TR"]:
+            # 水平方向的环绕
+            if direction == "TR":
+                # 顺时针：最右边到最左边
+                return from_x == self.config.num_col - 1 and to_x == 0 and from_y == to_y
+            else:
+                # 逆时针：最左边到最右边
+                return from_x == 0 and to_x == self.config.num_col - 1 and from_y == to_y
+        else:
+            # 垂直方向的环绕
+            if direction == "TD":
+                # 向下：最下面到最上面
+                return from_y == self.config.num_row - 1 and to_y == 0 and from_x == to_x
+            else:
+                # 向上：最上面到最下面
+                return from_y == 0 and to_y == self.config.num_row - 1 and from_x == to_x
+
+    def _check_downstream_path_congestion_four_directions(self, source: NodeId, destination: NodeId, direction: RingDirection, channel: str) -> bool:
+        """检查四方向系统中到目标节点路径上的拥塞状态"""
+        # 获取路径上的关键节点
+        path_nodes = self._get_path_nodes_four_directions(source, destination, direction)
+
+        # 检查路径上每个节点的拥塞状态
+        for node_id in path_nodes:
+            if node_id in self.crossring_pieces:
+                piece = self.crossring_pieces[node_id]
+                direction_str = direction.value
+
+                # 检查该节点的ETag状态
+                if piece["etag_status"][direction_str][channel]:
+                    return True
+
+                # 检查ring缓冲区占用率
+                buffer = piece["ring_buffers"][direction_str][channel]
+                if len(buffer) >= self.config.ring_buffer_depth * 0.7:  # 70%阈值
+                    return True
+
+        return False
+
+    def _get_path_nodes_four_directions(self, source: NodeId, destination: NodeId, direction: RingDirection) -> List[NodeId]:
+        """获取四方向系统中从源到目标在指定方向上的路径节点"""
+        path = self.direction_mapper.get_ring_path(source, destination)
+
+        # 提取指定方向上的节点
+        direction_nodes = []
+        for node_id, node_direction in path:
+            if node_direction == direction:
+                direction_nodes.append(node_id)
+
+        return direction_nodes
 
     def _process_ring_transmission(self) -> None:
         """处理ring网络内部传输"""
@@ -505,44 +754,42 @@ class CrossRingModel:
             self._update_itag_status(piece)
 
     def _update_etag_status(self, piece: Dict) -> None:
-        """更新ETag状态"""
-        for direction in ["horizontal", "vertical"]:
+        """更新ETag状态（四方向系统）"""
+        for direction in ["TL", "TR", "TU", "TD"]:
             for channel in ["req", "rsp", "data"]:
                 # 检查eject队列的拥塞情况
                 eject_queue = piece["eject_queues"][channel]
                 eject_threshold = self.config.eject_buffer_depth * 0.8  # 80%阈值
 
                 # 检查ring缓冲区的拥塞情况
-                ring_buffers = piece["ring_buffers"][direction][channel]
+                ring_buffer = piece["ring_buffers"][direction][channel]
                 ring_congestion = False
 
-                for ring_dir in ["clockwise", "counter_clockwise"]:
-                    buffer_occupancy = len(ring_buffers[ring_dir])
-                    ring_threshold = self.config.ring_buffer_depth * 0.8
-                    if buffer_occupancy >= ring_threshold:
-                        ring_congestion = True
-                        break
+                buffer_occupancy = len(ring_buffer)
+                ring_threshold = self.config.ring_buffer_depth * 0.8
+                if buffer_occupancy >= ring_threshold:
+                    ring_congestion = True
 
                 # 设置ETag状态
                 eject_congestion = len(eject_queue) >= eject_threshold
                 piece["etag_status"][direction][channel] = eject_congestion or ring_congestion
 
     def _update_itag_status(self, piece: Dict) -> None:
-        """更新ITag状态"""
-        for direction in ["horizontal", "vertical"]:
+        """更新ITag状态（四方向系统）"""
+        for direction in ["TL", "TR", "TU", "TD"]:
             for channel in ["req", "rsp", "data"]:
                 # 检查inject队列的拥塞情况
                 inject_queue = piece["inject_queues"][channel]
                 inject_threshold = self.config.inject_buffer_depth * 0.8
 
                 # 检查下游节点的ETag状态
-                downstream_congestion = self._check_downstream_congestion(piece["node_id"], direction, channel)
+                downstream_congestion = self._check_downstream_congestion_four_directions(piece["node_id"], direction, channel)
 
                 # 设置ITag状态
                 inject_congestion = len(inject_queue) >= inject_threshold
                 piece["itag_status"][direction][channel] = inject_congestion or downstream_congestion
 
-    def _check_downstream_congestion(self, node_id: NodeId, direction: str, channel: str) -> bool:
+    def _check_downstream_congestion_four_directions(self, node_id: NodeId, direction: str, channel: str) -> bool:
         """检查下游节点的拥塞状态"""
         # 获取下游节点列表
         downstream_nodes = self._get_downstream_nodes(node_id, direction)
@@ -561,18 +808,16 @@ class CrossRingModel:
         x, y = self._get_node_coordinates(node_id)
         downstream_nodes = []
 
-        if direction == "horizontal":
-            # 水平方向的下游节点
-            for next_x in range(self.config.num_col):
-                if next_x != x:
-                    next_node = y * self.config.num_col + next_x
-                    downstream_nodes.append(next_node)
-        else:  # vertical
-            # 垂直方向的下游节点
-            for next_y in range(self.config.num_row):
-                if next_y != y:
-                    next_node = next_y * self.config.num_col + x
-                    downstream_nodes.append(next_node)
+        try:
+            # 将方向字符串转换为RingDirection枚举
+            ring_direction = RingDirection(direction)
+
+            # 获取下游节点
+            downstream_node = self.direction_mapper.get_next_node_in_direction(node_id, ring_direction)
+            downstream_nodes.append(downstream_node)
+        except Exception:
+            # 如果转换失败，返回空列表
+            pass
 
         return downstream_nodes
 

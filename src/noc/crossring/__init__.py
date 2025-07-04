@@ -34,6 +34,17 @@ from .model import (
     create_crossring_model,
 )
 
+from .ring_bridge import (
+    RingBridge,
+    CrossPointModule,
+    RingSlice,
+)
+
+from .ring_directions import (
+    RingDirectionMapper,
+    RingDirection,
+)
+
 # 版本信息
 __version__ = "1.0.0"
 __author__ = "C2C CrossRing Team"
@@ -55,6 +66,13 @@ __all__ = [
     "CrossRingIPInterface",
     # 主模型
     "CrossRingModel",
+    # 环形桥接组件
+    "RingBridge",
+    "CrossPointModule",
+    "RingSlice",
+    # 环形方向系统
+    "RingDirectionMapper",
+    "RingDirection",
     # 便捷函数
     "create_crossring_config_2260e",
     "create_crossring_config_2262",
@@ -126,10 +144,15 @@ def get_module_info() -> dict:
         },
         "features": [
             "STI三通道协议（REQ/RSP/DAT）",
+            "真实环形拓扑（带环绕连接）",
+            "四方向系统（TL/TR/TU/TD）",
+            "环形桥接和交叉点模块",
+            "维度转换（水平↔垂直）",
             "时钟域转换（1GHz ↔ 2GHz）",
             "RN/SN资源管理（tracker, databuffer）",
             "请求重试机制",
             "ETag/ITag优先级控制",
+            "XY维度顺序路由",
             "性能统计和调试支持",
         ],
     }

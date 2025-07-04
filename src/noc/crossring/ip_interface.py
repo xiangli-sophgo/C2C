@@ -215,7 +215,7 @@ class CrossRingIPInterface(BaseIPInterface):
 
         # 设置IP类型信息
         flit.source_type = self.ip_type
-        flit.destination_type = self._get_destination_type(destination)
+        flit.destination_type = self._get_destination_ip_type(destination)
         flit.original_source_type = flit.source_type
         flit.original_destination_type = flit.destination_type
 
@@ -730,9 +730,137 @@ class CrossRingIPInterface(BaseIPInterface):
                     "inject": len(self.inject_fifos[channel]),
                     "l2h": len(self.l2h_fifos[channel]),
                     "h2l": len(self.h2l_fifos[channel]),
-                    "l2h_pre": self.l2h_pre_buffers[channel] is not None,
-                    "h2l_pre": self.h2l_pre_buffers[channel] is not None,
+                    "l2h_pre": hasattr(self, "l2h_pre_buffers") and self.l2h_pre_buffers.get(channel) is not None,
+                    "h2l_pre": hasattr(self, "h2l_pre_buffers") and self.h2l_pre_buffers.get(channel) is not None,
                 }
                 for channel in ["req", "rsp", "data"]
             },
         }
+
+    # ========== 实现抽象方法 ==========
+
+    def _can_handle_new_read_request(self, source: NodeId, destination: NodeId, burst_length: int) -> bool:
+        """检查是否可以处理新的读请求"""
+        # 检查RN读tracker是否有空间
+        if self.rn_tracker_count["read"] <= 0:
+            return False
+
+        # 检查RN读数据库是否有空间
+        if self.rn_rdb_count < burst_length:
+            return False
+
+        return True
+
+    def _can_handle_new_write_request(self, source: NodeId, destination: NodeId, burst_length: int) -> bool:
+        """检查是否可以处理新的写请求"""
+        # 检查RN写tracker是否有空间
+        if self.rn_tracker_count["write"] <= 0:
+            return False
+
+        # 检查RN写数据库是否有空间
+        if self.rn_wdb_count < burst_length:
+            return False
+
+        return True
+
+    def _process_read_request(self, source: NodeId, destination: NodeId, burst_length: int, packet_id: str) -> bool:
+        """处理读请求"""
+        try:
+            # 分配RN资源
+            if not self._allocate_rn_read_resources(burst_length):
+                return False
+
+            # 创建读请求flit
+            req_flit = create_crossring_flit(source, destination, [source, destination])
+            req_flit.packet_id = packet_id
+            req_flit.req_type = "read"
+            req_flit.burst_length = burst_length
+            req_flit.channel = "req"
+            req_flit.req_attr = "new"
+
+            # 添加到RN tracker
+            self.rn_tracker["read"].append(req_flit)
+
+            # 注入到网络
+            return self._inject_to_network(req_flit)
+
+        except Exception as e:
+            self.logger.error(f"处理读请求失败: {e}")
+            return False
+
+    def _process_write_request(self, source: NodeId, destination: NodeId, burst_length: int, packet_id: str) -> bool:
+        """处理写请求"""
+        try:
+            # 分配RN资源
+            if not self._allocate_rn_write_resources(burst_length):
+                return False
+
+            # 创建写请求flit
+            req_flit = create_crossring_flit(source, destination, [source, destination])
+            req_flit.packet_id = packet_id
+            req_flit.req_type = "write"
+            req_flit.burst_length = burst_length
+            req_flit.channel = "req"
+            req_flit.req_attr = "new"
+
+            # 添加到RN tracker
+            self.rn_tracker["write"].append(req_flit)
+
+            # 创建写数据flits
+            self._create_write_data_flits(req_flit)
+
+            # 注入到网络
+            return self._inject_to_network(req_flit)
+
+        except Exception as e:
+            self.logger.error(f"处理写请求失败: {e}")
+            return False
+
+    def _allocate_rn_read_resources(self, burst_length: int) -> bool:
+        """分配RN读资源"""
+        if self.rn_tracker_count["read"] <= 0 or self.rn_rdb_count < burst_length:
+            return False
+
+        self.rn_tracker_count["read"] -= 1
+        self.rn_rdb_count -= burst_length
+        self.rn_rdb_reserve += 1
+
+        return True
+
+    def _allocate_rn_write_resources(self, burst_length: int) -> bool:
+        """分配RN写资源"""
+        if self.rn_tracker_count["write"] <= 0 or self.rn_wdb_count < burst_length:
+            return False
+
+        self.rn_tracker_count["write"] -= 1
+        self.rn_wdb_count -= burst_length
+
+        return True
+
+    def _create_write_data_flits(self, req_flit: CrossRingFlit) -> None:
+        """创建写数据flits"""
+        for i in range(req_flit.burst_length):
+            data_flit = create_crossring_flit(req_flit.source, req_flit.destination, req_flit.path)
+            data_flit.packet_id = f"{req_flit.packet_id}_data_{i}"
+            data_flit.channel = "data"
+            data_flit.flit_id = i
+            data_flit.is_last_flit = i == req_flit.burst_length - 1
+
+            # 添加到写数据库
+            if req_flit.packet_id not in self.rn_wdb:
+                self.rn_wdb[req_flit.packet_id] = []
+            self.rn_wdb[req_flit.packet_id].append(data_flit)
+
+    def _inject_to_network(self, flit: CrossRingFlit) -> bool:
+        """将flit注入到网络"""
+        try:
+            # 添加到注入FIFO
+            if len(self.inject_fifos[flit.channel]) < self.config.inject_buffer_depth:
+                self.inject_fifos[flit.channel].append(flit)
+                flit.departure_cycle = self.current_cycle
+                return True
+            else:
+                return False
+        except Exception as e:
+            self.logger.error(f"注入网络失败: {e}")
+            return False
