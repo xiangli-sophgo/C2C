@@ -1,50 +1,55 @@
 """
 Mesh拓扑NoC实现。
 
-基于通用NoC基类实现的Mesh拓扑，展示如何扩展基础功能
-来支持特定拓扑的特性（如XY路由、虚拟通道等）。
-
-注意：此模块为预留接口，具体实现将在后续版本中添加。
+基于通用NoC基类实现的Mesh拓扑，支持：
+- XY路由算法
+- 最短路径路由
+- 虚拟通道
+- 性能监控
 """
 
-# TODO: 实现以下组件
-# from .flit import MeshFlit
-# from .ip_interface import MeshIPInterface
-# from .model import MeshModel
-# from .config import MeshConfig
+import logging
+
+# 导入核心组件
+from .config import MeshConfig, MeshConfiguration
+from .topology import MeshTopology
+from .model import MeshModel, MeshPacket, MeshRouter
+
+# 便捷函数
+from .config import (
+    create_mesh_config_2x2,
+    create_mesh_config_4x4,
+    create_mesh_config_8x8,
+    create_mesh_config_custom,
+)
 
 __version__ = "1.0.0"
 __author__ = "C2C Mesh Team"
 
-# TODO: 待实现的组件将在后续添加到__all__中
 __all__ = [
-    # "MeshFlit",
-    # "MeshIPInterface",
-    # "MeshModel",
-    # "MeshConfig",
+    # 核心类
+    "MeshConfig",
+    "MeshConfiguration", 
+    "MeshTopology",
+    "MeshModel",
+    "MeshPacket",
+    "MeshRouter",
+    # 便捷函数
+    "create_mesh_config_2x2",
+    "create_mesh_config_4x4", 
+    "create_mesh_config_8x8",
+    "create_mesh_config_custom",
 ]
 
+# 设置日志
+logger = logging.getLogger(__name__)
+logger.info(f"Mesh NoC模块加载完成 (v{__version__})")
 
-# 占位符类定义，防止导入错误
-class MeshFlit:
-    """Mesh Flit占位符类，待实现"""
-
-    pass
-
-
-class MeshIPInterface:
-    """Mesh IP接口占位符类，待实现"""
-
-    pass
-
-
-class MeshModel:
-    """Mesh模型占位符类，待实现"""
-
-    pass
-
-
-class MeshConfig:
-    """Mesh配置占位符类，待实现"""
-
-    pass
+# 模块初始化信息
+print(f"Mesh NoC模块已加载 - 版本 {__version__}")
+print("支持的功能:")
+print("  - 2D Mesh拓扑")
+print("  - XY路由算法") 
+print("  - 最短路径路由")
+print("  - 虚拟通道")
+print("  - 性能监控")

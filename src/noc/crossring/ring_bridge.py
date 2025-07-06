@@ -14,7 +14,7 @@ import logging
 from collections import deque
 
 from .flit import CrossRingFlit
-from .config import CrossRingConfig
+from .config import CrossRingConfig, RoutingStrategy
 from src.noc.utils.types import NodeId
 
 
@@ -195,14 +195,15 @@ class CrossPointModule:
         self.logger.debug(f"周期{cycle}：成功执行V2H维度转换，数据包{flit.packet_id}")
         return True
     
-    def arbitrate_ring_access(self, horizontal_request: bool, vertical_request: bool, cycle: int) -> Tuple[bool, bool]:
+    def arbitrate_ring_access(self, horizontal_request: bool, vertical_request: bool, cycle: int, routing_strategy: RoutingStrategy = RoutingStrategy.XY) -> Tuple[bool, bool]:
         """
-        仲裁环形访问权限
+        仲裁环形访问权限 - 支持基于路由策略的优先级调整
         
         Args:
             horizontal_request: 水平环是否有访问请求
             vertical_request: 垂直环是否有访问请求
             cycle: 当前仿真周期
+            routing_strategy: 路由策略，影响仲裁优先级
             
         Returns:
             (水平环是否获得访问权, 垂直环是否获得访问权)
@@ -215,17 +216,35 @@ class CrossPointModule:
         elif not horizontal_request and not vertical_request:
             return False, False
         
-        # 两个方向都有请求时，使用轮询仲裁
+        # 两个方向都有请求时，根据路由策略调整仲裁优先级
         self.arbitration_counter += 1
         
-        if self.arbitration_counter % 2 == 0:
-            # 偶数周期优先水平环
-            self.logger.debug(f"周期{cycle}：仲裁结果 - 水平环获得访问权")
-            return True, False
+        if routing_strategy == RoutingStrategy.XY:
+            # XY路由：优先水平环
+            if self.arbitration_counter % 3 == 0:
+                # 偶尔给垂直环机会
+                self.logger.debug(f"周期{cycle}：XY路由仲裁 - 垂直环获得访问权")
+                return False, True
+            else:
+                self.logger.debug(f"周期{cycle}：XY路由仲裁 - 水平环获得访问权")
+                return True, False
+        elif routing_strategy == RoutingStrategy.YX:
+            # YX路由：优先垂直环
+            if self.arbitration_counter % 3 == 0:
+                # 偶尔给水平环机会
+                self.logger.debug(f"周期{cycle}：YX路由仲裁 - 水平环获得访问权")
+                return True, False
+            else:
+                self.logger.debug(f"周期{cycle}：YX路由仲裁 - 垂直环获得访问权")
+                return False, True
         else:
-            # 奇数周期优先垂直环
-            self.logger.debug(f"周期{cycle}：仲裁结果 - 垂直环获得访问权")
-            return False, True
+            # ADAPTIVE或其他：使用轮询仲裁
+            if self.arbitration_counter % 2 == 0:
+                self.logger.debug(f"周期{cycle}：自适应仲裁 - 水平环获得访问权")
+                return True, False
+            else:
+                self.logger.debug(f"周期{cycle}：自适应仲裁 - 垂直环获得访问权")
+                return False, True
     
     def detect_congestion(self, cycle: int) -> bool:
         """

@@ -8,9 +8,17 @@ CrossRing NoC专用配置类。
 from typing import Dict, Any, List, Optional, Tuple
 import json
 from dataclasses import dataclass, field
+from enum import Enum
 
 from ..base.config import BaseNoCConfig
 from src.noc.utils.types import TopologyType, ValidationResult
+
+
+class RoutingStrategy(Enum):
+    """CrossRing路由策略枚举"""
+    XY = "XY"  # 先水平环后垂直环
+    YX = "YX"  # 先垂直环后水平环
+    ADAPTIVE = "ADAPTIVE"  # 自适应路由（未来扩展）
 
 
 @dataclass
@@ -20,6 +28,9 @@ class BasicConfiguration:
     burst: int = 4
     network_frequency: int = 2.0
     slice_per_link: int = 8
+    
+    # 路由策略配置
+    routing_strategy: str = "XY"  # 默认使用XY路由
 
     # IP接口FIFO深度配置
     ip_l2h_fifo_depth: int = 4
@@ -30,6 +41,9 @@ class BasicConfiguration:
     inject_buffer_depth: int = 8
     eject_buffer_depth: int = 8
     crosspoint_buffer_depth: int = 4
+    
+    # 仲裁配置（用于支持不同路由策略）
+    arbitration_timeout: int = 10  # 仲裁超时周期
 
 
 @dataclass
@@ -148,6 +162,13 @@ class CrossRingConfig(BaseNoCConfig):
         self.tag_config = TagConfiguration()
         self.tracker_config = TrackerConfiguration()
         self.latency_config = LatencyConfiguration()
+        
+        # 添加网络频率属性（兼容TrafficScheduler）
+        self.NETWORK_FREQUENCY = int(self.basic_config.network_frequency * 1000000000)  # Convert to Hz
+        
+        # 路由策略属性
+        self.routing_strategy = RoutingStrategy(self.basic_config.routing_strategy)
+        self.arbitration_timeout = getattr(self.basic_config, 'arbitration_timeout', 10)
 
         # 通道规格
         self.channel_spec = {
@@ -231,6 +252,12 @@ class CrossRingConfig(BaseNoCConfig):
         if self.num_col < 2 or self.num_row < 2:
             errors.append(f"CrossRing拓扑至少需要2×2节点 (num_row={self.num_row}, num_col={self.num_col})")
 
+        # 路由策略验证
+        try:
+            RoutingStrategy(self.basic_config.routing_strategy)
+        except ValueError:
+            errors.append(f"无效的路由策略: {self.basic_config.routing_strategy}，支持的策略: {[s.value for s in RoutingStrategy]}")
+
         # FIFO深度验证 - 安全地访问属性
         fifo_cfg = self.fifo_config
         if hasattr(fifo_cfg, "rb_in_depth"):
@@ -302,7 +329,9 @@ class CrossRingConfig(BaseNoCConfig):
                 errors.append(f"SN Tracker OSTD必须为正数 (sn_ddr_r_tracker_ostd={tracker.sn_ddr_r_tracker_ostd}, sn_l2m_r_tracker_ostd={tracker.sn_l2m_r_tracker_ostd})")
             # 缓冲区大小一致性验证
             if hasattr(self, "rn_rdb_size") and self.rn_rdb_size != tracker.rn_r_tracker_ostd * self.basic_config.burst:
-                errors.append(f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (rn_rdb_size={self.rn_rdb_size}, rn_r_tracker_ostd={tracker.rn_r_tracker_ostd}, burst={self.basic_config.burst})")
+                errors.append(
+                    f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (rn_rdb_size={self.rn_rdb_size}, rn_r_tracker_ostd={tracker.rn_r_tracker_ostd}, burst={self.basic_config.burst})"
+                )
         elif isinstance(tracker, dict):
             rn_r_ostd = tracker.get("rn_r_tracker_ostd", 64)
             rn_w_ostd = tracker.get("rn_w_tracker_ostd", 32)
@@ -385,11 +414,15 @@ class CrossRingConfig(BaseNoCConfig):
         更新网络基础配置。
 
         Args:
-            **kwargs: IP配置参数
+            **kwargs: 基础配置参数
         """
         for key, value in kwargs.items():
             if hasattr(self.basic_config, key):
                 setattr(self.basic_config, key, value)
+        
+        # 如果更新了路由策略，需要重新设置routing_strategy属性
+        if 'routing_strategy' in kwargs:
+            self.routing_strategy = RoutingStrategy(self.basic_config.routing_strategy)
 
     def update_ip_config(self, **kwargs) -> None:
         """
@@ -423,6 +456,29 @@ class CrossRingConfig(BaseNoCConfig):
         for key, value in kwargs.items():
             if hasattr(self.tag_config, key):
                 setattr(self.tag_config, key, value)
+
+    def set_routing_strategy(self, strategy: str) -> None:
+        """
+        设置路由策略。
+
+        Args:
+            strategy: 路由策略 ("XY", "YX", "ADAPTIVE")
+        """
+        # 验证策略是否有效
+        strategy_enum = RoutingStrategy(strategy)
+        
+        # 更新配置
+        self.basic_config.routing_strategy = strategy
+        self.routing_strategy = strategy_enum
+        
+    def get_routing_strategy(self) -> str:
+        """
+        获取当前路由策略。
+
+        Returns:
+            当前路由策略字符串
+        """
+        return self.routing_strategy.value
 
     def set_preset_configuration(self, preset: str) -> None:
         """

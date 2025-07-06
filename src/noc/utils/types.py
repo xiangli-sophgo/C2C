@@ -27,6 +27,7 @@ class RoutingStrategy(Enum):
     """Routing strategy enumeration."""
 
     SHORTEST = "shortest"
+    XY = "xy"  # XY路由（dimension-order routing）
     LOAD_BALANCED = "load_balanced"
     ADAPTIVE = "adaptive"
     DETERMINISTIC = "deterministic"

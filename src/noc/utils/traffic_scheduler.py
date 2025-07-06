@@ -104,7 +104,10 @@ class TrafficFileReader:
             # 解析请求
             t, src, src_t, dst, dst_t, op, burst = parts
             # t是纳秒，time_offset也是纳秒，都需要转换为网络周期数
-            t = (int(t) + self.time_offset) * self.config.NETWORK_FREQUENCY
+            network_freq = getattr(self.config, 'NETWORK_FREQUENCY', 
+                                 getattr(self.config, 'basic_config', None) and 
+                                 getattr(self.config.basic_config, 'network_frequency', 1.0) * 1000000000)
+            t = (int(t) + self.time_offset) * int(network_freq) / 1e9  # Convert to cycles: (ns + offset_ns) * Hz / 1e9
             src, dst, burst = int(src), int(dst), int(burst)
 
             req_tuple = (t, src, src_t, dst, dst_t, op, burst, self.traffic_id)
@@ -352,8 +355,11 @@ class TrafficScheduler:
             print(f"  Traffic ID: {traffic_id}, Requests: {total_req}, Flits: {total_flit}")
             print(f"  Time offset: {chain.chain_time_offset}ns")
             if requests:
-                first_time_ns = requests[0][0] // self.config.NETWORK_FREQUENCY
-                last_time_ns = requests[-1][0] // self.config.NETWORK_FREQUENCY
+                network_freq = getattr(self.config, 'NETWORK_FREQUENCY', 
+                                     getattr(self.config, 'basic_config', None) and 
+                                     getattr(self.config.basic_config, 'network_frequency', 1.0) * 1000000000)
+                first_time_ns = requests[0][0] * 1e9 / int(network_freq)
+                last_time_ns = requests[-1][0] * 1e9 / int(network_freq)
                 print(f"  First request time: {first_time_ns}ns ({requests[0][0]} cycles)")
                 print(f"  Last request time: {last_time_ns}ns ({requests[-1][0]} cycles)")
 
@@ -380,7 +386,10 @@ class TrafficScheduler:
                 # 解析原始数据
                 t, src, src_t, dst, dst_t, op, burst = parts
                 # t是纳秒，time_offset也是纳秒，都需要转换为网络周期数
-                t = (int(t) + time_offset) * self.config.NETWORK_FREQUENCY
+                network_freq = getattr(self.config, 'NETWORK_FREQUENCY', 
+                                     getattr(self.config, 'basic_config', None) and 
+                                     getattr(self.config.basic_config, 'network_frequency', 1.0) * 1000000000)
+                t = (int(t) + time_offset) * int(network_freq) / 1e9  # Convert to cycles: (ns + offset_ns) * Hz / 1e9
                 src, dst, burst = int(src), int(dst), int(burst)
 
                 # 创建带traffic_id的请求元组
@@ -470,7 +479,10 @@ class TrafficScheduler:
                 state.update_received_flit()
                 # 记录实际结束时间（纳秒）
                 if state.received_flit >= state.total_flit:
-                    state.actual_end_time = self.current_cycle // self.config.NETWORK_FREQUENCY
+                    network_freq = getattr(self.config, 'NETWORK_FREQUENCY', 
+                                         getattr(self.config, 'basic_config', None) and 
+                                         getattr(self.config.basic_config, 'network_frequency', 1.0) * 1000000000)
+                    state.actual_end_time = self.current_cycle // int(network_freq)
 
     def check_and_advance_chains(self, current_cycle: int) -> List[str]:
         """检查traffic完成情况并推进链

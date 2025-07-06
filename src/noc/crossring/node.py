@@ -12,8 +12,9 @@ from typing import Dict, List, Any, Tuple, Optional
 import logging
 
 from src.noc.base.node import BaseNoCNode
+from src.noc.base.ip_interface import PipelinedFIFO, FlowControlledTransfer
 from .flit import CrossRingFlit
-from .config import CrossRingConfig
+from .config import CrossRingConfig, RoutingStrategy
 
 
 class CrossRingNode:
@@ -42,21 +43,59 @@ class CrossRingNode:
         self.config = config
         self.logger = logger
 
-        # 注入/提取队列
-        self.inject_queues = {"req": [], "rsp": [], "data": []}
-        self.eject_queues = {"req": [], "rsp": [], "data": []}
+        # 注入/提取队列 - 保持命名但使用PipelinedFIFO
+        self.inject_queues = {
+            "req": PipelinedFIFO(f"inject_req_{node_id}", depth=config.inject_buffer_depth),
+            "rsp": PipelinedFIFO(f"inject_rsp_{node_id}", depth=config.inject_buffer_depth),
+            "data": PipelinedFIFO(f"inject_data_{node_id}", depth=config.inject_buffer_depth)
+        }
+        self.eject_queues = {
+            "req": PipelinedFIFO(f"eject_req_{node_id}", depth=config.eject_buffer_depth),
+            "rsp": PipelinedFIFO(f"eject_rsp_{node_id}", depth=config.eject_buffer_depth),
+            "data": PipelinedFIFO(f"eject_data_{node_id}", depth=config.eject_buffer_depth)
+        }
 
-        # 环形缓冲区
+        # 环形缓冲区 - 保持命名但使用PipelinedFIFO
         self.ring_buffers = {
             "horizontal": {
-                "req": {"TR": [], "TL": [], "TD": [], "TU": []},
-                "rsp": {"TR": [], "TL": [], "TD": [], "TU": []},
-                "data": {"TR": [], "TL": [], "TD": [], "TU": []},
+                "req": {
+                    "TR": PipelinedFIFO(f"ring_h_req_TR_{node_id}", depth=config.ring_buffer_depth),
+                    "TL": PipelinedFIFO(f"ring_h_req_TL_{node_id}", depth=config.ring_buffer_depth),
+                    "TD": PipelinedFIFO(f"ring_h_req_TD_{node_id}", depth=config.ring_buffer_depth),
+                    "TU": PipelinedFIFO(f"ring_h_req_TU_{node_id}", depth=config.ring_buffer_depth),
+                },
+                "rsp": {
+                    "TR": PipelinedFIFO(f"ring_h_rsp_TR_{node_id}", depth=config.ring_buffer_depth),
+                    "TL": PipelinedFIFO(f"ring_h_rsp_TL_{node_id}", depth=config.ring_buffer_depth),
+                    "TD": PipelinedFIFO(f"ring_h_rsp_TD_{node_id}", depth=config.ring_buffer_depth),
+                    "TU": PipelinedFIFO(f"ring_h_rsp_TU_{node_id}", depth=config.ring_buffer_depth),
+                },
+                "data": {
+                    "TR": PipelinedFIFO(f"ring_h_data_TR_{node_id}", depth=config.ring_buffer_depth),
+                    "TL": PipelinedFIFO(f"ring_h_data_TL_{node_id}", depth=config.ring_buffer_depth),
+                    "TD": PipelinedFIFO(f"ring_h_data_TD_{node_id}", depth=config.ring_buffer_depth),
+                    "TU": PipelinedFIFO(f"ring_h_data_TU_{node_id}", depth=config.ring_buffer_depth),
+                },
             },
             "vertical": {
-                "req": {"TR": [], "TL": [], "TD": [], "TU": []},
-                "rsp": {"TR": [], "TL": [], "TD": [], "TU": []},
-                "data": {"TR": [], "TL": [], "TD": [], "TU": []},
+                "req": {
+                    "TR": PipelinedFIFO(f"ring_v_req_TR_{node_id}", depth=config.ring_buffer_depth),
+                    "TL": PipelinedFIFO(f"ring_v_req_TL_{node_id}", depth=config.ring_buffer_depth),
+                    "TD": PipelinedFIFO(f"ring_v_req_TD_{node_id}", depth=config.ring_buffer_depth),
+                    "TU": PipelinedFIFO(f"ring_v_req_TU_{node_id}", depth=config.ring_buffer_depth),
+                },
+                "rsp": {
+                    "TR": PipelinedFIFO(f"ring_v_rsp_TR_{node_id}", depth=config.ring_buffer_depth),
+                    "TL": PipelinedFIFO(f"ring_v_rsp_TL_{node_id}", depth=config.ring_buffer_depth),
+                    "TD": PipelinedFIFO(f"ring_v_rsp_TD_{node_id}", depth=config.ring_buffer_depth),
+                    "TU": PipelinedFIFO(f"ring_v_rsp_TU_{node_id}", depth=config.ring_buffer_depth),
+                },
+                "data": {
+                    "TR": PipelinedFIFO(f"ring_v_data_TR_{node_id}", depth=config.ring_buffer_depth),
+                    "TL": PipelinedFIFO(f"ring_v_data_TL_{node_id}", depth=config.ring_buffer_depth),
+                    "TD": PipelinedFIFO(f"ring_v_data_TD_{node_id}", depth=config.ring_buffer_depth),
+                    "TU": PipelinedFIFO(f"ring_v_data_TU_{node_id}", depth=config.ring_buffer_depth),
+                },
             },
         }
 
@@ -86,6 +125,25 @@ class CrossRingNode:
         }
 
         self.logger.debug(f"CrossRing节点初始化: ID={node_id}, 坐标={coordinates}")
+
+    def set_routing_strategy_bias(self, routing_strategy: RoutingStrategy) -> None:
+        """
+        根据路由策略设置仲裁偏向
+
+        Args:
+            routing_strategy: 路由策略
+        """
+        if routing_strategy == RoutingStrategy.XY:
+            # XY路由：稍微偏向水平方向
+            self.routing_bias = {"horizontal": 1.2, "vertical": 1.0}
+        elif routing_strategy == RoutingStrategy.YX:
+            # YX路由：稍微偏向垂直方向
+            self.routing_bias = {"horizontal": 1.0, "vertical": 1.2}
+        else:
+            # 其他策略：均衡
+            self.routing_bias = {"horizontal": 1.0, "vertical": 1.0}
+        
+        self.logger.debug(f"节点{self.node_id}设置路由偏向: {routing_strategy.value} -> {self.routing_bias}")
 
     def update_state(self, cycle: int) -> None:
         """
@@ -326,14 +384,15 @@ class CrossRingNode:
         Returns:
             获取的flit，如果没有则返回None
         """
-        if not self.eject_queues[channel]:
+        eject_fifo = self.eject_queues[channel]
+        if not eject_fifo.valid_signal():
             return None
 
-        return self.eject_queues[channel].pop(0)
+        return eject_fifo.read_output()
 
     def add_to_inject_queue(self, flit: CrossRingFlit, channel: str) -> bool:
         """
-        添加flit到inject队列
+        添加flit到inject队列（保持兼容性接口）
 
         Args:
             flit: 要添加的flit
@@ -342,11 +401,165 @@ class CrossRingNode:
         Returns:
             是否成功添加
         """
-        if len(self.inject_queues[channel]) >= self.config.inject_buffer_depth:
+        inject_fifo = self.inject_queues[channel]
+        if not inject_fifo.ready_signal():
             return False
 
-        self.inject_queues[channel].append(flit)
-        return True
+        return inject_fifo.write_input(flit)
+
+    def _compute_inject_to_ring_transfers(self, cycle: int) -> None:
+        """计算从inject队列到ring缓冲区的传输可能性"""
+        for direction in ["horizontal", "vertical"]:
+            for channel in ["req", "rsp", "data"]:
+                # 检查是否有inject队列中的flit可以传输
+                inject_fifo = self.inject_queues[channel]
+                
+                # 检查仲裁状态
+                if not self.can_inject_flit(channel, direction):
+                    self._transfer_decisions["inject_to_ring"][direction][channel] = None
+                    continue
+                
+                # 找到最合适的方向代码
+                best_dir_code = self._find_best_direction_code(direction, channel)
+                if best_dir_code:
+                    ring_fifo = self.ring_buffers[direction][channel][best_dir_code]
+                    if FlowControlledTransfer.can_transfer(inject_fifo, ring_fifo):
+                        self._transfer_decisions["inject_to_ring"][direction][channel] = best_dir_code
+                    else:
+                        self._transfer_decisions["inject_to_ring"][direction][channel] = None
+                else:
+                    self._transfer_decisions["inject_to_ring"][direction][channel] = None
+
+    def _compute_ring_to_ring_transfers(self, cycle: int) -> None:
+        """计算环形缓冲区之间的传输可能性"""
+        for direction in ["horizontal", "vertical"]:
+            for channel in ["req", "rsp", "data"]:
+                self._transfer_decisions["ring_to_ring"][direction][channel] = {}
+                
+                for dir_code in ["TR", "TL", "TD", "TU"]:
+                    if self.can_transfer_flit(direction, dir_code, channel):
+                        # 计算目标方向和节点
+                        target_direction, target_dir_code = self._get_ring_transfer_target(direction, dir_code)
+                        if target_direction and target_dir_code:
+                            source_fifo = self.ring_buffers[direction][channel][dir_code]
+                            # 这里假设目标是相邻节点，实际实现中需要获取相邻节点的FIFO
+                            if source_fifo.valid_signal():
+                                self._transfer_decisions["ring_to_ring"][direction][channel][dir_code] = (target_direction, target_dir_code)
+                            else:
+                                self._transfer_decisions["ring_to_ring"][direction][channel][dir_code] = None
+                        else:
+                            self._transfer_decisions["ring_to_ring"][direction][channel][dir_code] = None
+                    else:
+                        self._transfer_decisions["ring_to_ring"][direction][channel][dir_code] = None
+
+    def _compute_ring_to_eject_transfers(self, cycle: int) -> None:
+        """计算从ring缓冲区到eject队列的传输可能性"""
+        for channel in ["req", "rsp", "data"]:
+            # 检查是否有到达本节点的flit
+            eject_fifo = self.eject_queues[channel]
+            found_flit = False
+            
+            for direction in ["horizontal", "vertical"]:
+                for dir_code in ["TR", "TL", "TD", "TU"]:
+                    ring_fifo = self.ring_buffers[direction][channel][dir_code]
+                    if ring_fifo.valid_signal():
+                        flit = ring_fifo.peek_output()
+                        if flit and self._should_eject_flit(flit):
+                            if FlowControlledTransfer.can_transfer(ring_fifo, eject_fifo):
+                                self._transfer_decisions["ring_to_eject"][channel] = (direction, dir_code)
+                                found_flit = True
+                                break
+                if found_flit:
+                    break
+            
+            if not found_flit:
+                self._transfer_decisions["ring_to_eject"][channel] = None
+
+    def _execute_inject_to_ring_transfers(self, cycle: int) -> None:
+        """执行从inject队列到ring缓冲区的传输"""
+        for direction in ["horizontal", "vertical"]:
+            for channel in ["req", "rsp", "data"]:
+                decision = self._transfer_decisions["inject_to_ring"][direction][channel]
+                if decision:
+                    dir_code = decision
+                    inject_fifo = self.inject_queues[channel]
+                    ring_fifo = self.ring_buffers[direction][channel][dir_code]
+                    
+                    if FlowControlledTransfer.try_transfer(inject_fifo, ring_fifo):
+                        # 更新传输的flit
+                        flit = ring_fifo.peek_output()
+                        if flit:
+                            flit.network_entry_cycle = cycle
+                            self.stats["injected_flits"][channel] += 1
+                        
+                        # 更新仲裁状态
+                        dir_priority_map = {"TR": "ring_tr", "TL": "ring_tl", "TD": "ring_td", "TU": "ring_tu"}
+                        self.arbitration_state[f"{direction}_priority"] = dir_priority_map[dir_code]
+                        self.arbitration_state["last_arbitration"][direction] = cycle
+
+    def _execute_ring_to_ring_transfers(self, cycle: int) -> None:
+        """执行环形缓冲区之间的传输"""
+        for direction in ["horizontal", "vertical"]:
+            for channel in ["req", "rsp", "data"]:
+                decisions = self._transfer_decisions["ring_to_ring"][direction][channel]
+                
+                for dir_code, decision in decisions.items():
+                    if decision:
+                        target_direction, target_dir_code = decision
+                        source_fifo = self.ring_buffers[direction][channel][dir_code]
+                        
+                        # 执行读取操作
+                        flit = source_fifo.read_output()
+                        if flit:
+                            self.stats["transferred_flits"][direction] += 1
+                            
+                            # 更新仲裁状态
+                            priority_map = {"ring_tr": "ring_tl", "ring_tl": "inject", "ring_td": "ring_tu", "ring_tu": "inject"}
+                            dir_priority_map = {"TR": "ring_tr", "TL": "ring_tl", "TD": "ring_td", "TU": "ring_tu"}
+                            current_priority = dir_priority_map[dir_code]
+                            self.arbitration_state[f"{direction}_priority"] = priority_map.get(current_priority, "inject")
+                            self.arbitration_state["last_arbitration"][direction] = cycle
+
+    def _execute_ring_to_eject_transfers(self, cycle: int) -> None:
+        """执行从ring缓冲区到eject队列的传输"""
+        for channel in ["req", "rsp", "data"]:
+            decision = self._transfer_decisions["ring_to_eject"][channel]
+            if decision:
+                direction, dir_code = decision
+                ring_fifo = self.ring_buffers[direction][channel][dir_code]
+                eject_fifo = self.eject_queues[channel]
+                
+                if FlowControlledTransfer.try_transfer(ring_fifo, eject_fifo):
+                    # 更新ejected flit的状态
+                    flit = eject_fifo.peek_output()
+                    if flit:
+                        flit.is_arrive = True
+                        flit.arrival_network_cycle = cycle
+                        self.stats["ejected_flits"][channel] += 1
+
+    def _find_best_direction_code(self, direction: str, channel: str) -> Optional[str]:
+        """找到最合适的方向代码进行inject"""
+        # 简化实现：选择第一个可用的方向
+        for dir_code in ["TR", "TL", "TD", "TU"]:
+            ring_fifo = self.ring_buffers[direction][channel][dir_code]
+            if ring_fifo.ready_signal():
+                return dir_code
+        return None
+
+    def _get_ring_transfer_target(self, direction: str, dir_code: str) -> Tuple[Optional[str], Optional[str]]:
+        """获取环形传输的目标方向和代码"""
+        # 简化实现：返回相同的方向和代码
+        # 实际实现需要根据拓扑结构计算
+        return direction, dir_code
+
+    def _should_eject_flit(self, flit: CrossRingFlit) -> bool:
+        """检查是否应该弹出flit"""
+        # 检查flit是否到达目标节点
+        if hasattr(flit, 'destination') and flit.destination == self.node_id:
+            return True
+        if hasattr(flit, 'dest_node_id') and flit.dest_node_id == self.node_id:
+            return True
+        return False
 
     def get_stats(self) -> Dict[str, Any]:
         """

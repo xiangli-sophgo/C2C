@@ -11,12 +11,13 @@ from typing import Dict, List, Any, Optional, Tuple
 import logging
 from collections import defaultdict
 
-from .config import CrossRingConfig
+from .config import CrossRingConfig, RoutingStrategy
 from .ip_interface import CrossRingIPInterface
 from .flit import CrossRingFlit, get_crossring_flit_pool_stats
 from .ring_bridge import RingBridge, CrossPointModule
 from .ring_directions import RingDirectionMapper, RingDirection
 from src.noc.utils.types import NodeId
+from src.noc.debug import RequestTracker, RequestState, FlitType
 
 
 class CrossRingModel:
@@ -76,6 +77,11 @@ class CrossRingModel:
 
         # 日志配置
         self.logger = logging.getLogger(f"CrossRingModel_{id(self)}")
+
+        # 调试和追踪系统
+        self.request_tracker = RequestTracker(network_frequency=1)  # 简化为1GHz = 1
+        self.debug_enabled = False
+        self.trace_packets = set()
 
         # 初始化所有组件
         self._setup_ip_interfaces()
@@ -199,24 +205,83 @@ class CrossRingModel:
         self.logger.debug(f"注册IP接口到全局registry: {key}")
 
     def step(self) -> None:
-        """执行一个仿真周期"""
+        """执行一个仿真周期（使用两阶段执行模型）"""
         self.cycle += 1
 
-        # 处理所有IP接口
-        for ip_interface in self.ip_interfaces.values():
-            ip_interface.step(self.cycle)
-
-        # 处理CrossRing网络（后续实现）
-        self._step_crossring_networks()
+        # 阶段1：组合逻辑阶段 - 所有组件计算传输决策
+        self._step_compute_phase()
+        
+        # 阶段2：时序逻辑阶段 - 所有组件执行传输和状态更新
+        self._step_update_phase()
 
         # 更新统计信息
         self._update_statistics()
 
+        # 调试功能
+        self.debug_func()
+
         # 定期输出调试信息
         if self.cycle % 1000 == 0:
             self.logger.debug(f"周期 {self.cycle}: {self.get_active_request_count()}个活跃请求")
-
+            
+    def _step_compute_phase(self) -> None:
+        """阶段1：组合逻辑阶段 - 所有组件计算传输决策，不修改状态"""
+        # 1. 所有IP接口计算阶段
+        for ip_interface in self.ip_interfaces.values():
+            if hasattr(ip_interface, 'step_compute_phase'):
+                ip_interface.step_compute_phase(self.cycle)
+            else:
+                # 兼容性：如果没有两阶段方法，调用compute阶段
+                ip_interface._compute_phase(self.cycle)
+        
+        # 2. CrossRing网络组件计算阶段
+        self._step_crossring_networks_compute_phase()
+        
+    def _step_update_phase(self) -> None:
+        """阶段2：时序逻辑阶段 - 所有组件执行传输和状态更新"""
+        # 1. 所有IP接口更新阶段
+        for ip_interface in self.ip_interfaces.values():
+            if hasattr(ip_interface, 'step_update_phase'):
+                ip_interface.step_update_phase(self.cycle)
+            else:
+                # 兼容性：如果没有两阶段方法，调用sync和update阶段
+                ip_interface._sync_phase(self.cycle)
+                ip_interface._update_phase(self.cycle)
+        
+        # 2. CrossRing网络组件更新阶段
+        self._step_crossring_networks_update_phase()
+        
+    def _step_crossring_networks_compute_phase(self) -> None:
+        """CrossRing网络组件计算阶段"""
+        # 1. 环形桥接系统计算阶段
+        if hasattr(self.ring_bridge, 'step_compute_phase'):
+            self.ring_bridge.step_compute_phase(self.cycle)
+        
+        # 2. 所有CrossRing节点计算阶段
+        for crossring_piece in self.crossring_pieces.values():
+            if hasattr(crossring_piece, 'step_compute_phase'):
+                crossring_piece.step_compute_phase(self.cycle)
+        
+    def _step_crossring_networks_update_phase(self) -> None:
+        """CrossRing网络组件更新阶段"""
+        # 1. 环形桥接系统更新阶段
+        if hasattr(self.ring_bridge, 'step_update_phase'):
+            self.ring_bridge.step_update_phase(self.cycle)
+        
+        # 2. 所有CrossRing节点更新阶段
+        for crossring_piece in self.crossring_pieces.values():
+            if hasattr(crossring_piece, 'step_update_phase'):
+                crossring_piece.step_update_phase(self.cycle)
+        
+        # 3. 执行传统的网络传输逻辑（保持兼容性）
+        self._step_crossring_networks_legacy()
+        
     def _step_crossring_networks(self) -> None:
+        """兼容性接口：使用两阶段执行模型"""
+        self._step_crossring_networks_compute_phase()
+        self._step_crossring_networks_update_phase()
+
+    def _step_crossring_networks_legacy(self) -> None:
         """
         处理CrossRing网络的完整传输逻辑 - 真实环形拓扑实现
 
@@ -284,7 +349,7 @@ class CrossRingModel:
                         break  # 注入失败，等待下个周期
 
     def _determine_ring_directions_four_way(self, source: NodeId, destination: NodeId) -> List[RingDirection]:
-        """确定路由方向（四方向系统）- XY维度顺序路由"""
+        """确定路由方向（四方向系统）- 支持XY和YX路由策略"""
         if source == destination:
             return []
 
@@ -293,11 +358,26 @@ class CrossRingModel:
 
         directions = []
 
-        # XY路由：先水平后垂直
-        if horizontal_direction:
-            directions.append(horizontal_direction)
-        if vertical_direction:
-            directions.append(vertical_direction)
+        # 根据路由策略确定维度顺序
+        if self.config.routing_strategy == RoutingStrategy.XY:
+            # XY路由：先水平后垂直
+            if horizontal_direction:
+                directions.append(horizontal_direction)
+            if vertical_direction:
+                directions.append(vertical_direction)
+        elif self.config.routing_strategy == RoutingStrategy.YX:
+            # YX路由：先垂直后水平
+            if vertical_direction:
+                directions.append(vertical_direction)
+            if horizontal_direction:
+                directions.append(horizontal_direction)
+        elif self.config.routing_strategy == RoutingStrategy.ADAPTIVE:
+            # 自适应路由：根据拥塞情况选择（未来实现）
+            # 目前回退到XY路由
+            if horizontal_direction:
+                directions.append(horizontal_direction)
+            if vertical_direction:
+                directions.append(vertical_direction)
 
         return directions
 
@@ -306,7 +386,7 @@ class CrossRingModel:
         if not directions:
             return False
 
-        # 选择第一个方向进行注入（XY路由）
+        # 选择第一个方向进行注入（根据路由策略确定）
         target_direction = directions[0]
         direction_str = target_direction.value
 
@@ -392,23 +472,25 @@ class CrossRingModel:
     def _get_nodes_in_ring_direction(self, direction: RingDirection) -> List[NodeId]:
         """获取指定方向上的环形节点列表"""
         if direction in [RingDirection.TL, RingDirection.TR]:
-            # 水平环：按行组织
+            # 水平环：按行组织，但每行独立形成环
             nodes = []
             for row in range(self.config.num_row):
                 row_nodes = [row * self.config.num_col + col for col in range(self.config.num_col)]
                 if direction == RingDirection.TL:
                     row_nodes.reverse()  # 逆时针
                 nodes.extend(row_nodes)
-            return nodes
+            # 过滤掉超出范围的节点
+            return [node for node in nodes if node < self.config.num_nodes]
         else:
-            # 垂直环：按列组织
+            # 垂直环：按列组织，每列独立形成环
             nodes = []
             for col in range(self.config.num_col):
                 col_nodes = [row * self.config.num_col + col for row in range(self.config.num_row)]
                 if direction == RingDirection.TU:
                     col_nodes.reverse()  # 向上
                 nodes.extend(col_nodes)
-            return nodes
+            # 过滤掉超出范围的节点
+            return [node for node in nodes if node < self.config.num_nodes]
 
     def _try_move_flit_in_ring_direction(self, current_piece: Dict, next_piece: Dict, direction_str: str, channel: str) -> None:
         """尝试在指定方向的环形中移动flit"""
@@ -482,7 +564,7 @@ class CrossRingModel:
         return node_id == flit.destination
 
     def _should_transfer_to_another_direction(self, node_id: NodeId, flit: Any, current_direction: str) -> bool:
-        """判断是否需要转换到另一个方向（维度转换）"""
+        """判断是否需要转换到另一个方向（维度转换）- 支持XY和YX路由"""
         if not hasattr(flit, "remaining_directions") or not flit.remaining_directions:
             return False
 
@@ -492,13 +574,17 @@ class CrossRingModel:
 
         if current_direction in ["TL", "TR"]:
             # 水平方向：检查是否到达目标列
+            # 对于XY路由：到达目标列且需要垂直移动时转换
+            # 对于YX路由：不应该在这里转换，因为垂直应该先完成
             return node_x == dst_x and node_y != dst_y
-        else:
+        else:  # 垂直方向 ["TU", "TD"]
             # 垂直方向：检查是否到达目标行
+            # 对于XY路由：不应该在这里转换，因为水平应该先完成
+            # 对于YX路由：到达目标行且需要水平移动时转换
             return node_y == dst_y and node_x != dst_x
 
     def _try_dimension_turning(self, piece: Dict, flit: Any, from_direction: str, channel: str) -> bool:
-        """尝试维度转换"""
+        """尝试维度转换 - 支持XY和YX路由的双向转换"""
         if not hasattr(flit, "remaining_directions") or not flit.remaining_directions:
             return False
 
@@ -508,12 +594,12 @@ class CrossRingModel:
         # 使用交叉点模块进行维度转换
         cross_point = piece["cross_point"]
 
-        # 确定转换类型
+        # 确定转换类型（支持双向转换）
         if from_direction in ["TL", "TR"] and to_direction in ["TU", "TD"]:
-            # 水平到垂直
+            # 水平到垂直转换（XY路由）
             success = cross_point.process_dimension_turning(flit, "horizontal", "vertical", self.cycle)
         elif from_direction in ["TU", "TD"] and to_direction in ["TL", "TR"]:
-            # 垂直到水平
+            # 垂直到水平转换（YX路由）
             success = cross_point.process_dimension_turning(flit, "vertical", "horizontal", self.cycle)
         else:
             return False
@@ -1165,6 +1251,184 @@ class CrossRingModel:
     def __repr__(self) -> str:
         """字符串表示"""
         return f"CrossRingModel({self.config.config_name}, " f"{self.config.num_row}x{self.config.num_col}, " f"cycle={self.cycle}, " f"active_requests={self.get_active_request_count()})"
+    
+    # ========== 统一接口方法（用于兼容性） ==========
+    
+    def initialize_network(self) -> None:
+        """初始化网络（统一接口）"""
+        self._setup_ip_interfaces()
+        self._setup_crossring_networks()
+        print(f"CrossRing网络初始化完成: {self.config.num_row}x{self.config.num_col}")
+    
+    def advance_cycle(self) -> None:
+        """推进一个周期（统一接口）"""
+        self.step()
+    
+    def inject_packet(self, src_node: NodeId, dst_node: NodeId, 
+                     op_type: str = "R", burst_size: int = 4, 
+                     cycle: int = None, packet_id: str = None) -> bool:
+        """注入包（统一接口）"""
+        if cycle is None:
+            cycle = self.cycle
+        
+        # 生成包ID
+        if packet_id is None:
+            packet_id = f"pkt_{src_node}_{dst_node}_{op_type}_{cycle}"
+        
+        # 开始追踪请求
+        if self.debug_enabled or packet_id in self.trace_packets:
+            self.request_tracker.start_request(packet_id, src_node, dst_node, op_type, burst_size, cycle)
+        
+        # 使用现有的inject_test_traffic方法
+        flit_ids = self.inject_test_traffic(src_node, dst_node, op_type, 1, burst_size)
+        
+        if len(flit_ids) > 0 and self.debug_enabled:
+            self.request_tracker.update_request_state(packet_id, RequestState.INJECTED, cycle)
+            
+        return len(flit_ids) > 0
+    
+    def get_completed_packets(self) -> List[Dict[str, Any]]:
+        """获取已完成的包（统一接口）"""
+        # 简化实现，返回空列表
+        # 在真实实现中，需要跟踪已完成的包
+        return []
+    
+    def get_network_statistics(self) -> Dict[str, Any]:
+        """获取网络统计（统一接口）"""
+        return {
+            "cycle": self.cycle,
+            "total_packets_injected": 0,  # 需要真实统计
+            "total_packets_completed": 0,
+            "active_packets": self.get_active_request_count(),
+            "avg_latency": 0.0,
+            "avg_hops": 0.0,
+            "utilization": 0.0,
+            "throughput": 0.0,
+        }
+    
+    def get_node_count(self) -> int:
+        """获取节点数量（统一接口）"""
+        return self.config.num_nodes
+    
+    # ========== 调试功能接口 ==========
+    
+    def enable_debug(self, level: int = 1, trace_packets: List[str] = None):
+        """启用调试模式
+        
+        Args:
+            level: 调试级别 (1-3)
+            trace_packets: 要追踪的特定包ID列表
+        """
+        self.debug_enabled = True
+        self.request_tracker.enable_debug(level, trace_packets)
+        
+        if trace_packets:
+            self.trace_packets.update(trace_packets)
+            
+        self.logger.info(f"调试模式已启用，级别: {level}")
+        if trace_packets:
+            self.logger.info(f"追踪包: {trace_packets}")
+    
+    def track_packet(self, packet_id: str):
+        """添加要追踪的包"""
+        self.trace_packets.add(packet_id)
+        self.request_tracker.track_packet(packet_id)
+    
+    def debug_func(self):
+        """主调试函数，每个周期调用"""
+        if not self.debug_enabled:
+            return
+            
+        # 打印网络状态
+        self.request_tracker.print_network_state(self.cycle)
+        
+        # 追踪特定包的详细信息
+        if self.trace_packets:
+            for packet_id in self.trace_packets:
+                self._print_packet_trace(packet_id)
+    
+    def _print_packet_trace(self, packet_id: str):
+        """打印特定包的追踪信息"""
+        lifecycle = self.request_tracker.get_request_status(packet_id)
+        if not lifecycle:
+            return
+            
+        print(f"\n=== 包 {packet_id} 追踪信息 (周期 {self.cycle}) ===")
+        print(f"状态: {lifecycle.current_state.value}")
+        print(f"源: {lifecycle.source} -> 目标: {lifecycle.destination}")
+        print(f"操作: {lifecycle.op_type}, 突发: {lifecycle.burst_size}")
+        
+        if lifecycle.current_state != RequestState.CREATED:
+            print(f"延迟: {self.cycle - lifecycle.injected_cycle} 周期")
+            
+        # 显示当前在网络中的位置
+        self._print_packet_network_positions(packet_id)
+    
+    def _print_packet_network_positions(self, packet_id: str):
+        """打印包在网络中的当前位置"""
+        found_positions = []
+        
+        # 检查所有节点的inject/eject队列和ring缓冲区
+        for node_id, piece in self.crossring_pieces.items():
+            # 检查inject队列
+            for channel in ["req", "rsp", "data"]:
+                for flit in piece["inject_queues"][channel]:
+                    if hasattr(flit, 'packet_id') and flit.packet_id == packet_id:
+                        found_positions.append(f"节点{node_id}-inject-{channel}")
+                
+                # 检查eject队列
+                for flit in piece["eject_queues"][channel]:
+                    if hasattr(flit, 'packet_id') and flit.packet_id == packet_id:
+                        found_positions.append(f"节点{node_id}-eject-{channel}")
+                
+                # 检查ring缓冲区
+                for direction in ["TL", "TR", "TU", "TD"]:
+                    for flit in piece["ring_buffers"][direction][channel]:
+                        if hasattr(flit, 'packet_id') and flit.packet_id == packet_id:
+                            found_positions.append(f"节点{node_id}-ring-{direction}-{channel}")
+        
+        if found_positions:
+            print(f"当前位置: {', '.join(found_positions)}")
+        else:
+            print("未在网络中找到此包")
+    
+    def validate_traffic_correctness(self) -> Dict[str, Any]:
+        """验证流量的正确性"""
+        stats = self.request_tracker.get_statistics()
+        
+        validation_result = {
+            "total_requests": stats["total_requests"],
+            "completed_requests": stats["completed_requests"],
+            "failed_requests": stats["failed_requests"],
+            "completion_rate": stats["completed_requests"] / max(1, stats["total_requests"]) * 100,
+            "response_errors": stats["response_errors"],
+            "data_errors": stats["data_errors"],
+            "avg_latency": stats["avg_latency"],
+            "max_latency": stats["max_latency"],
+            "is_correct": stats["response_errors"] == 0 and stats["data_errors"] == 0
+        }
+        
+        return validation_result
+    
+    def print_debug_report(self):
+        """打印调试报告"""
+        if not self.debug_enabled:
+            print("调试模式未启用")
+            return
+            
+        self.request_tracker.print_final_report()
+        
+        # 打印验证结果
+        validation = self.validate_traffic_correctness()
+        print(f"\n流量正确性验证:")
+        print(f"  完成率: {validation['completion_rate']:.1f}%")
+        print(f"  响应错误: {validation['response_errors']}")
+        print(f"  数据错误: {validation['data_errors']}")
+        print(f"  结果: {'正确' if validation['is_correct'] else '有错误'}")
+    
+    def get_debug_statistics(self) -> Dict[str, Any]:
+        """获取调试统计信息"""
+        return self.request_tracker.get_statistics()
 
 
 def create_crossring_model(config_name: str = "default", num_row: int = 5, num_col: int = 4, **config_kwargs) -> CrossRingModel:
