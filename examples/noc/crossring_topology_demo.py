@@ -20,6 +20,7 @@ import time
 import logging
 from typing import List, Dict, Tuple, Any
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.noc.crossring.topology import CrossRingTopology
 from src.noc.crossring.config import CrossRingConfig
 from src.noc.utils.types import RoutingStrategy, TopologyType

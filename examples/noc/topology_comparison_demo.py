@@ -12,7 +12,7 @@ import time
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from examples.unified_noc_simulation import UnifiedNoCSimulation, create_sample_traffic_file
+from examples.noc.unified_noc_simulation import UnifiedNoCSimulation, create_sample_traffic_file
 
 
 def run_comparison(topology_size=(4, 4), max_cycles=1000, traffic_requests=50):

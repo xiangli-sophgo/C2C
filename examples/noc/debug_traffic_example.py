@@ -213,8 +213,8 @@ def main():
     validator.setup_model(topology_size=(4, 4))
 
     # 设置流量调度器
-    traffic_file_path = r"traffic_data"
-    traffic_files = ["samle_traffic.txt"]
+    traffic_file_path = r"../traffic_data/"
+    traffic_files = ["crossring_sample.txt"]
 
     # 检查流量文件是否存在
     test_file = os.path.join(traffic_file_path, traffic_files[0])

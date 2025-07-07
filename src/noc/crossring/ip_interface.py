@@ -121,9 +121,9 @@ class CrossRingIPInterface(BaseIPInterface):
         if flit.req_type == "read":
             # 检查是否已经在tracker中（避免重复添加）
             for existing_req in self.rn_tracker["read"]:
-                if hasattr(existing_req, 'packet_id') and hasattr(flit, 'packet_id') and existing_req.packet_id == flit.packet_id:
+                if hasattr(existing_req, "packet_id") and hasattr(flit, "packet_id") and existing_req.packet_id == flit.packet_id:
                     return True  # 已经预占过资源，直接返回成功
-            
+
             # 检查读资源：tracker + rdb + reserve
             rdb_available = self.rn_rdb_count >= flit.burst_length
             tracker_available = self.rn_tracker_count["read"] > 0
@@ -142,9 +142,9 @@ class CrossRingIPInterface(BaseIPInterface):
         elif flit.req_type == "write":
             # 检查是否已经在tracker中（避免重复添加）
             for existing_req in self.rn_tracker["write"]:
-                if hasattr(existing_req, 'packet_id') and hasattr(flit, 'packet_id') and existing_req.packet_id == flit.packet_id:
+                if hasattr(existing_req, "packet_id") and hasattr(flit, "packet_id") and existing_req.packet_id == flit.packet_id:
                     return True  # 已经预占过资源，直接返回成功
-            
+
             # 检查写资源：tracker + wdb
             wdb_available = self.rn_wdb_count >= flit.burst_length
             tracker_available = self.rn_tracker_count["write"] > 0

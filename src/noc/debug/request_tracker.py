@@ -65,6 +65,9 @@ class RequestLifecycle:
     data_valid: bool = False
     data_integrity_ok: bool = False
     
+    # 报告标志
+    reported: bool = False
+    
     def get_total_latency(self) -> int:
         """获取总延迟"""
         if self.completed_cycle > 0:

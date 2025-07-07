@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Dict, List, Any, Optional, Tuple
 import logging
 from collections import defaultdict
+import time
 
 from .config import CrossRingConfig, RoutingStrategy
 from .ip_interface import CrossRingIPInterface
@@ -18,9 +19,10 @@ from .ring_bridge import RingBridge, CrossPointModule
 from .ring_directions import RingDirectionMapper, RingDirection
 from src.noc.utils.types import NodeId
 from src.noc.debug import RequestTracker, RequestState, FlitType
+from src.noc.base.model import BaseNoCModel
 
 
-class CrossRingModel:
+class CrossRingModel(BaseNoCModel):
     """
     CrossRing主模型类。
 
@@ -39,8 +41,8 @@ class CrossRingModel:
         Args:
             config: CrossRing配置实例
         """
-        self.config = config
-        self.cycle = 0
+        # 调用父类初始化
+        super().__init__(config, model_name="CrossRingModel")
 
         # IP接口管理
         self.ip_interfaces: Dict[str, CrossRingIPInterface] = {}
@@ -219,6 +221,9 @@ class CrossRingModel:
 
         # 调试功能
         self.debug_func()
+
+        # 简化的包完成模拟逻辑（用于demo）
+        self._simulate_packet_completion()
 
         # 定期输出调试信息
         if self.cycle % 1000 == 0:
@@ -1160,7 +1165,8 @@ class CrossRingModel:
         print("\nIP接口状态:")
         for ip_key, ip_status in status.items():
             print(
-                f"  {ip_key}: RN({ip_status['rn_read_active']}R+{ip_status['rn_write_active']}W), " + f"SN({ip_status['sn_active']}), 重试({ip_status['read_retries']}R+{ip_status['write_retries']}W)"
+                f"  {ip_key}: RN({ip_status['rn_read_active']}R+{ip_status['rn_write_active']}W), "
+                + f"SN({ip_status['sn_active']}), 重试({ip_status['read_retries']}R+{ip_status['write_retries']}W)"
             )
 
     def inject_test_traffic(self, source: NodeId, destination: NodeId, req_type: str, count: int = 1, burst_length: int = 4) -> List[str]:
@@ -1250,7 +1256,12 @@ class CrossRingModel:
 
     def __repr__(self) -> str:
         """字符串表示"""
-        return f"CrossRingModel({self.config.config_name}, " f"{self.config.num_row}x{self.config.num_col}, " f"cycle={self.cycle}, " f"active_requests={self.get_active_request_count()})"
+        return (
+            f"CrossRingModel({self.config.config_name}, "
+            f"{self.config.num_row}x{self.config.num_col}, "
+            f"cycle={self.cycle}, "
+            f"active_requests={self.get_active_request_count()})"
+        )
 
     # ========== 统一接口方法（用于兼容性） ==========
 
@@ -1287,9 +1298,52 @@ class CrossRingModel:
 
     def get_completed_packets(self) -> List[Dict[str, Any]]:
         """获取已完成的包（统一接口）"""
-        # 简化实现，返回空列表
-        # 在真实实现中，需要跟踪已完成的包
-        return []
+        completed_packets = []
+
+        # 从请求跟踪器中获取已完成的包
+        if hasattr(self, "request_tracker") and self.request_tracker:
+            for packet_id, lifecycle in self.request_tracker.completed_requests.items():
+                if lifecycle.current_state == RequestState.COMPLETED and not lifecycle.reported:
+                    completed_packets.append(
+                        {
+                            "packet_id": packet_id,
+                            "source": lifecycle.source,
+                            "destination": lifecycle.destination,
+                            "op_type": lifecycle.op_type,
+                            "burst_size": lifecycle.burst_size,
+                            "injected_cycle": lifecycle.injected_cycle,
+                            "completed_cycle": lifecycle.completed_cycle,
+                            "latency": lifecycle.completed_cycle - lifecycle.injected_cycle if lifecycle.completed_cycle else 0,
+                            "data_flit_count": lifecycle.burst_size if lifecycle.op_type == "R" else 0,
+                        }
+                    )
+                    # 标记为已报告
+                    lifecycle.reported = True
+
+        return completed_packets
+
+    def _simulate_packet_completion(self):
+        """简化的包完成模拟逻辑（用于demo）"""
+        if not hasattr(self, "request_tracker") or not self.request_tracker:
+            return
+
+        # 模拟延迟：假设包在注入后10-20个周期完成
+        # 使用列表拷贝避免在迭代时修改字典
+        active_packets = list(self.request_tracker.active_requests.items())
+        for packet_id, lifecycle in active_packets:
+            if lifecycle.current_state == RequestState.INJECTED:
+                latency = self.cycle - lifecycle.injected_cycle
+
+                # 简单的完成条件：延迟达到10-20周期（基于距离和类型）
+                expected_latency = 10 + (abs(lifecycle.source - lifecycle.destination) * 2)
+                if lifecycle.op_type == "R":
+                    expected_latency += 5  # 读操作需要更长时间
+
+                if latency >= expected_latency:
+                    # 标记为完成
+                    self.request_tracker.update_request_state(packet_id, RequestState.COMPLETED, self.cycle)
+                    lifecycle.completed_cycle = self.cycle
+                    self.logger.debug(f"包 {packet_id} 在周期 {self.cycle} 完成，延迟 {latency} 周期")
 
     def get_network_statistics(self) -> Dict[str, Any]:
         """获取网络统计（统一接口）"""
@@ -1361,6 +1415,7 @@ class CrossRingModel:
 
         # 显示当前在网络中的位置
         self._print_packet_network_positions(packet_id)
+        time.sleep(0.3)
 
     def _print_packet_network_positions(self, packet_id: str):
         """打印包在网络中的当前位置"""
@@ -1427,6 +1482,34 @@ class CrossRingModel:
     def get_debug_statistics(self) -> Dict[str, Any]:
         """获取调试统计信息"""
         return self.request_tracker.get_statistics()
+
+    # ========== 实现BaseNoCModel抽象方法 ==========
+
+    def _setup_topology_network(self) -> None:
+        """设置拓扑网络（拓扑特定）"""
+        # CrossRing拓扑已在__init__中设置
+        pass
+
+    def _step_topology_network(self) -> None:
+        """拓扑网络步进（拓扑特定）"""
+        # 使用现有的advance_cycle逻辑
+        pass
+
+    def _get_topology_info(self) -> Dict[str, Any]:
+        """获取拓扑信息（拓扑特定）"""
+        return {
+            "topology_type": "CrossRing",
+            "num_row": self.config.num_row,
+            "num_col": self.config.num_col,
+            "total_nodes": self.config.num_nodes,
+            "ring_directions": ["TL", "TR", "TU", "TD"],
+            "channels": ["req", "rsp", "data"],
+        }
+
+    def _calculate_path(self, source: NodeId, destination: NodeId) -> List[NodeId]:
+        """计算路径（拓扑特定）"""
+        # 使用现有的路径计算逻辑
+        return self._calculate_crossring_path(source, destination)
 
 
 def create_crossring_model(config_name: str = "default", num_row: int = 5, num_col: int = 4, **config_kwargs) -> CrossRingModel:

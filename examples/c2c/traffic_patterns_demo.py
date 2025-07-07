@@ -125,7 +125,11 @@ class TrafficGenerator:
                 try:
                     # 目标芯片准备接收
                     recv_result = self.chips[target].cdma_receive(
-                        dst_addr=0x10000000 + random.randint(0, 0x1000000), dst_shape=(512, 256), dst_mem_type=MemoryType.GMEM, src_chip_id="master", data_type="float32"  # 模型参数
+                        dst_addr=0x10000000 + random.randint(0, 0x1000000),
+                        dst_shape=(512, 256),
+                        dst_mem_type=MemoryType.GMEM,
+                        src_chip_id="master",
+                        data_type="float32",  # 模型参数
                     )
 
                     # 主控芯片发送数据
@@ -157,7 +161,9 @@ class TrafficGenerator:
         while time.time() - start_time < duration:
             # 主控芯片准备接收聚合数据
             try:
-                recv_result = self.chips["master"].cdma_receive(dst_addr=0x30000000, dst_shape=(256, 128), dst_mem_type=MemoryType.GMEM, src_chip_id="compute_0", data_type="float32")  # 主要接收者
+                recv_result = self.chips["master"].cdma_receive(
+                    dst_addr=0x30000000, dst_shape=(256, 128), dst_mem_type=MemoryType.GMEM, src_chip_id="compute_0", data_type="float32"
+                )  # 主要接收者
 
                 # 所有计算芯片发送梯度到主控芯片
                 gather_sources = ["compute_0", "compute_1", "compute_2", "compute_3"]
@@ -205,11 +211,17 @@ class TrafficGenerator:
                     try:
                         # 计算芯片准备接收数据批次
                         recv_result = self.chips[compute].cdma_receive(
-                            dst_addr=0x50000000 + i * 0x200000, dst_shape=(128, 64, 4), dst_mem_type=MemoryType.L2M, src_chip_id=storage, data_type="float32"  # 3D数据批次  # 使用L2缓存
+                            dst_addr=0x50000000 + i * 0x200000,
+                            dst_shape=(128, 64, 4),
+                            dst_mem_type=MemoryType.L2M,
+                            src_chip_id=storage,
+                            data_type="float32",  # 3D数据批次  # 使用L2缓存
                         )
 
                         # 存储芯片发送不同的数据批次
-                        send_result = self.chips[storage].cdma_send(src_addr=0x60000000 + i * 0x100000, src_shape=(128, 64, 4), dst_chip_id=compute, src_mem_type=MemoryType.GMEM, data_type="float32")
+                        send_result = self.chips[storage].cdma_send(
+                            src_addr=0x60000000 + i * 0x100000, src_shape=(128, 64, 4), dst_chip_id=compute, src_mem_type=MemoryType.GMEM, data_type="float32"
+                        )
 
                         success = recv_result.success and send_result.success
                         if success:
@@ -269,7 +281,12 @@ class TrafficGenerator:
         pattern = TrafficPattern.PIPELINE
         start_time = time.time()
 
-        pipeline_stages = [("storage_0", "compute_0", "数据加载"), ("compute_0", "compute_1", "特征提取"), ("compute_1", "compute_2", "模型推理"), ("compute_2", "io_chip", "结果输出")]
+        pipeline_stages = [
+            ("storage_0", "compute_0", "数据加载"),
+            ("compute_0", "compute_1", "特征提取"),
+            ("compute_1", "compute_2", "模型推理"),
+            ("compute_2", "io_chip", "结果输出"),
+        ]
 
         stage_index = 0
 
@@ -278,10 +295,14 @@ class TrafficGenerator:
 
             try:
                 # 准备接收
-                recv_result = self.chips[dst].cdma_receive(dst_addr=0x90000000 + stage_index * 0x100000, dst_shape=(256, 128), dst_mem_type=MemoryType.GMEM, src_chip_id=src, data_type="float32")
+                recv_result = self.chips[dst].cdma_receive(
+                    dst_addr=0x90000000 + stage_index * 0x100000, dst_shape=(256, 128), dst_mem_type=MemoryType.GMEM, src_chip_id=src, data_type="float32"
+                )
 
                 # 发送数据
-                send_result = self.chips[src].cdma_send(src_addr=0xA0000000 + stage_index * 0x100000, src_shape=(256, 128), dst_chip_id=dst, src_mem_type=MemoryType.GMEM, data_type="float32")
+                send_result = self.chips[src].cdma_send(
+                    src_addr=0xA0000000 + stage_index * 0x100000, src_shape=(256, 128), dst_chip_id=dst, src_mem_type=MemoryType.GMEM, data_type="float32"
+                )
 
                 success = recv_result.success and send_result.success
                 if success:
@@ -318,7 +339,9 @@ class TrafficGenerator:
 
                 try:
                     # 准备接收
-                    recv_result = self.chips[dst].cdma_receive(dst_addr=0xB0000000 + i * 0x50000, dst_shape=(128, 64), dst_mem_type=MemoryType.GMEM, src_chip_id=src, data_type="float32")
+                    recv_result = self.chips[dst].cdma_receive(
+                        dst_addr=0xB0000000 + i * 0x50000, dst_shape=(128, 64), dst_mem_type=MemoryType.GMEM, src_chip_id=src, data_type="float32"
+                    )
 
                     # 发送数据（环形传递）
                     send_result = self.chips[src].cdma_send(

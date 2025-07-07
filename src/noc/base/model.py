@@ -15,6 +15,7 @@ from collections import defaultdict
 from .flit import BaseFlit, FlitPool
 from .ip_interface import BaseIPInterface
 from src.noc.utils.types import NodeId
+from src.noc.debug import RequestTracker, RequestState, FlitType
 
 
 class BaseNoCModel(ABC):
@@ -80,6 +81,9 @@ class BaseNoCModel(ABC):
             "log_interval": 1000,
             "detailed_stats": False,
         }
+        
+        # 请求追踪器 - 包含完整的flit追踪功能
+        self.request_tracker = RequestTracker(network_frequency=getattr(config, 'network_frequency', 1))
 
         self.logger.info(f"NoC模型初始化: {model_name}")
 
@@ -463,6 +467,130 @@ class BaseNoCModel(ABC):
         self.debug_config["detailed_stats"] = detailed_stats
 
         self.logger.info(f"启用调试跟踪: flits={trace_flits}, channels={trace_channels}")
+        
+    # ========== 请求和Flit追踪相关方法 ==========
+    
+    def start_request_tracking(self, packet_id: str, source: int, destination: int, 
+                              op_type: str, burst_size: int) -> None:
+        """开始追踪一个新请求"""
+        self.request_tracker.start_request(packet_id, source, destination, op_type, burst_size, self.cycle)
+        
+        if self.debug_config["trace_flits"]:
+            self.logger.debug(f"开始追踪请求: {packet_id}")
+    
+    def track_request_flit(self, packet_id: str, flit, node_id: int = None) -> None:
+        """追踪请求flit对象"""
+        # 添加flit到RequestLifecycle中
+        if packet_id in self.request_tracker.active_requests:
+            self.request_tracker.active_requests[packet_id].request_flits.append(flit)
+        
+        # 追踪flit位置
+        if node_id is not None:
+            self.request_tracker.track_flit_position(packet_id, FlitType.REQUEST, node_id, self.cycle, flit)
+        
+        if self.debug_config["trace_flits"]:
+            self.logger.debug(f"追踪请求flit: {packet_id} @ 周期{self.cycle}")
+    
+    def track_response_flit(self, packet_id: str, flit, node_id: int = None) -> None:
+        """追踪响应flit对象"""
+        # 添加flit到RequestLifecycle中
+        if packet_id in self.request_tracker.active_requests:
+            self.request_tracker.active_requests[packet_id].response_flits.append(flit)
+        elif packet_id in self.request_tracker.completed_requests:
+            self.request_tracker.completed_requests[packet_id].response_flits.append(flit)
+        
+        # 追踪flit位置
+        if node_id is not None:
+            self.request_tracker.track_flit_position(packet_id, FlitType.RESPONSE, node_id, self.cycle, flit)
+        
+        if self.debug_config["trace_flits"]:
+            self.logger.debug(f"追踪响应flit: {packet_id} @ 周期{self.cycle}")
+    
+    def track_data_flit(self, packet_id: str, flit, node_id: int = None) -> None:
+        """追踪数据flit对象"""
+        # 添加flit到RequestLifecycle中
+        if packet_id in self.request_tracker.active_requests:
+            self.request_tracker.active_requests[packet_id].data_flits.append(flit)
+        elif packet_id in self.request_tracker.completed_requests:
+            self.request_tracker.completed_requests[packet_id].data_flits.append(flit)
+        
+        # 追踪flit位置
+        if node_id is not None:
+            self.request_tracker.track_flit_position(packet_id, FlitType.DATA, node_id, self.cycle, flit)
+        
+        if self.debug_config["trace_flits"]:
+            self.logger.debug(f"追踪数据flit: {packet_id} @ 周期{self.cycle}")
+    
+    def update_request_state(self, packet_id: str, new_state: RequestState, **kwargs) -> None:
+        """更新请求状态"""
+        self.request_tracker.update_request_state(packet_id, new_state, self.cycle, **kwargs)
+        
+        if self.debug_config["trace_flits"]:
+            self.logger.debug(f"更新请求状态: {packet_id} -> {new_state.value}")
+    
+    def print_packet_flit_status(self, packet_id: str) -> None:
+        """打印指定包的详细状态，包括flit信息"""
+        lifecycle = self.request_tracker.get_request_status(packet_id)
+        if not lifecycle:
+            print(f"  包 {packet_id} 未找到")
+            return
+            
+        print(f"  包 {packet_id} 的详细状态:")
+        print(f"    状态: {lifecycle.current_state.value}")
+        print(f"    源: {lifecycle.source} -> 目标: {lifecycle.destination}")
+        print(f"    操作: {lifecycle.op_type}, 突发长度: {lifecycle.burst_size}")
+        
+        # 显示flit信息（利用flit的__repr__方法）
+        if lifecycle.request_flits:
+            print(f"    请求flits ({len(lifecycle.request_flits)}):")
+            for i, flit in enumerate(lifecycle.request_flits):
+                print(f"      [{i}] {flit}")
+        
+        if lifecycle.response_flits:
+            print(f"    响应flits ({len(lifecycle.response_flits)}):")
+            for i, flit in enumerate(lifecycle.response_flits):
+                print(f"      [{i}] {flit}")
+        
+        if lifecycle.data_flits:
+            print(f"    数据flits ({len(lifecycle.data_flits)}):")
+            for i, flit in enumerate(lifecycle.data_flits):
+                print(f"      [{i}] {flit}")
+        
+        # 显示路径信息
+        if lifecycle.request_path:
+            print(f"    请求路径: {lifecycle.request_path[-3:]}...")  # 显示最后3个位置
+        if lifecycle.data_path:
+            print(f"    数据路径: {lifecycle.data_path[-3:]}...")
+    
+    def get_packet_flits(self, packet_id: str) -> Dict[str, List[Any]]:
+        """获取指定包的所有flit"""
+        lifecycle = self.request_tracker.get_request_status(packet_id)
+        if lifecycle:
+            return {
+                'request_flits': lifecycle.request_flits,
+                'response_flits': lifecycle.response_flits,
+                'data_flits': lifecycle.data_flits
+            }
+        return {'request_flits': [], 'response_flits': [], 'data_flits': []}
+    
+    def get_all_tracked_packets(self) -> List[str]:
+        """获取所有被追踪的packet_id"""
+        active_ids = list(self.request_tracker.active_requests.keys())
+        completed_ids = list(self.request_tracker.completed_requests.keys())
+        return active_ids + completed_ids
+    
+    def get_request_tracker_statistics(self) -> Dict[str, Any]:
+        """获取请求追踪器统计信息"""
+        return self.request_tracker.get_statistics()
+    
+    def print_request_tracker_report(self) -> None:
+        """打印请求追踪器完整报告"""
+        self.request_tracker.print_final_report()
+    
+    def clear_request_tracker(self) -> None:
+        """清空请求追踪器"""
+        self.request_tracker.reset()
+        self.logger.info("请求追踪器已清空")
 
     def cleanup(self) -> None:
         """清理资源"""
