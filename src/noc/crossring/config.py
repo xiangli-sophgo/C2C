@@ -16,6 +16,7 @@ from src.noc.utils.types import TopologyType, ValidationResult
 
 class RoutingStrategy(Enum):
     """CrossRing路由策略枚举"""
+
     XY = "XY"  # 先水平环后垂直环
     YX = "YX"  # 先垂直环后水平环
     ADAPTIVE = "ADAPTIVE"  # 自适应路由（未来扩展）
@@ -28,7 +29,7 @@ class BasicConfiguration:
     burst: int = 4
     network_frequency: int = 2.0
     slice_per_link: int = 8
-    
+
     # 路由策略配置
     routing_strategy: str = "XY"  # 默认使用XY路由
 
@@ -41,7 +42,7 @@ class BasicConfiguration:
     inject_buffer_depth: int = 8
     eject_buffer_depth: int = 8
     crosspoint_buffer_depth: int = 4
-    
+
     # 仲裁配置（用于支持不同路由策略）
     arbitration_timeout: int = 10  # 仲裁超时周期
 
@@ -162,13 +163,10 @@ class CrossRingConfig(BaseNoCConfig):
         self.tag_config = TagConfiguration()
         self.tracker_config = TrackerConfiguration()
         self.latency_config = LatencyConfiguration()
-        
-        # 添加网络频率属性（兼容TrafficScheduler）
-        self.NETWORK_FREQUENCY = int(self.basic_config.network_frequency * 1000000000)  # Convert to Hz
-        
+
         # 路由策略属性
         self.routing_strategy = RoutingStrategy(self.basic_config.routing_strategy)
-        self.arbitration_timeout = getattr(self.basic_config, 'arbitration_timeout', 10)
+        self.arbitration_timeout = getattr(self.basic_config, "arbitration_timeout", 10)
 
         # 通道规格
         self.channel_spec = {
@@ -329,9 +327,7 @@ class CrossRingConfig(BaseNoCConfig):
                 errors.append(f"SN Tracker OSTD必须为正数 (sn_ddr_r_tracker_ostd={tracker.sn_ddr_r_tracker_ostd}, sn_l2m_r_tracker_ostd={tracker.sn_l2m_r_tracker_ostd})")
             # 缓冲区大小一致性验证
             if hasattr(self, "rn_rdb_size") and self.rn_rdb_size != tracker.rn_r_tracker_ostd * self.basic_config.burst:
-                errors.append(
-                    f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (rn_rdb_size={self.rn_rdb_size}, rn_r_tracker_ostd={tracker.rn_r_tracker_ostd}, burst={self.basic_config.burst})"
-                )
+                errors.append(f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (rn_rdb_size={self.rn_rdb_size}, rn_r_tracker_ostd={tracker.rn_r_tracker_ostd}, burst={self.basic_config.burst})")
         elif isinstance(tracker, dict):
             rn_r_ostd = tracker.get("rn_r_tracker_ostd", 64)
             rn_w_ostd = tracker.get("rn_w_tracker_ostd", 32)
@@ -419,9 +415,9 @@ class CrossRingConfig(BaseNoCConfig):
         for key, value in kwargs.items():
             if hasattr(self.basic_config, key):
                 setattr(self.basic_config, key, value)
-        
+
         # 如果更新了路由策略，需要重新设置routing_strategy属性
-        if 'routing_strategy' in kwargs:
+        if "routing_strategy" in kwargs:
             self.routing_strategy = RoutingStrategy(self.basic_config.routing_strategy)
 
     def update_ip_config(self, **kwargs) -> None:
@@ -466,11 +462,11 @@ class CrossRingConfig(BaseNoCConfig):
         """
         # 验证策略是否有效
         strategy_enum = RoutingStrategy(strategy)
-        
+
         # 更新配置
         self.basic_config.routing_strategy = strategy
         self.routing_strategy = strategy_enum
-        
+
     def get_routing_strategy(self) -> str:
         """
         获取当前路由策略。
@@ -779,36 +775,6 @@ class CrossRingConfig(BaseNoCConfig):
                 "max_num": self.tag_config.itag_max_num_v,
             },
         }
-
-    def optimize_for_workload(self, workload_type: str) -> None:
-        """
-        根据工作负载类型优化配置
-
-        Args:
-            workload_type: 工作负载类型 ("compute_intensive", "memory_intensive", "balanced")
-        """
-        if workload_type == "compute_intensive":
-            # 计算密集型：增加读tracker，减少写tracker
-            self.tracker_config.rn_r_tracker_ostd = min(128, self.tracker_config.rn_r_tracker_ostd * 2)
-            self.tracker_config.rn_w_tracker_ostd = max(16, self.tracker_config.rn_w_tracker_ostd // 2)
-            # 增加读延迟缓冲
-            self.tag_config.tl_etag_t1_ue_max = min(self.fifo_config.rb_in_depth - 1, self.tag_config.tl_etag_t1_ue_max + 2)
-
-        elif workload_type == "memory_intensive":
-            # 内存密集型：增加写tracker和写缓冲
-            self.tracker_config.rn_w_tracker_ostd = min(64, self.tracker_config.rn_w_tracker_ostd * 2)
-            self.tracker_config.sn_ddr_w_tracker_ostd = min(96, self.tracker_config.sn_ddr_w_tracker_ostd * 2)
-            # 增加写带宽限制
-            self.ip_config.gdma_bw_limit *= 1.5
-            self.ip_config.sdma_bw_limit *= 1.5
-
-        elif workload_type == "balanced":
-            # 平衡型：保持默认配置，但优化Tag设置
-            self.tag_config.tl_etag_t2_ue_max = min(self.tag_config.tl_etag_t1_ue_max - 1, self.tag_config.tl_etag_t2_ue_max + 1)
-            self.tag_config.tu_etag_t2_ue_max = min(self.tag_config.tu_etag_t1_ue_max - 1, self.tag_config.tu_etag_t2_ue_max + 1)
-
-        # 重新生成派生配置
-        self._generate_derived_config()
 
     def scale_for_size(self, target_nodes: int) -> None:
         """

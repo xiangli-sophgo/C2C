@@ -13,17 +13,13 @@ import sys, os
 import logging
 from pathlib import Path
 
-# 添加项目根目录到路径
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, project_root)
-
 
 def setup_logging():
     """设置日志配置"""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[logging.StreamHandler(), logging.FileHandler("crossring_test.log", encoding="utf-8")],
+        handlers=[logging.StreamHandler(), logging.FileHandler("../../output/test_crossring_refactor.log", encoding="utf-8")],
     )
 
 

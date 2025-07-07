@@ -115,6 +115,34 @@ class BaseNoCConfig(ABC):
             如果参数设置成功返回True，否则返回False
         """
         if hasattr(self, key):
+            # 特殊处理枚举类型
+            if key == "topology_type" and isinstance(value, str):
+                # 转换字符串回枚举
+                try:
+                    value = TopologyType(value)
+                except ValueError:
+                    pass  # 如果转换失败，保持原值
+            elif key == "routing_strategy" and isinstance(value, str):
+                try:
+                    value = RoutingStrategy(value)
+                except ValueError:
+                    pass
+            elif key == "flow_control" and isinstance(value, str):
+                try:
+                    value = FlowControlType(value)
+                except ValueError:
+                    pass
+            elif key == "buffer_type" and isinstance(value, str):
+                try:
+                    value = BufferType(value)
+                except ValueError:
+                    pass
+            elif key == "traffic_pattern" and isinstance(value, str):
+                try:
+                    value = TrafficPattern(value)
+                except ValueError:
+                    pass
+
             setattr(self, key, value)
             return True
         else:
@@ -322,25 +350,6 @@ class BaseNoCConfig(ABC):
             "total_buffer_capacity": total_buffer_capacity,
             "theoretical_bisection_bandwidth": self.link_bandwidth * (self.num_nodes / 2),
         }
-
-    def optimize_for_workload(self, workload_characteristics: Dict[str, Any]) -> None:
-        """
-        Optimize configuration parameters for a specific workload.
-
-        Args:
-            workload_characteristics: Dictionary describing workload properties
-        """
-        # This is a basic implementation - can be overridden in subclasses
-        if "high_throughput" in workload_characteristics:
-            self.buffer_depth = max(self.buffer_depth, 16)
-            self.virtual_channels = max(self.virtual_channels, 4)
-
-        if "low_latency" in workload_characteristics:
-            self.buffer_depth = min(self.buffer_depth, 4)
-            self.enable_adaptive_routing = True
-
-        if "power_sensitive" in workload_characteristics:
-            self.enable_power_management = True
 
     def __str__(self) -> str:
         """String representation of the configuration."""

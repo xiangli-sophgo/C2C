@@ -19,7 +19,7 @@ from src.noc.utils.factory import (
     auto_select_topology,
 )
 from src.noc.base.topology import BaseNoCTopology
-from src.noc.base.config import BaseNoCConfig, CrossRingCompatibleConfig
+from src.noc.base.config import BaseNoCConfig
 from src.noc.utils.types import TopologyType, RoutingStrategy
 
 
@@ -100,21 +100,6 @@ class TestTopologyValidators(unittest.TestCase):
         self.assertFalse(valid)
         self.assertIn("至少需要3个节点", message)
 
-    def test_crossring_topology_validator(self):
-        """测试CrossRing拓扑验证器。"""
-        validator = CrossRingTopologyValidator()
-
-        # 有效的CrossRing配置
-        config = CrossRingCompatibleConfig()
-        valid, message = validator.validate(config)
-        self.assertTrue(valid)
-
-        # 无效的配置类型
-        config = MockConfig(TopologyType.CROSSRING)
-        valid, message = validator.validate(config)
-        self.assertFalse(valid)
-        self.assertIn("需要CrossRingCompatibleConfig配置", message)
-
 
 class TestNoCTopologyFactory(unittest.TestCase):
     """测试NoC拓扑工厂类。"""
@@ -126,8 +111,15 @@ class TestNoCTopologyFactory(unittest.TestCase):
         NoCTopologyFactory._config_creators.clear()
         NoCTopologyFactory._validators.clear()
 
-        # 注册测试拓扑
-        NoCTopologyFactory.register_topology(TopologyType.MESH, MockTopology)
+        # 定义配置创建器
+        def create_mock_config(**kwargs):
+            config = MockConfig(kwargs.get("topology_type", TopologyType.MESH))
+            for key, value in kwargs.items():
+                config.set_parameter(key, value)
+            return config
+
+        # 注册测试拓扑和配置创建器
+        NoCTopologyFactory.register_topology(TopologyType.MESH, MockTopology, create_mock_config)
 
     def tearDown(self):
         """清理测试环境。"""
@@ -178,10 +170,6 @@ class TestNoCTopologyFactory(unittest.TestCase):
         config = NoCTopologyFactory.create_config(TopologyType.MESH, num_nodes=25)
         self.assertEqual(config.topology_type, TopologyType.MESH)
         self.assertEqual(config.num_nodes, 25)
-
-        # 创建CrossRing配置
-        config = NoCTopologyFactory.create_config(TopologyType.CROSSRING, NUM_NODE=40)
-        self.assertIsInstance(config, CrossRingCompatibleConfig)
 
     def test_create_topology_from_type(self):
         """测试从类型创建拓扑。"""

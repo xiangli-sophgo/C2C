@@ -47,12 +47,12 @@ class CrossRingNode:
         self.inject_queues = {
             "req": PipelinedFIFO(f"inject_req_{node_id}", depth=config.inject_buffer_depth),
             "rsp": PipelinedFIFO(f"inject_rsp_{node_id}", depth=config.inject_buffer_depth),
-            "data": PipelinedFIFO(f"inject_data_{node_id}", depth=config.inject_buffer_depth)
+            "data": PipelinedFIFO(f"inject_data_{node_id}", depth=config.inject_buffer_depth),
         }
         self.eject_queues = {
             "req": PipelinedFIFO(f"eject_req_{node_id}", depth=config.eject_buffer_depth),
             "rsp": PipelinedFIFO(f"eject_rsp_{node_id}", depth=config.eject_buffer_depth),
-            "data": PipelinedFIFO(f"eject_data_{node_id}", depth=config.eject_buffer_depth)
+            "data": PipelinedFIFO(f"eject_data_{node_id}", depth=config.eject_buffer_depth),
         }
 
         # 环形缓冲区 - 保持命名但使用PipelinedFIFO
@@ -142,7 +142,7 @@ class CrossRingNode:
         else:
             # 其他策略：均衡
             self.routing_bias = {"horizontal": 1.0, "vertical": 1.0}
-        
+
         self.logger.debug(f"节点{self.node_id}设置路由偏向: {routing_strategy.value} -> {self.routing_bias}")
 
     def update_state(self, cycle: int) -> None:
@@ -413,12 +413,12 @@ class CrossRingNode:
             for channel in ["req", "rsp", "data"]:
                 # 检查是否有inject队列中的flit可以传输
                 inject_fifo = self.inject_queues[channel]
-                
+
                 # 检查仲裁状态
                 if not self.can_inject_flit(channel, direction):
                     self._transfer_decisions["inject_to_ring"][direction][channel] = None
                     continue
-                
+
                 # 找到最合适的方向代码
                 best_dir_code = self._find_best_direction_code(direction, channel)
                 if best_dir_code:
@@ -435,7 +435,7 @@ class CrossRingNode:
         for direction in ["horizontal", "vertical"]:
             for channel in ["req", "rsp", "data"]:
                 self._transfer_decisions["ring_to_ring"][direction][channel] = {}
-                
+
                 for dir_code in ["TR", "TL", "TD", "TU"]:
                     if self.can_transfer_flit(direction, dir_code, channel):
                         # 计算目标方向和节点
@@ -458,7 +458,7 @@ class CrossRingNode:
             # 检查是否有到达本节点的flit
             eject_fifo = self.eject_queues[channel]
             found_flit = False
-            
+
             for direction in ["horizontal", "vertical"]:
                 for dir_code in ["TR", "TL", "TD", "TU"]:
                     ring_fifo = self.ring_buffers[direction][channel][dir_code]
@@ -471,7 +471,7 @@ class CrossRingNode:
                                 break
                 if found_flit:
                     break
-            
+
             if not found_flit:
                 self._transfer_decisions["ring_to_eject"][channel] = None
 
@@ -484,14 +484,14 @@ class CrossRingNode:
                     dir_code = decision
                     inject_fifo = self.inject_queues[channel]
                     ring_fifo = self.ring_buffers[direction][channel][dir_code]
-                    
+
                     if FlowControlledTransfer.try_transfer(inject_fifo, ring_fifo):
                         # 更新传输的flit
                         flit = ring_fifo.peek_output()
                         if flit:
                             flit.network_entry_cycle = cycle
                             self.stats["injected_flits"][channel] += 1
-                        
+
                         # 更新仲裁状态
                         dir_priority_map = {"TR": "ring_tr", "TL": "ring_tl", "TD": "ring_td", "TU": "ring_tu"}
                         self.arbitration_state[f"{direction}_priority"] = dir_priority_map[dir_code]
@@ -502,17 +502,17 @@ class CrossRingNode:
         for direction in ["horizontal", "vertical"]:
             for channel in ["req", "rsp", "data"]:
                 decisions = self._transfer_decisions["ring_to_ring"][direction][channel]
-                
+
                 for dir_code, decision in decisions.items():
                     if decision:
                         target_direction, target_dir_code = decision
                         source_fifo = self.ring_buffers[direction][channel][dir_code]
-                        
+
                         # 执行读取操作
                         flit = source_fifo.read_output()
                         if flit:
                             self.stats["transferred_flits"][direction] += 1
-                            
+
                             # 更新仲裁状态
                             priority_map = {"ring_tr": "ring_tl", "ring_tl": "inject", "ring_td": "ring_tu", "ring_tu": "inject"}
                             dir_priority_map = {"TR": "ring_tr", "TL": "ring_tl", "TD": "ring_td", "TU": "ring_tu"}
@@ -528,7 +528,7 @@ class CrossRingNode:
                 direction, dir_code = decision
                 ring_fifo = self.ring_buffers[direction][channel][dir_code]
                 eject_fifo = self.eject_queues[channel]
-                
+
                 if FlowControlledTransfer.try_transfer(ring_fifo, eject_fifo):
                     # 更新ejected flit的状态
                     flit = eject_fifo.peek_output()
@@ -555,9 +555,9 @@ class CrossRingNode:
     def _should_eject_flit(self, flit: CrossRingFlit) -> bool:
         """检查是否应该弹出flit"""
         # 检查flit是否到达目标节点
-        if hasattr(flit, 'destination') and flit.destination == self.node_id:
+        if hasattr(flit, "destination") and flit.destination == self.node_id:
             return True
-        if hasattr(flit, 'dest_node_id') and flit.dest_node_id == self.node_id:
+        if hasattr(flit, "dest_node_id") and flit.dest_node_id == self.node_id:
             return True
         return False
 

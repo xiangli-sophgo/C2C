@@ -14,10 +14,6 @@ import numpy as np
 import logging
 from typing import List, Dict, Tuple
 
-# 导入待测试模块
-# import sys
-# import os
-# sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from src.noc.crossring.topology import CrossRingTopology
 from src.noc.crossring.config import CrossRingConfig

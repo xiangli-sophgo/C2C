@@ -10,9 +10,6 @@ import json
 import os
 from typing import Dict, Any
 
-# 导入待测试的模块
-# import sys
-# sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from src.noc.crossring.config import CrossRingConfig, IPConfiguration, FIFOConfiguration
 from src.noc.crossring.config_factory import CrossRingConfigFactory

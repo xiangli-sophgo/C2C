@@ -119,6 +119,11 @@ class CrossRingIPInterface(BaseIPInterface):
     def _check_and_reserve_resources(self, flit) -> bool:
         """检查并预占RN端资源"""
         if flit.req_type == "read":
+            # 检查是否已经在tracker中（避免重复添加）
+            for existing_req in self.rn_tracker["read"]:
+                if hasattr(existing_req, 'packet_id') and hasattr(flit, 'packet_id') and existing_req.packet_id == flit.packet_id:
+                    return True  # 已经预占过资源，直接返回成功
+            
             # 检查读资源：tracker + rdb + reserve
             rdb_available = self.rn_rdb_count >= flit.burst_length
             tracker_available = self.rn_tracker_count["read"] > 0
@@ -135,6 +140,11 @@ class CrossRingIPInterface(BaseIPInterface):
             self.rn_tracker_pointer["read"] += 1
 
         elif flit.req_type == "write":
+            # 检查是否已经在tracker中（避免重复添加）
+            for existing_req in self.rn_tracker["write"]:
+                if hasattr(existing_req, 'packet_id') and hasattr(flit, 'packet_id') and existing_req.packet_id == flit.packet_id:
+                    return True  # 已经预占过资源，直接返回成功
+            
             # 检查写资源：tracker + wdb
             wdb_available = self.rn_wdb_count >= flit.burst_length
             tracker_available = self.rn_tracker_count["write"] > 0
@@ -728,10 +738,14 @@ class CrossRingIPInterface(BaseIPInterface):
             "fifo_status": {
                 channel: {
                     "inject": len(self.inject_fifos[channel]),
+                    "inject_valid": self.inject_fifos[channel].valid_signal(),
+                    "inject_ready": self.inject_fifos[channel].ready_signal(),
                     "l2h": len(self.l2h_fifos[channel]),
+                    "l2h_valid": self.l2h_fifos[channel].valid_signal(),
+                    "l2h_ready": self.l2h_fifos[channel].ready_signal(),
                     "h2l": len(self.h2l_fifos[channel]),
-                    "l2h_pre": hasattr(self, "l2h_pre_buffers") and self.l2h_pre_buffers.get(channel) is not None,
-                    "h2l_pre": hasattr(self, "h2l_pre_buffers") and self.h2l_pre_buffers.get(channel) is not None,
+                    "h2l_valid": self.h2l_fifos[channel].valid_signal(),
+                    "h2l_ready": self.h2l_fifos[channel].ready_signal(),
                 }
                 for channel in ["req", "rsp", "data"]
             },

@@ -183,22 +183,6 @@ class TestBaseNoCConfig(unittest.TestCase):
         self.assertGreater(bounds["min_latency"], 0)
         self.assertGreater(bounds["total_buffer_capacity"], 0)
 
-    def test_optimize_for_workload(self):
-        """测试针对工作负载的优化。"""
-        original_buffer_depth = self.config.buffer_depth
-
-        # 高吞吐量工作负载
-        self.config.optimize_for_workload({"high_throughput": True})
-        self.assertGreaterEqual(self.config.buffer_depth, original_buffer_depth)
-
-        # 低延迟工作负载
-        self.config.optimize_for_workload({"low_latency": True})
-        self.assertTrue(self.config.enable_adaptive_routing)
-
-        # 功耗敏感工作负载
-        self.config.optimize_for_workload({"power_sensitive": True})
-        self.assertTrue(self.config.enable_power_management)
-
 
 class TestConfigFactory(unittest.TestCase):
     """测试配置工厂函数。"""

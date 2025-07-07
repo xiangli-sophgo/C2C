@@ -18,18 +18,18 @@ from src.noc.utils.types import NodeId
 class PipelinedFIFO:
     """
     流水线FIFO，实现输出寄存器模型以确保正确的时序行为。
-    
+
     每个FIFO都有输出寄存器，数据只能在时钟边沿更新，避免单周期多跳问题。
     """
-    
+
     def __init__(self, name: str, depth: int):
         self.name = name
         self.internal_queue = deque(maxlen=depth)
         self.output_register = None
-        self.output_valid = False     # 输出有效信号
+        self.output_valid = False  # 输出有效信号
         self.read_this_cycle = False  # 本周期是否被读取
-        self.next_output_valid = False # 下周期输出是否有效
-        
+        self.next_output_valid = False  # 下周期输出是否有效
+
     def step_compute_phase(self):
         """组合逻辑：计算流控信号"""
         # 计算下周期的输出有效性
@@ -39,7 +39,7 @@ class PipelinedFIFO:
             self.next_output_valid = True  # 本周期被读，下周期继续输出
         else:
             self.next_output_valid = False
-            
+
     def step_update_phase(self):
         """时序逻辑：更新寄存器"""
         # 如果本周期被读取，更新输出寄存器
@@ -54,56 +54,56 @@ class PipelinedFIFO:
             # 首次输出
             self.output_register = self.internal_queue.popleft()
             self.output_valid = True
-            
+
         # 重置读取标志
         self.read_this_cycle = False
-        
+
     def peek_output(self):
         """查看输出（组合逻辑）"""
         return self.output_register if self.output_valid else None
-        
+
     def read_output(self):
         """读取输出（只能每周期调用一次）"""
         if self.output_valid and not self.read_this_cycle:
             self.read_this_cycle = True
             return self.output_register
         return None
-        
+
     def can_accept_input(self):
         """检查是否能接受输入（组合逻辑）"""
         return len(self.internal_queue) < self.internal_queue.maxlen
-        
+
     def write_input(self, data) -> bool:
         """写入新数据"""
         if self.can_accept_input():
             self.internal_queue.append(data)
             return True
         return False
-        
+
     def ready_signal(self):
         """Ready信号：能否接受新数据"""
         return self.can_accept_input()
-        
+
     def valid_signal(self):
         """Valid信号：输出是否有效"""
         return self.output_valid
-        
+
     def __len__(self):
         """兼容性：返回内部队列长度"""
         return len(self.internal_queue) + (1 if self.output_valid else 0)
-        
+
     def append(self, item):
         """兼容性接口：向队列添加元素"""
         return self.write_input(item)
-        
+
     def popleft(self):
         """兼容性接口：从队列弹出元素"""
         return self.read_output()
-        
+
     def appendleft(self, item):
         """兼容性接口：向队列头部添加元素（高优先级）"""
         return self.priority_write(item)
-        
+
     def priority_write(self, data) -> bool:
         """高优先级写入（用于重试等场景）"""
         if self.can_accept_input():
@@ -115,24 +115,22 @@ class PipelinedFIFO:
 
 class FlowControlledTransfer:
     """实现标准的Valid/Ready握手协议"""
-    
+
     @staticmethod
-    def can_transfer(source_fifo: PipelinedFIFO, dest_fifo: PipelinedFIFO, 
-                    additional_check=None) -> bool:
+    def can_transfer(source_fifo: PipelinedFIFO, dest_fifo: PipelinedFIFO, additional_check=None) -> bool:
         """检查是否可以传输，遵循Valid/Ready协议"""
         # 组合逻辑：检查传输条件
         source_valid = source_fifo.valid_signal()
         dest_ready = dest_fifo.ready_signal()
-        
+
         # 额外的传输条件检查（如资源、时序等）
         extra_ok = additional_check() if additional_check else True
-        
+
         # 只有在valid && ready && extra_ok时才能传输
         return source_valid and dest_ready and extra_ok
-    
+
     @staticmethod
-    def try_transfer(source_fifo: PipelinedFIFO, dest_fifo: PipelinedFIFO, 
-                    additional_check=None) -> bool:
+    def try_transfer(source_fifo: PipelinedFIFO, dest_fifo: PipelinedFIFO, additional_check=None) -> bool:
         """尝试传输，遵循Valid/Ready协议"""
         if FlowControlledTransfer.can_transfer(source_fifo, dest_fifo, additional_check):
             data = source_fifo.read_output()
@@ -238,11 +236,7 @@ class BaseIPInterface(ABC):
         self._setup_clock_domain_fifos()
 
         # ========== STI三通道FIFO ==========
-        self.inject_fifos = {
-            "req": PipelinedFIFO("inject_req", depth=16),
-            "rsp": PipelinedFIFO("inject_rsp", depth=16), 
-            "data": PipelinedFIFO("inject_data", depth=16)
-        }
+        self.inject_fifos = {"req": PipelinedFIFO("inject_req", depth=16), "rsp": PipelinedFIFO("inject_rsp", depth=16), "data": PipelinedFIFO("inject_data", depth=16)}
 
         # ========== 资源管理器 ==========
         self._setup_resource_managers()
@@ -278,24 +272,16 @@ class BaseIPInterface(ABC):
             l2h_depth = getattr(self.config, "ip_l2h_fifo_depth", 4)
             h2l_depth = getattr(self.config, "ip_h2l_fifo_depth", 4)
 
-        self.l2h_fifos = {
-            "req": PipelinedFIFO("l2h_req", depth=l2h_depth),
-            "rsp": PipelinedFIFO("l2h_rsp", depth=l2h_depth),
-            "data": PipelinedFIFO("l2h_data", depth=l2h_depth)
-        }
+        self.l2h_fifos = {"req": PipelinedFIFO("l2h_req", depth=l2h_depth), "rsp": PipelinedFIFO("l2h_rsp", depth=l2h_depth), "data": PipelinedFIFO("l2h_data", depth=l2h_depth)}
 
-        self.h2l_fifos = {
-            "req": PipelinedFIFO("h2l_req", depth=h2l_depth),
-            "rsp": PipelinedFIFO("h2l_rsp", depth=h2l_depth),
-            "data": PipelinedFIFO("h2l_data", depth=h2l_depth)
-        }
-        
+        self.h2l_fifos = {"req": PipelinedFIFO("h2l_req", depth=h2l_depth), "rsp": PipelinedFIFO("h2l_rsp", depth=h2l_depth), "data": PipelinedFIFO("h2l_data", depth=h2l_depth)}
+
         # 传输状态跟踪（替代pre_buffer）
         self._transfer_states = {
             "inject_to_l2h": {"req": False, "rsp": False, "data": False},
             "l2h_to_network": {"req": False, "rsp": False, "data": False},
             "network_to_h2l": {"req": False, "rsp": False, "data": False},
-            "h2l_to_completion": {"req": False, "rsp": False, "data": False}
+            "h2l_to_completion": {"req": False, "rsp": False, "data": False},
         }
 
     @abstractmethod
@@ -319,10 +305,10 @@ class BaseIPInterface(ABC):
 
         # 阶段1：组合逻辑（计算所有流控信号和传输可能性）
         self._compute_phase(cycle)
-        
+
         # 阶段2：时钟域同步和资源处理
         self._sync_phase(cycle)
-        
+
         # 阶段3：时序逻辑（更新所有寄存器和状态）
         self._update_phase(cycle)
 
@@ -335,91 +321,79 @@ class BaseIPInterface(ABC):
         for fifo_dict in [self.inject_fifos, self.l2h_fifos, self.h2l_fifos]:
             for fifo in fifo_dict.values():
                 fifo.step_compute_phase()
-                
+
         # 计算传输可能性
         self._compute_transfer_possibilities(cycle)
-        
+
     def _sync_phase(self, cycle: int) -> None:
         """阶段2：时钟域同步和资源处理"""
         # 处理延迟释放的资源
         self._process_delayed_resource_release()
-        
+
         # 时钟域特定的处理
         if cycle % self.clock_ratio == 0:
             self._compute_1ghz_transfers()
         self._compute_2ghz_transfers()
-        
+
     def _update_phase(self, cycle: int) -> None:
         """阶段3：时序逻辑，更新所有寄存器和执行传输"""
         # 执行传输
         if cycle % self.clock_ratio == 0:
             self._execute_1ghz_transfers()
         self._execute_2ghz_transfers()
-        
+
         # 更新所有FIFO的寄存器
         for fifo_dict in [self.inject_fifos, self.l2h_fifos, self.h2l_fifos]:
             for fifo in fifo_dict.values():
                 fifo.step_update_phase()
-                
+
     def _compute_transfer_possibilities(self, cycle: int) -> None:
         """计算所有可能的传输"""
         for channel in ["req", "rsp", "data"]:
             # inject → l2h 传输可能性
             self._transfer_states["inject_to_l2h"][channel] = FlowControlledTransfer.can_transfer(
-                source_fifo=self.inject_fifos[channel],
-                dest_fifo=self.l2h_fifos[channel],
-                additional_check=lambda ch=channel: self._can_inject_to_l2h(ch)
+                source_fifo=self.inject_fifos[channel], dest_fifo=self.l2h_fifos[channel], additional_check=lambda ch=channel: self._can_inject_to_l2h(ch)
             )
-            
+
             # l2h → network 传输可能性
-            self._transfer_states["l2h_to_network"][channel] = (
-                self.l2h_fifos[channel].valid_signal() and 
-                self._network_can_accept(channel)
-            )
-            
+            self._transfer_states["l2h_to_network"][channel] = self.l2h_fifos[channel].valid_signal() and self._network_can_accept(channel)
+
             # network → h2l 传输可能性
-            self._transfer_states["network_to_h2l"][channel] = (
-                self._network_has_data(channel) and
-                self.h2l_fifos[channel].ready_signal()
-            )
-            
+            self._transfer_states["network_to_h2l"][channel] = self._network_has_data(channel) and self.h2l_fifos[channel].ready_signal()
+
             # h2l → completion 传输可能性
-            self._transfer_states["h2l_to_completion"][channel] = (
-                self.h2l_fifos[channel].valid_signal()
-            )
-            
+            self._transfer_states["h2l_to_completion"][channel] = self.h2l_fifos[channel].valid_signal()
+
     def _compute_1ghz_transfers(self) -> None:
         """计算1GHz域的传输"""
         # 在1GHz边沿执行的传输逻辑
         pass
-        
+
     def _compute_2ghz_transfers(self) -> None:
         """计算2GHz域的传输"""
         # 每个2GHz周期执行的传输逻辑
         pass
-        
+
     def _execute_1ghz_transfers(self) -> None:
         """执行1GHz域的传输"""
         for channel in ["req", "rsp", "data"]:
             # inject → l2h 传输
             if self._transfer_states["inject_to_l2h"][channel]:
                 FlowControlledTransfer.try_transfer(
-                    source_fifo=self.inject_fifos[channel],
-                    dest_fifo=self.l2h_fifos[channel],
-                    additional_check=lambda ch=channel: self._check_and_reserve_resources_for_channel(ch)
+                    source_fifo=self.inject_fifos[channel], dest_fifo=self.l2h_fifos[channel], additional_check=lambda ch=channel: self._check_and_reserve_resources_for_channel(ch)
                 )
-                
+
             # h2l → completion 传输
             if self._transfer_states["h2l_to_completion"][channel]:
                 self._execute_h2l_to_completion(channel)
-                
+
     def _execute_2ghz_transfers(self) -> None:
         """执行2GHz域的传输"""
         for channel in ["req", "rsp", "data"]:
             # l2h → network 传输
             if self._transfer_states["l2h_to_network"][channel]:
                 self._execute_l2h_to_network(channel)
-                
+
             # network → h2l 传输
             if self._transfer_states["network_to_h2l"][channel]:
                 self._execute_network_to_h2l(channel)
@@ -466,7 +440,7 @@ class BaseIPInterface(ABC):
         if channel == "req":
             # 对于请求，需要检查资源
             flit = self.inject_fifos[channel].peek_output()
-            if flit and hasattr(flit, 'req_attr') and flit.req_attr == "new":
+            if flit and hasattr(flit, "req_attr") and flit.req_attr == "new":
                 return self._check_and_reserve_resources(flit)
             return True
         elif channel == "data":
@@ -478,7 +452,7 @@ class BaseIPInterface(ABC):
         else:
             # 响应直接允许
             return True
-            
+
     def _check_and_reserve_resources_for_channel(self, channel: str) -> bool:
         """为特定通道检查并预占资源"""
         if channel == "req":
@@ -499,14 +473,14 @@ class BaseIPInterface(ABC):
             flit.flit_position = "network"
             # 调用拓扑特定的网络注入方法
             self._inject_to_topology_network(flit, channel)
-            
+
     def _execute_network_to_h2l(self, channel: str) -> None:
         """执行网络到h2l FIFO的传输"""
         flit = self._eject_from_topology_network(channel)
         if flit:
             flit.flit_position = "h2l_fifo"
             self.h2l_fifos[channel].write_input(flit)
-            
+
     def _execute_h2l_to_completion(self, channel: str) -> None:
         """执行h2l FIFO到IP完成的传输"""
         flit = self.h2l_fifos[channel].read_output()
@@ -519,12 +493,12 @@ class BaseIPInterface(ABC):
                 self._handle_received_response(flit)
             elif channel == "data":
                 self._handle_received_data(flit)
-                
+
     def _network_can_accept(self, channel: str) -> bool:
         """检查网络是否可以接受数据"""
         # 默认实现，子类可以重写
         return True
-        
+
     def _network_has_data(self, channel: str) -> bool:
         """检查网络是否有数据要弹出"""
         # 默认实现，子类可以重写
@@ -535,12 +509,10 @@ class BaseIPInterface(ABC):
         """注入到拓扑网络（拓扑特定）"""
         pass
 
-
     @abstractmethod
     def _eject_from_topology_network(self, channel: str) -> Optional[BaseFlit]:
         """从拓扑网络弹出（拓扑特定）"""
         pass
-
 
     def _handle_received_request(self, req: BaseFlit) -> None:
         """处理收到的请求（通用STI协议处理）"""

@@ -185,7 +185,8 @@ class NoCTopologyFactory:
         # 检查是否支持该拓扑类型
         if topology_type not in cls._topology_registry:
             supported_types = list(cls._topology_registry.keys())
-            raise TopologyCreationError(f"不支持的拓扑类型: {topology_type}. " f"支持的类型: {[t.value for t in supported_types]}")
+            topology_type_str = topology_type.value if hasattr(topology_type, 'value') else str(topology_type)
+            raise TopologyCreationError(f"不支持的拓扑类型: {topology_type_str}. " f"支持的类型: {[t.value for t in supported_types]}")
 
         # 验证配置
         if validate:
@@ -219,8 +220,13 @@ class NoCTopologyFactory:
         if topology_type in cls._config_creators:
             return cls._config_creators[topology_type](**kwargs)
 
-        # 使用默认配置创建器
-        config = BaseNoCConfig(topology_type)
+        # 使用工厂函数创建配置
+        from src.noc.base.config import create_config_from_type
+        try:
+            config = create_config_from_type(topology_type, **kwargs)
+        except NotImplementedError:
+            # 如果没有实现特定的配置类，抛出错误
+            raise TopologyCreationError(f"无法创建拓扑类型 {topology_type.value} 的配置对象。请先实现相应的配置类或注册配置创建器。")
 
         # 应用默认配置
         if topology_type in cls._default_configs:

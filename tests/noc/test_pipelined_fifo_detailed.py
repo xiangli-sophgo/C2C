@@ -8,12 +8,6 @@
 import sys, os
 from pathlib import Path
 
-# 添加项目路径
-# project_root = Path(__file__).parent
-# sys.path.insert(0, str(project_root / "src"))
-# project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 
 def test_hardware_timing():
     """测试硬件时序行为"""

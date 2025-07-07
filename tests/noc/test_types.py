@@ -145,7 +145,7 @@ class TestConstants(unittest.TestCase):
         """测试默认值常量。"""
         from src.noc.utils.types import DEFAULT_FLIT_SIZE, DEFAULT_PACKET_SIZE, DEFAULT_BUFFER_SIZE, DEFAULT_LINK_BANDWIDTH, DEFAULT_CLOCK_FREQUENCY, MAX_NODES, MAX_DIMENSIONS
 
-        self.assertEqual(DEFAULT_FLIT_SIZE, 64)
+        self.assertEqual(DEFAULT_FLIT_SIZE, 128)
         self.assertEqual(DEFAULT_PACKET_SIZE, 512)
         self.assertEqual(DEFAULT_BUFFER_SIZE, 8)
         self.assertEqual(DEFAULT_LINK_BANDWIDTH, 1.0)

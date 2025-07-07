@@ -17,6 +17,7 @@ import random
 
 from .node import BaseNoCNode, NodeState, BufferStatus
 from .flit import BaseFlit
+from ..crossring.flit import CrossRingFlit
 from src.noc.utils.types import NodeId, Position, Priority
 
 
@@ -524,7 +525,7 @@ class MemoryController(BaseNoCNode):
         """创建响应flit"""
         original_flit = request["flit"]
 
-        response_flit = BaseFlit(source=self.node_id, destination=original_flit.source, packet_id=original_flit.packet_id + "_response", creation_time=self.current_cycle)
+        response_flit = CrossRingFlit(source=self.node_id, destination=original_flit.source, packet_id=original_flit.packet_id + "_response", creation_time=self.current_cycle)
 
         response_flit.response_type = "memory"
         response_flit.original_request = request["operation"].value

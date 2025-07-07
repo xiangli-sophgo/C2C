@@ -13,8 +13,37 @@ from src.noc.utils.types import TopologyType, RoutingStrategy, ValidationResult
 
 
 @dataclass
-class MeshConfiguration:
+class BasicConfiguration:
     """Mesh基础配置"""
+    
+    # 网络频率配置
+    network_frequency: float = 2.0  # GHz
+    
+    # 拓扑参数
+    rows: int = 4
+    cols: int = 4
+    
+    # 路由参数
+    enable_xy_routing: bool = True
+    enable_minimal_routing: bool = True
+    
+    # 缓冲区配置
+    input_buffer_depth: int = 8
+    output_buffer_depth: int = 8
+    virtual_channels: int = 2
+    
+    # 性能参数
+    link_width: int = 64  # bits
+    flit_size: int = 64   # bits
+    
+    # 延迟参数
+    router_latency: int = 1  # cycles
+    link_latency: int = 1    # cycles
+
+
+@dataclass
+class MeshConfiguration:
+    """Mesh扩展配置 (deprecated, use BasicConfiguration)"""
     
     # 拓扑参数
     rows: int = 4
@@ -63,14 +92,14 @@ class MeshConfig(BaseNoCConfig):
         self.cols = cols
         self.num_nodes = rows * cols
         
-        # 使用Mesh配置
+        # 使用基础配置
+        self.basic_config = BasicConfiguration(rows=rows, cols=cols)
+        
+        # 使用Mesh配置（向后兼容）
         self.mesh_config = MeshConfiguration(rows=rows, cols=cols)
         
-        # 添加网络频率属性（兼容TrafficScheduler）
-        self.NETWORK_FREQUENCY = 2000000000  # 2 GHz
-        
         # 设置路由策略
-        self.routing_strategy = RoutingStrategy.XY if self.mesh_config.enable_xy_routing else RoutingStrategy.SHORTEST
+        self.routing_strategy = RoutingStrategy.XY if self.basic_config.enable_xy_routing else RoutingStrategy.SHORTEST
         
         # 生成节点位置映射
         self._generate_node_positions()

@@ -16,10 +16,6 @@ import os
 import json
 import csv
 
-# 导入待测试模块
-# import sys
-# sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-
 from src.noc.utils.adjacency import (
     create_crossring_adjacency_matrix,
     validate_adjacency_matrix,
