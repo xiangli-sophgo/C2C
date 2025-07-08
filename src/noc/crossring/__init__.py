@@ -34,16 +34,10 @@ from .model import (
     create_crossring_model,
 )
 
-from .ring_bridge import (
-    RingBridge,
-    CrossPointModule,
-    RingSlice,
-)
-
-from .ring_directions import (
-    RingDirectionMapper,
-    RingDirection,
-)
+# 导入现有的组件
+from .crossring_link import CrossRingSlot, RingSlice
+from .node import CrossRingCrossPoint
+from .tag_mechanism import CrossRingTagManager
 
 # 版本信息
 __version__ = "1.0.0"
@@ -66,13 +60,11 @@ __all__ = [
     "CrossRingIPInterface",
     # 主模型
     "CrossRingModel",
-    # 环形桥接组件
-    "RingBridge",
-    "CrossPointModule",
-    "RingSlice",
-    # 环形方向系统
-    "RingDirectionMapper",
-    "RingDirection",
+    # CrossRing组件
+    "CrossRingSlot",
+    "RingSlice", 
+    "CrossRingCrossPoint",
+    "CrossRingTagManager",
     # 便捷函数
     "create_crossring_config_2260e",
     "create_crossring_config_2262",

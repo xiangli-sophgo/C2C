@@ -10,7 +10,6 @@ import os
 
 from src.noc.crossring.config import CrossRingConfig, RoutingStrategy
 from src.noc.crossring.model import CrossRingModel
-from src.noc.crossring.ring_directions import RingDirectionMapper, RingDirection
 
 
 def test_routing_strategy_configuration():

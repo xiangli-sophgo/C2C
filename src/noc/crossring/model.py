@@ -11,15 +11,24 @@ from typing import Dict, List, Any, Optional, Tuple
 import logging
 from collections import defaultdict
 import time
+from enum import Enum
 
 from .config import CrossRingConfig, RoutingStrategy
 from .ip_interface import CrossRingIPInterface
 from .flit import CrossRingFlit, get_crossring_flit_pool_stats
-from .ring_bridge import RingBridge, CrossPointModule
-from .ring_directions import RingDirectionMapper, RingDirection
+from .node import CrossRingNode
+from .crossring_link import CrossRingLink
 from src.noc.utils.types import NodeId
 from src.noc.debug import RequestTracker, RequestState, FlitType
 from src.noc.base.model import BaseNoCModel
+
+
+class RingDirection(Enum):
+    """CrossRing方向枚举（简化版本）"""
+    TL = "TL"  # Turn Left
+    TR = "TR"  # Turn Right
+    TU = "TU"  # Turn Up
+    TD = "TD"  # Turn Down
 
 
 class CrossRingModel(BaseNoCModel):
@@ -48,15 +57,12 @@ class CrossRingModel(BaseNoCModel):
         self.ip_interfaces: Dict[str, CrossRingIPInterface] = {}
         self._ip_registry: Dict[str, CrossRingIPInterface] = {}  # 全局debug视图
 
-        # CrossRing网络组件 - 真实的环形拓扑实现
-        self.crossring_pieces: Dict[NodeId, Any] = {}  # {node_id: CrossRingPiece}
-        self.networks = {"req": None, "rsp": None, "data": None}  # REQ网络  # RSP网络  # DATA网络
-
-        # 环形桥接系统
-        self.ring_bridge = RingBridge(config)
-
-        # 环形方向映射器
-        self.direction_mapper = RingDirectionMapper(config.num_row, config.num_col)
+        # CrossRing网络组件 - 使用新的架构
+        self.crossring_nodes: Dict[NodeId, Any] = {}  # {node_id: CrossRingNode}
+        self.crossring_links: Dict[str, Any] = {}  # {link_id: CrossRingLink}
+        
+        # Tag管理器
+        self.tag_managers: Dict[NodeId, Any] = {}  # {node_id: CrossRingTagManager}
 
         # 性能统计
         self.stats = {
@@ -89,10 +95,10 @@ class CrossRingModel(BaseNoCModel):
         self._setup_ip_interfaces()
         self._setup_crossring_networks()
 
-        # 验证环形连接
-        if not self.direction_mapper.validate_ring_connectivity():
-            self.logger.error("环形连接验证失败")
-            raise RuntimeError("CrossRing环形拓扑初始化失败")
+        # 验证CrossRing网络初始化
+        if len(self.crossring_nodes) != self.config.num_nodes:
+            self.logger.error("CrossRing节点初始化不完整")
+            raise RuntimeError("CrossRing网络初始化失败")
 
         self.logger.info(f"CrossRing模型初始化完成: {config.num_row}x{config.num_col}")
 
@@ -115,51 +121,13 @@ class CrossRingModel(BaseNoCModel):
 
     def _setup_crossring_networks(self) -> None:
         """设置CrossRing网络组件的完整实现 - 真实环形拓扑"""
-        # 创建CrossRing网络的真实组件，支持环形连接和四方向系统
-
+        # 用CrossRingNode实例替换原有dict结构
+        self.crossring_nodes: Dict[NodeId, CrossRingNode] = {}
         for node_id in range(self.config.num_nodes):
             coordinates = self._get_node_coordinates(node_id)
-
-            # 为每个节点创建完整的CrossRing piece，支持四方向系统
-            self.crossring_pieces[node_id] = {
-                "node_id": node_id,
-                "coordinates": coordinates,
-                # Inject/Eject队列（每个通道独立）
-                "inject_queues": {"req": [], "rsp": [], "data": []},
-                "eject_queues": {"req": [], "rsp": [], "data": []},
-                # Ring缓冲区（使用四方向系统：TL/TR/TU/TD）
-                "ring_buffers": {
-                    "TL": {"req": [], "rsp": [], "data": []},  # Towards Left: 向左方向（水平逆时针）
-                    "TR": {"req": [], "rsp": [], "data": []},  # Towards Right: 向右方向（水平顺时针）
-                    "TU": {"req": [], "rsp": [], "data": []},  # Towards Up: 向上方向（垂直向上）
-                    "TD": {"req": [], "rsp": [], "data": []},  # Towards Down: 向下方向（垂直向下）
-                },
-                # ETag/ITag状态管理（按四方向）
-                "etag_status": {
-                    "TL": {"req": False, "rsp": False, "data": False},
-                    "TR": {"req": False, "rsp": False, "data": False},
-                    "TU": {"req": False, "rsp": False, "data": False},
-                    "TD": {"req": False, "rsp": False, "data": False},
-                },
-                "itag_status": {
-                    "TL": {"req": False, "rsp": False, "data": False},
-                    "TR": {"req": False, "rsp": False, "data": False},
-                    "TU": {"req": False, "rsp": False, "data": False},
-                    "TD": {"req": False, "rsp": False, "data": False},
-                },
-                # 仲裁状态（支持四方向仲裁）
-                "arbitration_state": {
-                    "current_priority": "inject",  # inject, TL, TR, TU, TD
-                    "arbitration_counter": 0,
-                    "last_winner": None,
-                },
-                # 环形连接信息（真实的环形拓扑）
-                "ring_connections": self._get_ring_connections(node_id),
-                # 交叉点模块引用
-                "cross_point": self.ring_bridge.cross_points[node_id],
-            }
-
-        self.logger.info(f"CrossRing网络创建完成: {len(self.crossring_pieces)}个节点")
+            node = CrossRingNode(node_id=node_id, coordinates=coordinates, config=self.config, logger=self.logger)
+            self.crossring_nodes[node_id] = node
+        self.logger.info(f"CrossRing网络创建完成: {len(self.crossring_nodes)}个节点")
 
     def _get_node_coordinates(self, node_id: NodeId) -> Tuple[int, int]:
         """
@@ -174,6 +142,54 @@ class CrossRingModel(BaseNoCModel):
         x = node_id % self.config.num_col
         y = node_id // self.config.num_col
         return x, y
+    
+    def _get_next_node_in_direction(self, node_id: NodeId, direction: RingDirection) -> NodeId:
+        """
+        获取指定方向的下一个节点（CrossRing特定实现）
+        
+        在CrossRing中，边界节点连接到自己，而不是环绕连接
+        
+        Args:
+            node_id: 当前节点ID
+            direction: 移动方向
+            
+        Returns:
+            下一个节点的ID
+        """
+        x, y = self._get_node_coordinates(node_id)
+        
+        if direction == RingDirection.TL:
+            # 向左：如果已经在最左边，连接到自己
+            if x == 0:
+                next_x = x  # 连接到自己
+            else:
+                next_x = x - 1
+            next_y = y
+        elif direction == RingDirection.TR:
+            # 向右：如果已经在最右边，连接到自己
+            if x == self.config.num_col - 1:
+                next_x = x  # 连接到自己
+            else:
+                next_x = x + 1
+            next_y = y
+        elif direction == RingDirection.TU:
+            # 向上：如果已经在最上边，连接到自己
+            if y == 0:
+                next_y = y  # 连接到自己
+            else:
+                next_y = y - 1
+            next_x = x
+        elif direction == RingDirection.TD:
+            # 向下：如果已经在最下边，连接到自己
+            if y == self.config.num_row - 1:
+                next_y = y  # 连接到自己
+            else:
+                next_y = y + 1
+            next_x = x
+        else:
+            raise ValueError(f"不支持的方向: {direction}")
+            
+        return next_y * self.config.num_col + next_x
 
     def _get_ring_connections(self, node_id: NodeId) -> Dict[str, NodeId]:
         """
@@ -187,9 +203,9 @@ class CrossRingModel(BaseNoCModel):
         """
         connections = {}
 
-        # 使用方向映射器获取四个方向的邻居节点
+        # 获取四个方向的邻居节点
         for direction in [RingDirection.TL, RingDirection.TR, RingDirection.TU, RingDirection.TD]:
-            neighbor_id = self.direction_mapper.get_next_node_in_direction(node_id, direction)
+            neighbor_id = self._get_next_node_in_direction(node_id, direction)
             connections[direction.value] = neighbor_id
 
         return connections
@@ -258,28 +274,19 @@ class CrossRingModel(BaseNoCModel):
 
     def _step_crossring_networks_compute_phase(self) -> None:
         """CrossRing网络组件计算阶段"""
-        # 1. 环形桥接系统计算阶段
-        if hasattr(self.ring_bridge, "step_compute_phase"):
-            self.ring_bridge.step_compute_phase(self.cycle)
-
-        # 2. 所有CrossRing节点计算阶段
-        for crossring_piece in self.crossring_pieces.values():
-            if hasattr(crossring_piece, "step_compute_phase"):
-                crossring_piece.step_compute_phase(self.cycle)
+        # 所有CrossRing节点计算阶段
+        for node in self.crossring_nodes.values():
+            if hasattr(node, "step_compute_phase"):
+                node.step_compute_phase(self.cycle)
 
     def _step_crossring_networks_update_phase(self) -> None:
         """CrossRing网络组件更新阶段"""
-        # 1. 环形桥接系统更新阶段
-        if hasattr(self.ring_bridge, "step_update_phase"):
-            self.ring_bridge.step_update_phase(self.cycle)
+        # 所有CrossRing节点更新阶段
+        for node in self.crossring_nodes.values():
+            if hasattr(node, "update_state"):
+                node.update_state(self.cycle)
 
-        # 2. 所有CrossRing节点更新阶段
-        for crossring_piece in self.crossring_pieces.values():
-            if hasattr(crossring_piece, "step_update_phase"):
-                crossring_piece.step_update_phase(self.cycle)
-
-        # 3. 执行传统的网络传输逻辑（保持兼容性）
-        self._step_crossring_networks_legacy()
+        # 3. 兼容性：如需保留旧接口可在此补充
 
     def _step_crossring_networks(self) -> None:
         """兼容性接口：使用两阶段执行模型"""
@@ -298,8 +305,8 @@ class CrossRingModel(BaseNoCModel):
         5. ring网络 → eject_queue提取
         6. ETag/ITag处理和拥塞控制
         """
-        # 第零阶段：处理环形桥接系统
-        self.ring_bridge.process_all_cross_points(self.cycle)
+        # 第零阶段：处理CrossRing网络传输（使用新架构）
+        # 在新架构中，这个功能已集成到节点的update_state中
 
         # 第一阶段：重置每个节点的仲裁状态
         self._reset_arbitration_states()
@@ -318,17 +325,15 @@ class CrossRingModel(BaseNoCModel):
 
     def _reset_arbitration_states(self) -> None:
         """重置所有节点的仲裁状态 - 四方向系统"""
-        for piece in self.crossring_pieces.values():
+        for node in self.crossring_nodes.values():
             # 重置仲裁优先级为初始状态（四方向系统）
-            piece["arbitration_state"]["current_priority"] = "inject"
-            piece["arbitration_state"]["arbitration_counter"] += 1
-            piece["arbitration_state"]["last_winner"] = None
+            node.reset_arbitration_state()
 
     def _process_inject_to_ring_four_directions(self) -> None:
         """处理inject队列到ring网络的注入 - 四方向系统"""
-        for node_id, piece in self.crossring_pieces.items():
+        for node_id, node in self.crossring_nodes.items():
             for channel in ["req", "rsp", "data"]:
-                inject_queue = piece["inject_queues"][channel]
+                inject_queue = node.inject_queues[channel]
 
                 # 处理inject队列中的每个flit
                 while inject_queue:
@@ -340,14 +345,14 @@ class CrossRingModel(BaseNoCModel):
                     if not ring_directions:
                         # 目标就是当前节点，直接移到eject队列
                         flit = inject_queue.pop(0)
-                        piece["eject_queues"][channel].append(flit)
+                        node.eject_queues[channel].append(flit)
                         flit.is_arrive = True
                         flit.arrival_network_cycle = self.cycle
                         self.logger.debug(f"周期{self.cycle}：数据包{flit.packet_id}到达目标节点{node_id}")
                         continue
 
                     # 尝试注入到ring网络（四方向系统）
-                    if self._try_inject_to_ring_four_directions(piece, flit, channel, ring_directions):
+                    if self._try_inject_to_ring_four_directions(node, flit, channel, ring_directions):
                         inject_queue.pop(0)  # 成功注入，移除flit
                         self.logger.debug(f"周期{self.cycle}：数据包{flit.packet_id}成功注入到环形网络，方向{ring_directions}")
                     else:
@@ -358,8 +363,17 @@ class CrossRingModel(BaseNoCModel):
         if source == destination:
             return []
 
-        # 使用方向映射器确定路由方向
-        horizontal_direction, vertical_direction = self.direction_mapper.determine_ring_direction(source, destination)
+        # 计算路由方向
+        src_x, src_y = self._get_node_coordinates(source)
+        dst_x, dst_y = self._get_node_coordinates(destination)
+        
+        horizontal_direction = None
+        vertical_direction = None
+        
+        if src_x != dst_x:
+            horizontal_direction = RingDirection.TR if src_x < dst_x else RingDirection.TL
+        if src_y != dst_y:
+            vertical_direction = RingDirection.TD if src_y < dst_y else RingDirection.TU
 
         directions = []
 
@@ -386,7 +400,7 @@ class CrossRingModel(BaseNoCModel):
 
         return directions
 
-    def _try_inject_to_ring_four_directions(self, piece: Dict, flit: Any, channel: str, directions: List[RingDirection]) -> bool:
+    def _try_inject_to_ring_four_directions(self, node: CrossRingNode, flit: Any, channel: str, directions: List[RingDirection]) -> bool:
         """尝试将flit注入到ring网络（四方向系统，增强拥塞控制）"""
         if not directions:
             return False
@@ -396,24 +410,24 @@ class CrossRingModel(BaseNoCModel):
         direction_str = target_direction.value
 
         # 1. 检查本地ETag状态（拥塞控制）
-        if piece["etag_status"][direction_str][channel]:
-            self._record_congestion_event(piece["node_id"], "etag_block", direction_str, channel)
+        if node.etag_status[direction_str][channel]:
+            self._record_congestion_event(node.node_id, "etag_block", direction_str, channel)
             return False  # 本地拥塞，无法注入
 
         # 2. 检查下游路径的拥塞状态
-        if self._check_downstream_path_congestion_four_directions(piece["node_id"], flit.destination, target_direction, channel):
-            self._record_congestion_event(piece["node_id"], "downstream_congestion", direction_str, channel)
+        if self._check_downstream_path_congestion_four_directions(node.node_id, flit.destination, target_direction, channel):
+            self._record_congestion_event(node.node_id, "downstream_congestion", direction_str, channel)
             return False  # 下游路径拥塞
 
         # 3. 检查ring缓冲区是否有空间
-        ring_buffer = piece["ring_buffers"][direction_str][channel]
+        ring_buffer = node.ring_buffers[direction_str][channel]
         if len(ring_buffer) >= self.config.ring_buffer_depth:
-            self._record_congestion_event(piece["node_id"], "buffer_full", direction_str, channel)
+            self._record_congestion_event(node.node_id, "buffer_full", direction_str, channel)
             return False  # 缓冲区满
 
         # 4. 执行仲裁（四方向系统）
-        if not self._arbitrate_ring_access_four_directions(piece, target_direction, "inject"):
-            self._record_congestion_event(piece["node_id"], "arbitration_fail", direction_str, channel)
+        if not self._arbitrate_ring_access_four_directions(node, target_direction, "inject"):
+            self._record_congestion_event(node.node_id, "arbitration_fail", direction_str, channel)
             return False  # 仲裁失败
 
         # 5. 成功注入到ring
@@ -421,14 +435,14 @@ class CrossRingModel(BaseNoCModel):
         flit.network_entry_cycle = self.cycle
         flit.current_ring_direction = target_direction
         flit.remaining_directions = directions[1:]  # 剩余的路由方向
-        self._record_injection_success(piece["node_id"], direction_str, channel)
+        self._record_injection_success(node.node_id, direction_str, channel)
 
         return True
 
-    def _arbitrate_ring_access_four_directions(self, piece: Dict, direction: RingDirection, requester: str) -> bool:
+    def _arbitrate_ring_access_four_directions(self, node: CrossRingNode, direction: RingDirection, requester: str) -> bool:
         """四方向系统的环形访问仲裁机制"""
         direction_str = direction.value
-        arbitration_state = piece["arbitration_state"]
+        arbitration_state = node.arbitration_state
 
         # 简化仲裁：轮询机制
         if requester == "inject":
@@ -436,7 +450,7 @@ class CrossRingModel(BaseNoCModel):
             for dir_name in ["TL", "TR", "TU", "TD"]:
                 if dir_name != direction_str:
                     for channel in ["req", "rsp", "data"]:
-                        if piece["ring_buffers"][dir_name][channel]:
+                        if node.ring_buffers[dir_name][channel]:
                             # 有其他方向的流量，注入失败
                             return False
 
@@ -467,12 +481,12 @@ class CrossRingModel(BaseNoCModel):
             current_node = nodes_in_direction[i]
             next_node = nodes_in_direction[(i + 1) % len(nodes_in_direction)]
 
-            current_piece = self.crossring_pieces[current_node]
-            next_piece = self.crossring_pieces[next_node]
+            current_node_instance = self.crossring_nodes[current_node]
+            next_node_instance = self.crossring_nodes[next_node]
 
             # 处理每个通道
             for channel in ["req", "rsp", "data"]:
-                self._try_move_flit_in_ring_direction(current_piece, next_piece, direction_str, channel)
+                self._try_move_flit_in_ring_direction(current_node_instance, next_node_instance, direction_str, channel)
 
     def _get_nodes_in_ring_direction(self, direction: RingDirection) -> List[NodeId]:
         """获取指定方向上的环形节点列表"""
@@ -497,10 +511,10 @@ class CrossRingModel(BaseNoCModel):
             # 过滤掉超出范围的节点
             return [node for node in nodes if node < self.config.num_nodes]
 
-    def _try_move_flit_in_ring_direction(self, current_piece: Dict, next_piece: Dict, direction_str: str, channel: str) -> None:
+    def _try_move_flit_in_ring_direction(self, current_node: CrossRingNode, next_node: CrossRingNode, direction_str: str, channel: str) -> None:
         """尝试在指定方向的环形中移动flit"""
-        current_buffer = current_piece["ring_buffers"][direction_str][channel]
-        next_buffer = next_piece["ring_buffers"][direction_str][channel]
+        current_buffer = current_node.ring_buffers[direction_str][channel]
+        next_buffer = next_node.ring_buffers[direction_str][channel]
 
         if not current_buffer:
             return
@@ -508,17 +522,17 @@ class CrossRingModel(BaseNoCModel):
         flit = current_buffer[0]  # 查看队首flit
 
         # 检查是否到达最终目标节点
-        if self._should_eject_flit_four_directions(next_piece["node_id"], flit):
+        if self._should_eject_flit_four_directions(next_node.node_id, flit):
             # 尝试移动到eject队列
-            if self._try_move_to_eject(next_piece, flit, channel):
+            if self._try_move_to_eject(next_node, flit, channel):
                 current_buffer.pop(0)  # 成功eject，移除flit
                 self.stats["ring_transmissions"] += 1
             return
 
         # 检查是否需要维度转换
-        if self._should_transfer_to_another_direction(next_piece["node_id"], flit, direction_str):
+        if self._should_transfer_to_another_direction(next_node.node_id, flit, direction_str):
             # 尝试维度转换
-            if self._try_dimension_turning(next_piece, flit, direction_str, channel):
+            if self._try_dimension_turning(next_node, flit, direction_str, channel):
                 current_buffer.pop(0)  # 成功转换，移除flit
                 self.stats["dimension_turns"] += 1
             return
@@ -533,11 +547,11 @@ class CrossRingModel(BaseNoCModel):
         self.stats["ring_transmissions"] += 1
 
         # 检查是否是环绕连接
-        if self._is_wrap_around_connection(current_piece["node_id"], next_piece["node_id"], direction_str):
+        if self._is_wrap_around_connection(current_node.node_id, next_node.node_id, direction_str):
             self.stats["wrap_around_hops"] += 1
-            self.logger.debug(f"周期{self.cycle}：数据包{flit.packet_id}通过环绕连接从节点{current_piece['node_id']}到节点{next_piece['node_id']}")
+            self.logger.debug(f"周期{self.cycle}：数据包{flit.packet_id}通过环绕连接从节点{current_node.node_id}到节点{next_node.node_id}")
 
-    def _arbitrate_ring_access(self, piece: Dict, direction: str, requester: str) -> bool:
+    def _arbitrate_ring_access(self, node: CrossRingNode, direction: str, requester: str) -> bool:
         """Ring访问仲裁机制（简化版：优先级固定）"""
         # 简化仲裁：ring传输优先级高于inject
         # 这样可以确保ring中的flit能够正常流动
@@ -548,7 +562,7 @@ class CrossRingModel(BaseNoCModel):
         elif requester == "inject":
             # Inject请求在没有ring传输时被允许
             # 检查是否有ring传输正在进行
-            ring_buffers = piece["ring_buffers"][direction]
+            ring_buffers = node.ring_buffers[direction]
             has_ring_traffic = False
 
             for channel in ["req", "rsp", "data"]:
@@ -588,7 +602,7 @@ class CrossRingModel(BaseNoCModel):
             # 对于YX路由：到达目标行且需要水平移动时转换
             return node_y == dst_y and node_x != dst_x
 
-    def _try_dimension_turning(self, piece: Dict, flit: Any, from_direction: str, channel: str) -> bool:
+    def _try_dimension_turning(self, node: CrossRingNode, flit: Any, from_direction: str, channel: str) -> bool:
         """尝试维度转换 - 支持XY和YX路由的双向转换"""
         if not hasattr(flit, "remaining_directions") or not flit.remaining_directions:
             return False
@@ -597,7 +611,7 @@ class CrossRingModel(BaseNoCModel):
         to_direction = next_direction.value
 
         # 使用交叉点模块进行维度转换
-        cross_point = piece["cross_point"]
+        cross_point = node.cross_point
 
         # 确定转换类型（支持双向转换）
         if from_direction in ["TL", "TR"] and to_direction in ["TU", "TD"]:
@@ -615,7 +629,7 @@ class CrossRingModel(BaseNoCModel):
             flit.remaining_directions = flit.remaining_directions[1:]
 
             # 将flit移动到新方向的缓冲区
-            target_buffer = piece["ring_buffers"][to_direction][channel]
+            target_buffer = node.ring_buffers[to_direction][channel]
             if len(target_buffer) < self.config.ring_buffer_depth:
                 target_buffer.append(flit)
                 return True
@@ -651,16 +665,16 @@ class CrossRingModel(BaseNoCModel):
 
         # 检查路径上每个节点的拥塞状态
         for node_id in path_nodes:
-            if node_id in self.crossring_pieces:
-                piece = self.crossring_pieces[node_id]
+            if node_id in self.crossring_nodes:
+                node = self.crossring_nodes[node_id]
                 direction_str = direction.value
 
                 # 检查该节点的ETag状态
-                if piece["etag_status"][direction_str][channel]:
+                if node.etag_status[direction_str][channel]:
                     return True
 
                 # 检查ring缓冲区占用率
-                buffer = piece["ring_buffers"][direction_str][channel]
+                buffer = node.ring_buffers[direction_str][channel]
                 if len(buffer) >= self.config.ring_buffer_depth * 0.7:  # 70%阈值
                     return True
 
@@ -668,13 +682,21 @@ class CrossRingModel(BaseNoCModel):
 
     def _get_path_nodes_four_directions(self, source: NodeId, destination: NodeId, direction: RingDirection) -> List[NodeId]:
         """获取四方向系统中从源到目标在指定方向上的路径节点"""
-        path = self.direction_mapper.get_ring_path(source, destination)
-
-        # 提取指定方向上的节点
+        # 简化实现：计算在指定方向上的路径节点
         direction_nodes = []
-        for node_id, node_direction in path:
-            if node_direction == direction:
-                direction_nodes.append(node_id)
+        current = source
+        
+        # 限制最大跳数避免无限循环
+        max_hops = self.config.num_nodes
+        hops = 0
+        
+        while current != destination and hops < max_hops:
+            next_node = self._get_next_node_in_direction(current, direction)
+            if next_node == current:  # 到达边界，无法继续
+                break
+            direction_nodes.append(next_node)
+            current = next_node
+            hops += 1
 
         return direction_nodes
 
@@ -716,8 +738,8 @@ class CrossRingModel(BaseNoCModel):
         # 处理每个节点的ring缓冲区（从后往前处理避免冲突）
         for i in reversed(range(len(nodes_in_ring))):
             node_id = nodes_in_ring[i]
-            piece = self.crossring_pieces[node_id]
-            ring_buffer = piece["ring_buffers"][ring_type][channel][direction]
+            node_instance = self.crossring_nodes[node_id]
+            ring_buffer = node_instance.ring_buffers[ring_type][channel][direction]
 
             if not ring_buffer:
                 continue
@@ -725,15 +747,15 @@ class CrossRingModel(BaseNoCModel):
             # 获取下一个节点
             next_node_index = (i + 1) % len(nodes_in_ring)
             next_node_id = nodes_in_ring[next_node_index]
-            next_piece = self.crossring_pieces[next_node_id]
+            next_node_instance = self.crossring_nodes[next_node_id]
 
             # 尝试移动flit到下一个节点
-            self._try_move_flit_in_ring(piece, next_piece, ring_type, direction, channel)
+            self._try_move_flit_in_ring(node_instance, next_node_instance, ring_type, direction, channel)
 
-    def _try_move_flit_in_ring(self, current_piece: Dict, next_piece: Dict, ring_type: str, direction: str, channel: str) -> None:
+    def _try_move_flit_in_ring(self, current_node: CrossRingNode, next_node: CrossRingNode, ring_type: str, direction: str, channel: str) -> None:
         """尝试在ring中移动flit"""
-        current_buffer = current_piece["ring_buffers"][ring_type][channel][direction]
-        next_buffer = next_piece["ring_buffers"][ring_type][channel][direction]
+        current_buffer = current_node.ring_buffers[ring_type][channel][direction]
+        next_buffer = next_node.ring_buffers[ring_type][channel][direction]
 
         if not current_buffer:
             return
@@ -741,16 +763,16 @@ class CrossRingModel(BaseNoCModel):
         flit = current_buffer[0]  # 查看队首flit
 
         # 检查是否到达最终目标节点
-        if self._should_eject_flit(next_piece["node_id"], flit, ring_type):
+        if self._should_eject_flit(next_node.node_id, flit, ring_type):
             # 尝试移动到eject队列
-            if self._try_move_to_eject(next_piece, flit, channel):
+            if self._try_move_to_eject(next_node, flit, channel):
                 current_buffer.pop(0)  # 成功eject，移除flit
             return
 
         # 检查是否需要转换ring方向（从水平转垂直）
-        if self._should_transfer_to_vertical_ring(next_piece["node_id"], flit, ring_type):
+        if self._should_transfer_to_vertical_ring(next_node.node_id, flit, ring_type):
             # 尝试转移到垂直ring
-            if self._try_transfer_to_vertical_ring(next_piece, flit, channel):
+            if self._try_transfer_to_vertical_ring(next_node, flit, channel):
                 current_buffer.pop(0)  # 成功转移，移除flit
             return
 
@@ -760,7 +782,7 @@ class CrossRingModel(BaseNoCModel):
 
         # 执行仲裁
         requester = "ring_cw" if direction == "clockwise" else "ring_ccw"
-        if not self._arbitrate_ring_access(next_piece, ring_type, requester):
+        if not self._arbitrate_ring_access(next_node, ring_type, requester):
             return  # 仲裁失败
 
         # 移动flit到下一个节点
@@ -779,9 +801,9 @@ class CrossRingModel(BaseNoCModel):
             # 垂直ring：当Y坐标匹配且X坐标也匹配时eject（到达最终目标）
             return node_x == dst_x and node_y == dst_y
 
-    def _try_move_to_eject(self, piece: Dict, flit: Any, channel: str) -> bool:
+    def _try_move_to_eject(self, node: CrossRingNode, flit: Any, channel: str) -> bool:
         """尝试将flit移动到eject队列"""
-        eject_queue = piece["eject_queues"][channel]
+        eject_queue = node.eject_queues[channel]
 
         # 检查eject队列是否有空间
         if len(eject_queue) >= self.config.eject_buffer_depth:
@@ -805,10 +827,10 @@ class CrossRingModel(BaseNoCModel):
         # 当X坐标匹配但Y坐标不匹配时，需要转到垂直ring
         return node_x == dst_x and node_y != dst_y
 
-    def _try_transfer_to_vertical_ring(self, piece: Dict, flit: Any, channel: str) -> bool:
+    def _try_transfer_to_vertical_ring(self, node: CrossRingNode, flit: Any, channel: str) -> bool:
         """尝试将flit从水平ring转移到垂直ring"""
         # 确定垂直ring的方向
-        node_y = self._get_node_coordinates(piece["node_id"])[1]
+        node_y = self._get_node_coordinates(node.node_id)[1]
         dst_y = self._get_node_coordinates(flit.destination)[1]
 
         if dst_y > node_y:
@@ -817,12 +839,12 @@ class CrossRingModel(BaseNoCModel):
             ring_direction = "counter_clockwise"  # 向上
 
         # 检查垂直ring缓冲区是否有空间
-        vertical_buffer = piece["ring_buffers"]["vertical"][channel][ring_direction]
+        vertical_buffer = node.ring_buffers["vertical"][channel][ring_direction]
         if len(vertical_buffer) >= self.config.ring_buffer_depth:
             return False
 
         # 执行仲裁
-        if not self._arbitrate_ring_access(piece, "vertical", "inject"):
+        if not self._arbitrate_ring_access(node, "vertical", "inject"):
             return False
 
         # 转移到垂直ring
@@ -837,23 +859,23 @@ class CrossRingModel(BaseNoCModel):
 
     def _update_etag_itag_status(self) -> None:
         """更新ETag/ITag状态用于拥塞控制"""
-        for node_id, piece in self.crossring_pieces.items():
+        for node_id, node in self.crossring_nodes.items():
             # 更新ETag状态（Egress Tag - 出口拥塞标记）
-            self._update_etag_status(piece)
+            self._update_etag_status(node)
 
             # 更新ITag状态（Ingress Tag - 入口拥塞标记）
-            self._update_itag_status(piece)
+            self._update_itag_status(node)
 
-    def _update_etag_status(self, piece: Dict) -> None:
+    def _update_etag_status(self, node: CrossRingNode) -> None:
         """更新ETag状态（四方向系统）"""
         for direction in ["TL", "TR", "TU", "TD"]:
             for channel in ["req", "rsp", "data"]:
                 # 检查eject队列的拥塞情况
-                eject_queue = piece["eject_queues"][channel]
+                eject_queue = node.eject_queues[channel]
                 eject_threshold = self.config.eject_buffer_depth * 0.8  # 80%阈值
 
                 # 检查ring缓冲区的拥塞情况
-                ring_buffer = piece["ring_buffers"][direction][channel]
+                ring_buffer = node.ring_buffers[direction][channel]
                 ring_congestion = False
 
                 buffer_occupancy = len(ring_buffer)
@@ -863,22 +885,22 @@ class CrossRingModel(BaseNoCModel):
 
                 # 设置ETag状态
                 eject_congestion = len(eject_queue) >= eject_threshold
-                piece["etag_status"][direction][channel] = eject_congestion or ring_congestion
+                node.etag_status[direction][channel] = eject_congestion or ring_congestion
 
-    def _update_itag_status(self, piece: Dict) -> None:
+    def _update_itag_status(self, node: CrossRingNode) -> None:
         """更新ITag状态（四方向系统）"""
         for direction in ["TL", "TR", "TU", "TD"]:
             for channel in ["req", "rsp", "data"]:
                 # 检查inject队列的拥塞情况
-                inject_queue = piece["inject_queues"][channel]
+                inject_queue = node.inject_queues[channel]
                 inject_threshold = self.config.inject_buffer_depth * 0.8
 
                 # 检查下游节点的ETag状态
-                downstream_congestion = self._check_downstream_congestion_four_directions(piece["node_id"], direction, channel)
+                downstream_congestion = self._check_downstream_congestion_four_directions(node.node_id, direction, channel)
 
                 # 设置ITag状态
                 inject_congestion = len(inject_queue) >= inject_threshold
-                piece["itag_status"][direction][channel] = inject_congestion or downstream_congestion
+                node.itag_status[direction][channel] = inject_congestion or downstream_congestion
 
     def _check_downstream_congestion_four_directions(self, node_id: NodeId, direction: str, channel: str) -> bool:
         """检查下游节点的拥塞状态"""
@@ -887,9 +909,9 @@ class CrossRingModel(BaseNoCModel):
 
         # 检查下游节点的ETag状态
         for downstream_node in downstream_nodes:
-            if downstream_node in self.crossring_pieces:
-                downstream_piece = self.crossring_pieces[downstream_node]
-                if downstream_piece["etag_status"][direction][channel]:
+            if downstream_node in self.crossring_nodes:
+                downstream_node_instance = self.crossring_nodes[downstream_node]
+                if downstream_node_instance.etag_status[direction][channel]:
                     return True
 
         return False
@@ -904,7 +926,7 @@ class CrossRingModel(BaseNoCModel):
             ring_direction = RingDirection(direction)
 
             # 获取下游节点
-            downstream_node = self.direction_mapper.get_next_node_in_direction(node_id, ring_direction)
+            downstream_node = self._get_next_node_in_direction(node_id, ring_direction)
             downstream_nodes.append(downstream_node)
         except Exception:
             # 如果转换失败，返回空列表
@@ -919,16 +941,16 @@ class CrossRingModel(BaseNoCModel):
 
         # 检查路径上每个节点的拥塞状态
         for node_id in path_nodes:
-            if node_id in self.crossring_pieces:
-                piece = self.crossring_pieces[node_id]
+            if node_id in self.crossring_nodes:
+                node = self.crossring_nodes[node_id]
 
                 # 检查该节点的ETag状态
-                if piece["etag_status"][direction][channel]:
+                if node.etag_status[direction][channel]:
                     return True
 
                 # 检查ring缓冲区占用率
                 for ring_dir in ["clockwise", "counter_clockwise"]:
-                    buffer = piece["ring_buffers"][direction][channel][ring_dir]
+                    buffer = node.ring_buffers[direction][channel][ring_dir]
                     if len(buffer) >= self.config.ring_buffer_depth * 0.7:  # 70%阈值
                         return True
 
@@ -1165,8 +1187,7 @@ class CrossRingModel(BaseNoCModel):
         print("\nIP接口状态:")
         for ip_key, ip_status in status.items():
             print(
-                f"  {ip_key}: RN({ip_status['rn_read_active']}R+{ip_status['rn_write_active']}W), "
-                + f"SN({ip_status['sn_active']}), 重试({ip_status['read_retries']}R+{ip_status['write_retries']}W)"
+                f"  {ip_key}: RN({ip_status['rn_read_active']}R+{ip_status['rn_write_active']}W), " + f"SN({ip_status['sn_active']}), 重试({ip_status['read_retries']}R+{ip_status['write_retries']}W)"
             )
 
     def inject_test_traffic(self, source: NodeId, destination: NodeId, req_type: str, count: int = 1, burst_length: int = 4) -> List[str]:
@@ -1220,11 +1241,7 @@ class CrossRingModel(BaseNoCModel):
                 "is_running": self.is_running,
                 "is_finished": self.is_finished,
             },
-            "networks_ready": {
-                "req": self.networks["req"] is not None,
-                "rsp": self.networks["rsp"] is not None,
-                "data": self.networks["data"] is not None,
-            },
+            "networks_ready": len(self.crossring_nodes) > 0
         }
 
     def cleanup(self) -> None:
@@ -1237,7 +1254,7 @@ class CrossRingModel(BaseNoCModel):
             pass
 
         # 清理网络组件
-        self.crossring_pieces.clear()
+        self.crossring_nodes.clear()
 
         # 清理统计信息
         self.stats.clear()
@@ -1256,12 +1273,7 @@ class CrossRingModel(BaseNoCModel):
 
     def __repr__(self) -> str:
         """字符串表示"""
-        return (
-            f"CrossRingModel({self.config.config_name}, "
-            f"{self.config.num_row}x{self.config.num_col}, "
-            f"cycle={self.cycle}, "
-            f"active_requests={self.get_active_request_count()})"
-        )
+        return f"CrossRingModel({self.config.config_name}, " f"{self.config.num_row}x{self.config.num_col}, " f"cycle={self.cycle}, " f"active_requests={self.get_active_request_count()})"
 
     # ========== 统一接口方法（用于兼容性） ==========
 
@@ -1422,21 +1434,21 @@ class CrossRingModel(BaseNoCModel):
         found_positions = []
 
         # 检查所有节点的inject/eject队列和ring缓冲区
-        for node_id, piece in self.crossring_pieces.items():
+        for node_id, node in self.crossring_nodes.items():
             # 检查inject队列
             for channel in ["req", "rsp", "data"]:
-                for flit in piece["inject_queues"][channel]:
+                for flit in node.inject_queues[channel]:
                     if hasattr(flit, "packet_id") and flit.packet_id == packet_id:
                         found_positions.append(f"节点{node_id}-inject-{channel}")
 
                 # 检查eject队列
-                for flit in piece["eject_queues"][channel]:
+                for flit in node.eject_queues[channel]:
                     if hasattr(flit, "packet_id") and flit.packet_id == packet_id:
                         found_positions.append(f"节点{node_id}-eject-{channel}")
 
                 # 检查ring缓冲区
                 for direction in ["TL", "TR", "TU", "TD"]:
-                    for flit in piece["ring_buffers"][direction][channel]:
+                    for flit in node.ring_buffers[direction][channel]:
                         if hasattr(flit, "packet_id") and flit.packet_id == packet_id:
                             found_positions.append(f"节点{node_id}-ring-{direction}-{channel}")
 
