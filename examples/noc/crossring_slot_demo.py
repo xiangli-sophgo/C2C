@@ -45,7 +45,7 @@ def demo_crossring_slot_lifecycle():
     # 阶段1: I-Tag预约
     print("\n阶段1: I-Tag预约机制")
     print("-" * 30)
-    success = slot.reserve_itag(reserver_id=5, direction="horizontal")
+    success = slot.reserve_itag(reserver_id=5, direction="TR")
     print(f"I-Tag预约结果: {success}")
     print(f"预约后状态 - 可用: {slot.is_available}, 占用: {slot.is_occupied}, 预约: {slot.is_reserved}")
     print(f"预约者ID: {slot.itag_reserver_id}, 预约方向: {slot.itag_direction}")
@@ -124,27 +124,29 @@ def demo_ring_slice_pipeline():
 
         test_slots.append(slot)
 
-    # 注入slots到水平RingSlice
-    print("\n注入阶段...")
-    for i, slot in enumerate(test_slots):
-        success = h_slice.receive_slot(slot, "req")
-        print(f"注入slot {i}: {success}")
-
     # 执行流水线传输
     print("\n流水线传输阶段...")
     print("周期 | 输入缓存 | 当前slots | 输出缓存 | 传输slot")
     print("-" * 55)
 
     transmitted_slots = []
-    for cycle in range(10):
+    slots_to_inject = test_slots.copy()
+    for cycle in range(len(test_slots) + 10):
+        # 每个周期注入一个slot，模拟流水线
+        if slots_to_inject:
+            slot = slots_to_inject.pop(0)
+            h_slice.receive_slot(slot, "req")
+        else:
+            # 注入空槽以继续推进流水线
+            h_slice.receive_slot(None, "req")
+
         # 执行step操作
         h_slice.step(cycle)
 
         # 获取状态信息
-        status = h_slice.get_ring_slice_status()
-        input_count = len(h_slice.input_buffer.get("req", []) if h_slice.input_buffer.get("req") else [])
-        current_count = len([s for s in h_slice.current_slots.get("req", []) if s])
-        output_count = len(h_slice.output_buffer.get("req", []) if h_slice.output_buffer.get("req") else [])
+        input_count = 1 if h_slice.input_buffer.get("req") else 0
+        current_count = 1 if h_slice.current_slots.get("req") else 0
+        output_count = 1 if h_slice.output_buffer.get("req") else 0
 
         # 尝试传输
         transmitted_slot = h_slice.transmit_slot("req")
@@ -164,21 +166,14 @@ def demo_ring_slice_pipeline():
 
     # 水平到垂直的传输
     print("\n水平到垂直传输...")
-    transferred_count = 0
-    for slot in transmitted_slots[:3]:  # 传输前3个到垂直slice
-        success = v_slice.receive_slot(slot, "req")
-        if success:
-            transferred_count += 1
-
-    print(f"成功传输 {transferred_count} 个slots到垂直RingSlice")
-
-    # 垂直slice的传输
-    print("\n垂直RingSlice传输:")
-    for cycle in range(5):
-        v_slice.step(cycle + 10)
+    if transmitted_slots:
+        v_slice.receive_slot(transmitted_slots[0], "req")
+        print(f"注入 {transmitted_slots[0].flit.packet_id} 到垂直slice")
+        v_slice.step(0)
+        v_slice.step(1)
         out_slot = v_slice.transmit_slot("req")
         if out_slot:
-            print(f"  周期 {cycle}: 输出 packet_id={out_slot.flit.packet_id}")
+            print(f"从垂直slice传出: {out_slot.flit.packet_id}")
 
     return True
 
@@ -280,113 +275,11 @@ def demo_tag_mechanism_integration():
     return True
 
 
-def demo_performance_comparison():
-    """演示性能对比：有无Tag机制的差异"""
-    print("\n" + "=" * 60)
-    print("演示 4: 性能对比分析")
-    print("=" * 60)
-
-    print("对比场景: 高负载下的传输效率")
-    print("- 场景A: 无Tag机制（传统FIFO）")
-    print("- 场景B: 有Tag机制（I-Tag + E-Tag）")
-
-    # 创建测试数据
-    num_slots = 20
-    print(f"\n创建 {num_slots} 个测试slots...")
-
-    # 场景A: 无Tag机制
-    print("\n场景A: 传统FIFO传输")
-    print("-" * 30)
-
-    fifo_slice = RingSlice("fifo_slice", "horizontal", 0)
-
-    # 按顺序注入slots
-    fifo_slots = []
-    for i in range(num_slots):
-        slot = CrossRingSlot(slot_id=i, cycle=i, channel="req")
-        flit = CrossRingFlit(packet_id=500 + i, flit_id=1)
-        slot.assign_flit(flit)
-        fifo_slots.append(slot)
-        fifo_slice.receive_slot(slot, "req")
-
-    # 统计传输顺序
-    fifo_transmission_order = []
-    for cycle in range(num_slots + 5):
-        fifo_slice.step(cycle)
-        out_slot = fifo_slice.transmit_slot("req")
-        if out_slot:
-            fifo_transmission_order.append(out_slot.flit.packet_id)
-
-    print(f"FIFO传输顺序: {fifo_transmission_order[:10]}..." if len(fifo_transmission_order) > 10 else f"FIFO传输顺序: {fifo_transmission_order}")
-
-    # 场景B: 有Tag机制
-    print("\n场景B: Tag机制传输")
-    print("-" * 30)
-
-    tag_slice = RingSlice("tag_slice", "horizontal", 1)
-    tag_manager = CrossRingTagManager(node_id=1, config=create_crossring_config_custom(4, 4, "perf_test"))
-
-    # 创建带优先级的slots
-    tag_slots = []
-    high_priority_ids = [1, 5, 9, 15]  # 某些包设为高优先级
-
-    for i in range(num_slots):
-        slot = CrossRingSlot(slot_id=i, cycle=i, channel="req")
-        flit = CrossRingFlit(packet_id=600 + i, flit_id=1)
-        slot.assign_flit(flit)
-
-        # 设置优先级
-        if i in high_priority_ids:
-            slot.mark_etag(PriorityLevel.T1, "TL")
-            print(f"  设置高优先级: packet_id={600+i}")
-
-        tag_slots.append(slot)
-        tag_slice.receive_slot(slot, "req")
-
-    # 统计带Tag的传输顺序
-    tag_transmission_order = []
-    for cycle in range(num_slots + 5):
-        tag_slice.step(cycle)
-        out_slot = tag_slice.transmit_slot("req")
-        if out_slot:
-            tag_transmission_order.append(out_slot.flit.packet_id)
-
-    print(f"Tag传输顺序: {tag_transmission_order[:10]}..." if len(tag_transmission_order) > 10 else f"Tag传输顺序: {tag_transmission_order}")
-
-    # 分析优先级效果
-    print("\n优先级效果分析:")
-    print("-" * 30)
-
-    high_priority_packets = [600 + i for i in high_priority_ids]
-
-    # 分析高优先级包的传输位置
-    for packet_id in high_priority_packets:
-        if packet_id in tag_transmission_order:
-            position = tag_transmission_order.index(packet_id) + 1
-            original_position = packet_id - 600 + 1
-            improvement = original_position - position
-            print(f"  packet_id {packet_id}: 原位置 {original_position} -> 新位置 {position} (提前 {improvement} 位)")
-
-    # 计算平均传输延迟改善
-    total_improvement = 0
-    for packet_id in high_priority_packets:
-        if packet_id in tag_transmission_order:
-            original_pos = packet_id - 600 + 1
-            new_pos = tag_transmission_order.index(packet_id) + 1
-            total_improvement += original_pos - new_pos
-
-    avg_improvement = total_improvement / len(high_priority_packets)
-    print(f"\n高优先级包平均提前传输: {avg_improvement:.1f} 位")
-
-    return True
-
-
 def main():
     """主函数"""
     print("CrossRing Slot和RingSlice机制演示")
     print("=" * 80)
     print("本演示展示CrossRing的核心创新组件和机制")
-    print("基于 Cross Ring Spec v2.0 的完整实现")
     print("=" * 80)
 
     setup_logging()
@@ -395,7 +288,6 @@ def main():
         ("CrossRingSlot生命周期", demo_crossring_slot_lifecycle),
         ("RingSlice流水线传输", demo_ring_slice_pipeline),
         ("Tag防饿死机制", demo_tag_mechanism_integration),
-        ("性能对比分析", demo_performance_comparison),
     ]
 
     passed = 0

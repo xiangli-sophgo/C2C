@@ -307,6 +307,7 @@ class CrossRingTagManager:
         Returns:
             是否获得轮询授权
         """
+        # TODO: T0级的时候需要先将slot存储到一个轮询表中，然后查看当前slot是不是第一个，
         state = self.etag_states[channel][sub_direction]
 
         # 简化的轮询实现
