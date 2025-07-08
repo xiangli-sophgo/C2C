@@ -48,6 +48,114 @@ class ETagState:
     round_robin_index: int = 0
 
 
+@dataclass
+class FifoEntryManager:
+    """
+    FIFO Entry管理器 - 管理分层entry分配和占用跟踪
+    
+    根据CrossRing Spec v2.0，每个方向需要独立管理不同等级的entry占用：
+    - T2级：只能使用T2专用entry
+    - T1级：优先使用T1专用entry，然后使用T2 entry
+    - T0级：优先使用T0专用entry，然后依次降级使用T1、T2 entry
+    
+    对于没有专用entry的方向(TR/TD)，所有等级共用一个entry池，但仍然遵循优先级降级使用规则
+    """
+    
+    # FIFO容量配置 (根据路由策略和方向确定)
+    total_depth: int        # rb_in_depth 或 eq_in_depth
+    t2_max: int            # T2级最大可用entry
+    t1_max: int            # T1级最大可用entry (包含T2)
+    has_dedicated_entries: bool = True  # 是否有专用entry (TL/TU=True, TR/TD=False)
+    
+    # 当前占用计数
+    t2_occupied: int = 0   # T2级当前占用
+    t1_occupied: int = 0   # T1级当前占用  
+    t0_occupied: int = 0   # T0级当前占用
+    
+    def can_allocate_t2_entry(self) -> bool:
+        """检查是否可以为T2级分配entry (T2只能使用T2专用entry)"""
+        return self.t2_occupied < self.t2_max
+        
+    def can_allocate_t1_entry(self) -> bool:
+        """检查是否可以为T1级分配entry (T1优先使用T1专用entry，然后使用T2 entry)"""
+        if self.has_dedicated_entries:
+            # 有专用entry：T1可以使用T1专用 + T2剩余
+            return (self.t1_occupied + self.t2_occupied) < self.t1_max
+        else:
+            # 没有专用entry：所有等级共用一个池
+            total_occupied = self.t0_occupied + self.t1_occupied + self.t2_occupied
+            return total_occupied < self.total_depth
+        
+    def can_allocate_t0_entry(self) -> bool:
+        """检查是否可以为T0级分配entry (T0优先使用T0专用entry，然后依次降级使用T1、T2 entry)"""
+        if self.has_dedicated_entries:
+            # 有专用entry：T0可以使用全部容量 - 其他等级占用
+            total_occupied = self.t0_occupied + self.t1_occupied + self.t2_occupied
+            return total_occupied < self.total_depth
+        else:
+            # 没有专用entry：所有等级共用一个池
+            total_occupied = self.t0_occupied + self.t1_occupied + self.t2_occupied
+            return total_occupied < self.total_depth
+        
+    def allocate_t2_entry(self) -> bool:
+        """为T2级分配一个entry (T2只能使用T2专用entry)"""
+        if self.can_allocate_t2_entry():
+            self.t2_occupied += 1
+            return True
+        return False
+        
+    def allocate_t1_entry(self) -> bool:
+        """为T1级分配一个entry (T1优先使用T1专用entry，然后使用T2 entry)"""
+        if self.can_allocate_t1_entry():
+            self.t1_occupied += 1
+            return True
+        return False
+        
+    def allocate_t0_entry(self) -> bool:
+        """为T0级分配一个entry (T0优先使用T0专用entry，然后依次降级使用T1、T2 entry)"""
+        if self.can_allocate_t0_entry():
+            self.t0_occupied += 1
+            return True
+        return False
+        
+    def release_t2_entry(self) -> bool:
+        """释放一个T2级entry"""
+        if self.t2_occupied > 0:
+            self.t2_occupied -= 1
+            return True
+        return False
+        
+    def release_t1_entry(self) -> bool:
+        """释放一个T1级entry"""
+        if self.t1_occupied > 0:
+            self.t1_occupied -= 1
+            return True
+        return False
+        
+    def release_t0_entry(self) -> bool:
+        """释放一个T0级entry"""
+        if self.t0_occupied > 0:
+            self.t0_occupied -= 1
+            return True
+        return False
+        
+    def get_occupancy_info(self) -> Dict[str, Any]:
+        """获取占用情况信息"""
+        return {
+            "total_depth": self.total_depth,
+            "t2_max": self.t2_max,
+            "t1_max": self.t1_max,
+            "t0_max": self.total_depth,
+            "t2_occupied": self.t2_occupied,
+            "t1_occupied": self.t1_occupied,
+            "t0_occupied": self.t0_occupied,
+            "total_occupied": self.t0_occupied + self.t1_occupied + self.t2_occupied,
+            "available_for_t2": self.t2_max - self.t2_occupied,
+            "available_for_t1": self.t1_max - (self.t1_occupied + self.t2_occupied),
+            "available_for_t0": self.total_depth - (self.t0_occupied + self.t1_occupied + self.t2_occupied)
+        }
+
+
 class CrossRingTagManager:
     """
     CrossRing Tag机制管理器
@@ -76,11 +184,15 @@ class CrossRingTagManager:
         }
 
         # E-Tag配置参数
+        # TR和TD的T1最大值应该等于TL和TU的T0容量，而不是无穷大
+        tl_t0_capacity = getattr(config.fifo_config, 'rb_in_depth', 16)  # TL方向T0容量
+        tu_t0_capacity = getattr(config.fifo_config, 'eq_in_depth', 16)  # TU方向T0容量
+        
         self.etag_config = {
-            "TL": {"t2_ue_max": getattr(config.tag_config, "tl_etag_t2_ue_max", 8), "t1_ue_max": getattr(config.tag_config, "tl_etag_t1_ue_max", 15), "can_upgrade_to_t0": True},
-            "TR": {"t2_ue_max": getattr(config.tag_config, "tr_etag_t2_ue_max", 12), "t1_ue_max": float("inf"), "can_upgrade_to_t0": False},
-            "TU": {"t2_ue_max": getattr(config.tag_config, "tu_etag_t2_ue_max", 8), "t1_ue_max": getattr(config.tag_config, "tu_etag_t1_ue_max", 15), "can_upgrade_to_t0": True},
-            "TD": {"t2_ue_max": getattr(config.tag_config, "td_etag_t2_ue_max", 12), "t1_ue_max": float("inf"), "can_upgrade_to_t0": False},
+            "TL": {"t2_ue_max": getattr(config.tag_config, "tl_etag_t2_ue_max", 8), "t1_ue_max": getattr(config.tag_config, "tl_etag_t1_ue_max", 15), "can_upgrade_to_t0": True, "has_dedicated_entries": True},
+            "TR": {"t2_ue_max": getattr(config.tag_config, "tr_etag_t2_ue_max", 12), "t1_ue_max": tl_t0_capacity, "can_upgrade_to_t0": False, "has_dedicated_entries": False},
+            "TU": {"t2_ue_max": getattr(config.tag_config, "tu_etag_t2_ue_max", 8), "t1_ue_max": getattr(config.tag_config, "tu_etag_t1_ue_max", 15), "can_upgrade_to_t0": True, "has_dedicated_entries": True},
+            "TD": {"t2_ue_max": getattr(config.tag_config, "td_etag_t2_ue_max", 12), "t1_ue_max": tu_t0_capacity, "can_upgrade_to_t0": False, "has_dedicated_entries": False},
         }
 
         # I-Tag状态管理
@@ -97,6 +209,17 @@ class CrossRingTagManager:
             "data": {"TL": ETagState(), "TR": ETagState(), "TU": ETagState(), "TD": ETagState()},
         }
 
+        # T0 Etag Order FIFO - 全局T0级slot轮询队列
+        self.T0_Etag_Order_FIFO: Dict[str, List[Any]] = {
+            "req": [],
+            "rsp": [],
+            "data": []
+        }
+        
+        # Entry管理器 - 为每个方向管理分层entry分配
+        self.entry_managers: Dict[str, FifoEntryManager] = {}
+        self._initialize_entry_managers()
+
         # 统计信息
         self.stats = {
             "itag_triggers": {"req": 0, "rsp": 0, "data": 0},
@@ -104,7 +227,68 @@ class CrossRingTagManager:
             "etag_upgrades": {"req": {"T2_to_T1": 0, "T1_to_T0": 0}, "rsp": {"T2_to_T1": 0, "T1_to_T0": 0}, "data": {"T2_to_T1": 0, "T1_to_T0": 0}},
             "successful_injections": {"req": 0, "rsp": 0, "data": 0},
             "successful_ejections": {"req": 0, "rsp": 0, "data": 0},
+            "t0_queue_operations": {"req": {"added": 0, "removed": 0}, "rsp": {"added": 0, "removed": 0}, "data": {"added": 0, "removed": 0}},
+            "entry_allocations": {"req": {"T0": 0, "T1": 0, "T2": 0}, "rsp": {"T0": 0, "T1": 0, "T2": 0}, "data": {"T0": 0, "T1": 0, "T2": 0}},
         }
+
+    def _initialize_entry_managers(self) -> None:
+        """初始化每个方向的Entry管理器"""
+        for sub_direction in ["TL", "TR", "TU", "TD"]:
+            # 根据路由策略和方向确定使用的FIFO容量
+            total_depth = self._get_t0_total_capacity(sub_direction)
+            
+            # 获取该方向的T1/T2配置
+            config = self.etag_config.get(sub_direction, {})
+            t2_max = config.get("t2_ue_max", 8)
+            t1_max = config.get("t1_ue_max", 15)
+            has_dedicated_entries = config.get("has_dedicated_entries", True)
+            
+            self.entry_managers[sub_direction] = FifoEntryManager(
+                total_depth=total_depth,
+                t2_max=t2_max,
+                t1_max=t1_max,
+                has_dedicated_entries=has_dedicated_entries
+            )
+            
+        self.logger.debug(f"Node {self.node_id} 初始化完成Entry管理器")
+
+    def _get_t0_total_capacity(self, sub_direction: str) -> int:
+        """
+        根据路由策略和方向确定T0级可用的FIFO容量
+        
+        XY路由: 横向环(TL/TR)下环到RB，纵向环(TU/TD)下环到EQ
+        YX路由: 纵向环(TU/TD)下环到RB，横向环(TL/TR)下环到EQ
+        
+        Args:
+            sub_direction: 子方向 (TL/TR/TU/TD)
+            
+        Returns:
+            T0级可用的FIFO总容量
+        """
+        # 获取路由策略，默认为XY
+        routing_strategy = getattr(self.config, 'routing_strategy', 'XY')
+        if hasattr(routing_strategy, 'value'):
+            routing_strategy = routing_strategy.value
+            
+        # 获取FIFO深度配置
+        rb_in_depth = getattr(self.config.fifo_config, 'rb_in_depth', 16)
+        eq_in_depth = getattr(self.config.fifo_config, 'eq_in_depth', 16)
+        
+        if routing_strategy == "XY":
+            if sub_direction in ["TL", "TR"]:  # 横向环
+                return rb_in_depth  # 下环到RB
+            else:  # TU, TD 纵向环
+                return eq_in_depth  # 下环到EQ
+                
+        elif routing_strategy == "YX":
+            if sub_direction in ["TU", "TD"]:  # 纵向环
+                return rb_in_depth  # 下环到RB
+            else:  # TL, TR 横向环
+                return eq_in_depth  # 下环到EQ
+        else:
+            # 默认情况或其他路由策略
+            self.logger.warning(f"未知路由策略 {routing_strategy}，使用默认配置")
+            return max(rb_in_depth, eq_in_depth)
 
     def should_trigger_itag(self, channel: str, direction: str, wait_cycles: int) -> bool:
         """
@@ -250,6 +434,10 @@ class CrossRingTagManager:
             marked=True, priority=new_priority, marked_cycle=cycle, failed_attempts=self.etag_states[channel][sub_direction].failed_attempts + 1, direction=sub_direction
         )
 
+        # 如果升级到T0级，加入T0全局队列
+        if new_priority == PriorityLevel.T0:
+            self.add_to_t0_queue(slot, channel)
+
         # 更新统计
         if old_priority == PriorityLevel.T2 and new_priority == PriorityLevel.T1:
             self.stats["etag_upgrades"][channel]["T2_to_T1"] += 1
@@ -262,13 +450,19 @@ class CrossRingTagManager:
     def can_eject_with_etag(self, slot: CrossRingSlot, channel: str, sub_direction: str, fifo_occupancy: int, fifo_depth: int) -> bool:
         """
         根据E-Tag检查是否可以下环
+        
+        新实现基于分层entry使用逻辑：
+        - T2级：只能使用T2专用entry
+        - T1级：优先使用T1专用entry，不够用再使用T2 entry
+        - T0级：优先使用T0专用entry，然后依次降级使用T1、T2 entry
+              只有使用T0专用entry时才需要判断轮询结果，使用其他等级entry时不需要判断轮询
 
         Args:
             slot: 要检查的slot
             channel: 通道类型
             sub_direction: 子方向
-            fifo_occupancy: FIFO当前占用
-            fifo_depth: FIFO总深度
+            fifo_occupancy: FIFO当前占用 (已弃用，改用entry管理器)
+            fifo_depth: FIFO总深度 (已弃用，改用entry管理器)
 
         Returns:
             是否可以下环
@@ -277,27 +471,148 @@ class CrossRingTagManager:
             return False
 
         priority = slot.etag_priority
-        config = self.etag_config.get(sub_direction, {})
+        
+        # 获取该方向的entry管理器
+        if sub_direction not in self.entry_managers:
+            self.logger.error(f"未找到方向 {sub_direction} 的entry管理器")
+            return False
+            
+        entry_manager = self.entry_managers[sub_direction]
+        
+        if priority == PriorityLevel.T2:
+            # T2级：只能使用T2专用entry
+            return entry_manager.can_allocate_t2_entry()
+            
+        elif priority == PriorityLevel.T1:
+            # T1级：优先使用T1专用entry，不够用再使用T2 entry
+            return entry_manager.can_allocate_t1_entry()
+            
+        elif priority == PriorityLevel.T0:
+            # T0级：优先使用T0专用entry，然后依次降级使用T1、T2 entry
+            if not entry_manager.can_allocate_t0_entry():
+                return False
+                
+            # 检查是否可以使用T0专用entry
+            if entry_manager.has_dedicated_entries:
+                # 计算T0专用entry的可用数量
+                t0_dedicated_capacity = entry_manager.total_depth - entry_manager.t1_max
+                t0_dedicated_available = t0_dedicated_capacity - entry_manager.t0_occupied
+                
+                if t0_dedicated_available > 0:
+                    # 使用T0专用entry，需要判断轮询结果
+                    is_first_in_queue = self._is_first_in_t0_queue(slot, channel)
+                    self.logger.debug(f"T0级slot {slot.slot_id} 使用T0专用entry，轮询检查: is_first={is_first_in_queue}")
+                    return is_first_in_queue
+                else:
+                    # 使用其他等级entry，不需要判断轮询结果
+                    self.logger.debug(f"T0级slot {slot.slot_id} 使用其他等级entry，无需轮询检查")
+                    return True
+            else:
+                # 没有专用entry的方向，使用共享entry池，不需要轮询检查
+                return True
+        
+        return False
 
-        if priority == PriorityLevel.T0:
-            # T0级：可使用全部空间，但需要轮询仲裁
-            if fifo_occupancy < fifo_depth:
-                return self._check_t0_round_robin_grant(slot, channel, sub_direction)
+    def _is_first_in_t0_queue(self, slot: CrossRingSlot, channel: str) -> bool:
+        """
+        检查slot是否在T0全局队列的第一位
+        
+        Args:
+            slot: 要检查的slot
+            channel: 通道类型
+            
+        Returns:
+            是否在队列第一位
+        """
+        if channel not in self.T0_Etag_Order_FIFO:
+            return False
+            
+        queue = self.T0_Etag_Order_FIFO[channel]
+        return len(queue) > 0 and queue[0] == slot
+
+    def add_to_t0_queue(self, slot: CrossRingSlot, channel: str) -> bool:
+        """
+        将slot加入T0全局队列
+        
+        Args:
+            slot: 要加入的slot
+            channel: 通道类型
+            
+        Returns:
+            是否成功加入
+        """
+        if channel not in self.T0_Etag_Order_FIFO:
+            self.logger.error(f"无效的通道类型: {channel}")
+            return False
+            
+        queue = self.T0_Etag_Order_FIFO[channel]
+        
+        # 避免重复添加
+        if slot not in queue:
+            queue.append(slot)
+            self.stats["t0_queue_operations"][channel]["added"] += 1
+            self.logger.debug(f"Node {self.node_id} 添加slot {slot.slot_id} 到T0队列 {channel}，队列长度: {len(queue)}")
+            return True
+        else:
+            self.logger.debug(f"Slot {slot.slot_id} 已在T0队列 {channel} 中")
             return False
 
-        elif priority == PriorityLevel.T1:
-            # T1级：可使用T1+T2空间
-            t1_max = config.get("t1_ue_max", fifo_depth)
-            return fifo_occupancy < t1_max
+    def remove_from_t0_queue(self, slot: CrossRingSlot, channel: str) -> bool:
+        """
+        从T0全局队列移除slot
+        
+        Args:
+            slot: 要移除的slot
+            channel: 通道类型
+            
+        Returns:
+            是否成功移除
+        """
+        if channel not in self.T0_Etag_Order_FIFO:
+            self.logger.error(f"无效的通道类型: {channel}")
+            return False
+            
+        queue = self.T0_Etag_Order_FIFO[channel]
+        
+        if slot in queue:
+            queue.remove(slot)
+            self.stats["t0_queue_operations"][channel]["removed"] += 1
+            self.logger.debug(f"Node {self.node_id} 从T0队列 {channel} 移除slot {slot.slot_id}，队列长度: {len(queue)}")
+            return True
+        else:
+            self.logger.debug(f"Slot {slot.slot_id} 不在T0队列 {channel} 中")
+            return False
 
-        else:  # PriorityLevel.T2
-            # T2级：只能使用T2空间
-            t2_max = config.get("t2_ue_max", fifo_depth // 2)
-            return fifo_occupancy < t2_max
+    def get_t0_queue_status(self, channel: str) -> Dict[str, Any]:
+        """
+        获取T0队列状态
+        
+        Args:
+            channel: 通道类型
+            
+        Returns:
+            队列状态信息
+        """
+        if channel not in self.T0_Etag_Order_FIFO:
+            return {"error": f"无效的通道类型: {channel}"}
+            
+        queue = self.T0_Etag_Order_FIFO[channel]
+        return {
+            "channel": channel,
+            "queue_length": len(queue),
+            "first_slot_id": queue[0].slot_id if queue else None,
+            "all_slot_ids": [slot.slot_id for slot in queue],
+            "total_added": self.stats["t0_queue_operations"][channel]["added"],
+            "total_removed": self.stats["t0_queue_operations"][channel]["removed"]
+        }
 
     def _check_t0_round_robin_grant(self, slot: CrossRingSlot, channel: str, sub_direction: str) -> bool:
         """
         检查T0级轮询仲裁授权
+        
+        新实现基于T0_Etag_Order_FIFO全局队列：
+        - 只有在T0队列第一位的slot才能获得授权
+        - 实现真正的公平轮询机制
 
         Args:
             slot: T0级slot
@@ -307,16 +622,127 @@ class CrossRingTagManager:
         Returns:
             是否获得轮询授权
         """
-        # TODO: T0级的时候需要先将slot存储到一个轮询表中，然后查看当前slot是不是第一个，
-        state = self.etag_states[channel][sub_direction]
+        # 基于T0全局队列的轮询实现
+        return self._is_first_in_t0_queue(slot, channel)
 
-        # 简化的轮询实现
-        if slot.flit:
-            grant = (slot.flit.flit_id + state.round_robin_index) % 2 == 0
-            state.round_robin_index = (state.round_robin_index + 1) % 16
-            return grant
+    def allocate_entry_for_slot(self, slot: CrossRingSlot, channel: str, sub_direction: str) -> bool:
+        """
+        为slot分配entry
+        
+        Args:
+            slot: 要分配entry的slot
+            channel: 通道类型
+            sub_direction: 子方向
+            
+        Returns:
+            是否成功分配
+        """
+        if not slot.is_occupied:
+            return False
+            
+        priority = slot.etag_priority
+        entry_manager = self.entry_managers.get(sub_direction)
+        
+        if not entry_manager:
+            self.logger.error(f"未找到方向 {sub_direction} 的entry管理器")
+            return False
+            
+        success = False
+        if priority == PriorityLevel.T2:
+            success = entry_manager.allocate_t2_entry()
+        elif priority == PriorityLevel.T1:
+            success = entry_manager.allocate_t1_entry()
+        elif priority == PriorityLevel.T0:
+            success = entry_manager.allocate_t0_entry()
+            
+        if success:
+            self.stats["entry_allocations"][channel][priority.value] += 1
+            self.logger.debug(f"Node {self.node_id} 为slot {slot.slot_id} 分配{priority.value}级entry")
+            
+        return success
 
-        return False
+    def release_entry_for_slot(self, slot: CrossRingSlot, channel: str, sub_direction: str) -> bool:
+        """
+        释放slot占用的entry
+        
+        Args:
+            slot: 要释放entry的slot
+            channel: 通道类型
+            sub_direction: 子方向
+            
+        Returns:
+            是否成功释放
+        """
+        priority = slot.etag_priority
+        entry_manager = self.entry_managers.get(sub_direction)
+        
+        if not entry_manager:
+            self.logger.error(f"未找到方向 {sub_direction} 的entry管理器")
+            return False
+            
+        success = False
+        if priority == PriorityLevel.T2:
+            success = entry_manager.release_t2_entry()
+        elif priority == PriorityLevel.T1:
+            success = entry_manager.release_t1_entry()
+        elif priority == PriorityLevel.T0:
+            success = entry_manager.release_t0_entry()
+            
+        if success:
+            self.logger.debug(f"Node {self.node_id} 释放slot {slot.slot_id} 的{priority.value}级entry")
+            
+        return success
+
+    def on_slot_ejected_successfully(self, slot: CrossRingSlot, channel: str, sub_direction: str) -> None:
+        """
+        slot成功下环时的清理工作
+        
+        Args:
+            slot: 成功下环的slot
+            channel: 通道类型
+            sub_direction: 子方向
+        """
+        priority = slot.etag_priority
+        
+        # 释放entry
+        self.release_entry_for_slot(slot, channel, sub_direction)
+        
+        # 如果是T0级，从所有T0队列中移除该slot
+        if priority == PriorityLevel.T0:
+            removed_count = 0
+            for ch in ["req", "rsp", "data"]:
+                if self.remove_from_t0_queue(slot, ch):
+                    removed_count += 1
+            
+            if removed_count > 0:
+                self.logger.debug(f"Node {self.node_id} T0级slot {slot.slot_id} 从 {removed_count} 个T0队列中移除")
+            
+        # 更新统计
+        self.stats["successful_ejections"][channel] += 1
+        
+        self.logger.debug(f"Node {self.node_id} slot {slot.slot_id} 成功下环，清理完成")
+
+    def on_slot_ejection_failed(self, slot: CrossRingSlot, channel: str, sub_direction: str) -> None:
+        """
+        slot下环失败时的处理
+        
+        Args:
+            slot: 下环失败的slot
+            channel: 通道类型
+            sub_direction: 子方向
+        """
+        # 增加失败计数，可能触发优先级升级
+        current_state = self.etag_states[channel][sub_direction]
+        current_state.failed_attempts += 1
+        
+        # 检查是否需要升级优先级
+        new_priority = self.should_upgrade_etag(slot, channel, sub_direction, current_state.failed_attempts)
+        if new_priority and new_priority != slot.etag_priority:
+            # 升级优先级
+            cycle = getattr(slot, 'cycle', 0)
+            self.upgrade_etag_priority(slot, channel, sub_direction, new_priority, cycle)
+            
+        self.logger.debug(f"Node {self.node_id} slot {slot.slot_id} 下环失败，失败次数: {current_state.failed_attempts}")
 
     def _find_reservable_slot(self, ring_slice: RingSlice, channel: str) -> Optional[CrossRingSlot]:
         """
@@ -382,6 +808,12 @@ class CrossRingTagManager:
                     sub_dir: {"marked": state.marked, "priority": state.priority.value if state.priority else None, "failed_attempts": state.failed_attempts} for sub_dir, state in sub_dirs.items()
                 }
                 for channel, sub_dirs in self.etag_states.items()
+            },
+            "t0_queue_status": {
+                channel: self.get_t0_queue_status(channel) for channel in ["req", "rsp", "data"]
+            },
+            "entry_managers_status": {
+                sub_direction: manager.get_occupancy_info() for sub_direction, manager in self.entry_managers.items()
             },
             "stats": self.stats.copy(),
         }

@@ -25,6 +25,7 @@ from src.noc.base.model import BaseNoCModel
 
 class RingDirection(Enum):
     """CrossRing方向枚举（简化版本）"""
+
     TL = "TL"  # Turn Left
     TR = "TR"  # Turn Right
     TU = "TU"  # Turn Up
@@ -60,7 +61,7 @@ class CrossRingModel(BaseNoCModel):
         # CrossRing网络组件 - 使用新的架构
         self.crossring_nodes: Dict[NodeId, Any] = {}  # {node_id: CrossRingNode}
         self.crossring_links: Dict[str, Any] = {}  # {link_id: CrossRingLink}
-        
+
         # Tag管理器
         self.tag_managers: Dict[NodeId, Any] = {}  # {node_id: CrossRingTagManager}
 
@@ -142,22 +143,22 @@ class CrossRingModel(BaseNoCModel):
         x = node_id % self.config.num_col
         y = node_id // self.config.num_col
         return x, y
-    
+
     def _get_next_node_in_direction(self, node_id: NodeId, direction: RingDirection) -> NodeId:
         """
         获取指定方向的下一个节点（CrossRing特定实现）
-        
+
         在CrossRing中，边界节点连接到自己，而不是环绕连接
-        
+
         Args:
             node_id: 当前节点ID
             direction: 移动方向
-            
+
         Returns:
             下一个节点的ID
         """
         x, y = self._get_node_coordinates(node_id)
-        
+
         if direction == RingDirection.TL:
             # 向左：如果已经在最左边，连接到自己
             if x == 0:
@@ -188,7 +189,7 @@ class CrossRingModel(BaseNoCModel):
             next_x = x
         else:
             raise ValueError(f"不支持的方向: {direction}")
-            
+
         return next_y * self.config.num_col + next_x
 
     def _get_ring_connections(self, node_id: NodeId) -> Dict[str, NodeId]:
@@ -366,10 +367,10 @@ class CrossRingModel(BaseNoCModel):
         # 计算路由方向
         src_x, src_y = self._get_node_coordinates(source)
         dst_x, dst_y = self._get_node_coordinates(destination)
-        
+
         horizontal_direction = None
         vertical_direction = None
-        
+
         if src_x != dst_x:
             horizontal_direction = RingDirection.TR if src_x < dst_x else RingDirection.TL
         if src_y != dst_y:
@@ -685,11 +686,11 @@ class CrossRingModel(BaseNoCModel):
         # 简化实现：计算在指定方向上的路径节点
         direction_nodes = []
         current = source
-        
+
         # 限制最大跳数避免无限循环
         max_hops = self.config.num_nodes
         hops = 0
-        
+
         while current != destination and hops < max_hops:
             next_node = self._get_next_node_in_direction(current, direction)
             if next_node == current:  # 到达边界，无法继续
@@ -1187,7 +1188,8 @@ class CrossRingModel(BaseNoCModel):
         print("\nIP接口状态:")
         for ip_key, ip_status in status.items():
             print(
-                f"  {ip_key}: RN({ip_status['rn_read_active']}R+{ip_status['rn_write_active']}W), " + f"SN({ip_status['sn_active']}), 重试({ip_status['read_retries']}R+{ip_status['write_retries']}W)"
+                f"  {ip_key}: RN({ip_status['rn_read_active']}R+{ip_status['rn_write_active']}W), "
+                + f"SN({ip_status['sn_active']}), 重试({ip_status['read_retries']}R+{ip_status['write_retries']}W)"
             )
 
     def inject_test_traffic(self, source: NodeId, destination: NodeId, req_type: str, count: int = 1, burst_length: int = 4) -> List[str]:
@@ -1207,6 +1209,7 @@ class CrossRingModel(BaseNoCModel):
         packet_ids = []
 
         # 找到源节点对应的IP接口
+        # BUG: 不只需要node_id相同，还需要IP类型相，所以注入的接口需要修改。
         source_ips = [ip for key, ip in self._ip_registry.items() if ip.node_id == source]
 
         if not source_ips:
@@ -1217,6 +1220,7 @@ class CrossRingModel(BaseNoCModel):
         ip_interface = source_ips[0]
 
         for i in range(count):
+            # TODO: packet_id 不需要这么复杂，就用数字就可以了，但是要保证唯一性
             packet_id = f"test_{source}_{destination}_{req_type}_{self.cycle}_{i}"
             success = ip_interface.enqueue_request(source=source, destination=destination, req_type=req_type, burst_length=burst_length, packet_id=packet_id)
 
@@ -1241,7 +1245,7 @@ class CrossRingModel(BaseNoCModel):
                 "is_running": self.is_running,
                 "is_finished": self.is_finished,
             },
-            "networks_ready": len(self.crossring_nodes) > 0
+            "networks_ready": len(self.crossring_nodes) > 0,
         }
 
     def cleanup(self) -> None:
@@ -1273,7 +1277,12 @@ class CrossRingModel(BaseNoCModel):
 
     def __repr__(self) -> str:
         """字符串表示"""
-        return f"CrossRingModel({self.config.config_name}, " f"{self.config.num_row}x{self.config.num_col}, " f"cycle={self.cycle}, " f"active_requests={self.get_active_request_count()})"
+        return (
+            f"CrossRingModel({self.config.config_name}, "
+            f"{self.config.num_row}x{self.config.num_col}, "
+            f"cycle={self.cycle}, "
+            f"active_requests={self.get_active_request_count()})"
+        )
 
     # ========== 统一接口方法（用于兼容性） ==========
 
@@ -1294,19 +1303,19 @@ class CrossRingModel(BaseNoCModel):
 
         # 生成包ID
         if packet_id is None:
-            packet_id = f"pkt_{src_node}_{dst_node}_{op_type}_{cycle}"
+            pa, cket_id = f"pkt_{src_node}_{dst_node}_{op_type}_{cycle}"
 
         # 开始追踪请求
         if self.debug_enabled or packet_id in self.trace_packets:
             self.request_tracker.start_request(packet_id, src_node, dst_node, op_type, burst_size, cycle)
 
         # 使用现有的inject_test_traffic方法
-        flit_ids = self.inject_test_traffic(src_node, dst_node, op_type, 1, burst_size)
+        packet_ids = self.inject_test_traffic(src_node, dst_node, op_type, 1, burst_size)
 
-        if len(flit_ids) > 0 and self.debug_enabled:
+        if len(packet_ids) > 0 and self.debug_enabled:
             self.request_tracker.update_request_state(packet_id, RequestState.INJECTED, cycle)
 
-        return len(flit_ids) > 0
+        return len(packet_ids) > 0
 
     def get_completed_packets(self) -> List[Dict[str, Any]]:
         """获取已完成的包（统一接口）"""
