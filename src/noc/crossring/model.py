@@ -108,6 +108,13 @@ class CrossRingModel(BaseNoCModel):
                     ip_interface = CrossRingIPInterface(config=self.config, ip_type=f"{ip_type}_{channel_id}", node_id=node_id, model=self)
                     self.ip_interfaces[key] = ip_interface
                     self._ip_registry[key] = ip_interface
+                    
+                    # 连接IP到对应的节点
+                    if node_id in self.crossring_nodes:
+                        self.crossring_nodes[node_id].connect_ip(key)
+                        self.logger.debug(f"连接IP接口 {key} 到节点 {node_id}")
+                    else:
+                        self.logger.warning(f"节点 {node_id} 不存在，无法连接IP接口 {key}")
 
                     self.logger.debug(f"创建IP接口: {key} at node {node_id}")
                     
@@ -124,6 +131,13 @@ class CrossRingModel(BaseNoCModel):
                 ip_interface = CrossRingIPInterface(config=self.config, ip_type=ip_type, node_id=node_id, model=self)
                 self.ip_interfaces[key] = ip_interface
                 self._ip_registry[key] = ip_interface
+                
+                # 连接IP到对应的节点
+                if node_id in self.crossring_nodes:
+                    self.crossring_nodes[node_id].connect_ip(key)
+                    self.logger.info(f"连接优化IP接口 {key} 到节点 {node_id}")
+                else:
+                    self.logger.warning(f"节点 {node_id} 不存在，无法连接IP接口 {key}")
                 
                 self.logger.info(f"创建优化IP接口: {key} at node {node_id} (ip_type={ip_type})")
             except Exception as e:
@@ -175,6 +189,12 @@ class CrossRingModel(BaseNoCModel):
         
         # 创建链接
         self._setup_crossring_links()
+        
+        # 连接slice到CrossPoint
+        self._connect_slices_to_crosspoints()
+        
+        # 连接相部链路的slice形成传输链
+        self._connect_ring_slices()
 
     def _setup_crossring_links(self) -> None:
         """创建CrossRing链接"""
@@ -236,8 +256,17 @@ class CrossRingModel(BaseNoCModel):
     def _step_topology_network(self) -> None:
         """拓扑网络步进（BaseNoCModel抽象方法的实现）"""
         # 在这里实现CrossRing网络的步进逻辑
+        
+        # 1. 首先让所有链路执行传输
+        for link in self.crossring_links.values():
+            if hasattr(link, 'step_transmission'):
+                link.step_transmission(self.current_cycle)
+                
+        # 2. 然后让所有节点处理CrossPoint逻辑
         for node in self.crossring_nodes.values():
-            if hasattr(node, 'step'):
+            if hasattr(node, 'step_crosspoints'):
+                node.step_crosspoints(self.current_cycle)
+            elif hasattr(node, 'step'):
                 node.step()
     
     def _get_topology_info(self) -> Dict[str, Any]:
@@ -283,6 +312,133 @@ class CrossRingModel(BaseNoCModel):
             path.append(current)
         
         return path
+        
+    def _connect_slices_to_crosspoints(self) -> None:
+        """连接RingSlice到CrossPoint"""
+        print("DEBUG: 开始连接slice到CrossPoint...")
+        
+        for node_id, node in self.crossring_nodes.items():
+            # 获取该节点的所有链接
+            node_links = self._get_node_links(node_id)
+            
+            for direction_str, link in node_links.items():
+                if not link:
+                    continue
+                    
+                # 确定CrossPoint方向
+                crosspoint_direction = "horizontal" if direction_str in ["TR", "TL"] else "vertical"
+                crosspoint = node.get_crosspoint(crosspoint_direction)
+                
+                if not crosspoint:
+                    print(f"DEBUG: 节点{node_id}没有{crosspoint_direction}CrossPoint")
+                    continue
+                    
+                # 连接到达和离开slice
+                for channel in ["req", "rsp", "data"]:
+                    # 获取链接的第一个和最后一个RingSlice
+                    ring_slices = link.ring_slices[channel]
+                    
+                    if ring_slices:
+                        # 第一个slice作为离开slice（从CrossPoint向下游传输）
+                        departure_slice = ring_slices[0]
+                        crosspoint.connect_slice(direction_str, "departure", departure_slice)
+                        
+                        # 最后一个slice作为到达slice（从上游到达CrossPoint）
+                        arrival_slice = ring_slices[-1]
+                        crosspoint.connect_slice(direction_str, "arrival", arrival_slice)
+                        
+                        print(f"DEBUG: 连接节点{node_id} {direction_str}方向的slice到CrossPoint")
+                        
+        print("DEBUG: slice到CrossPoint连接完成")
+        
+    def _get_node_links(self, node_id: int) -> Dict[str, Any]:
+        """获取节点的所有链接"""
+        node_links = {}
+        
+        for link_id, link in self.crossring_links.items():
+            if link.source_node == node_id:
+                # 从链接ID中提取方向
+                parts = link_id.split('_')
+                if len(parts) >= 3:
+                    direction_str = parts[2]
+                    node_links[direction_str] = link
+                    
+        return node_links
+        
+    def _connect_ring_slices(self) -> None:
+        """连接链路的RingSlice形成传输链"""
+        print("DEBUG: 开始连接RingSlice形成传输链...")
+        
+        connected_count = 0
+        for link_id, link in self.crossring_links.items():
+            for channel in ["req", "rsp", "data"]:
+                ring_slices = link.ring_slices[channel]
+                
+                # 连接链路内部的slice形成传输链
+                for i in range(len(ring_slices) - 1):
+                    current_slice = ring_slices[i]
+                    next_slice = ring_slices[i + 1]
+                    
+                    # 设置上下游连接
+                    current_slice.downstream_slice = next_slice
+                    next_slice.upstream_slice = current_slice
+                    
+                    connected_count += 1
+                    
+        print(f"DEBUG: RingSlice连接完成，共连接{connected_count}个链接")
+        
+        # 连接不同链路之间的slice（形成环路）
+        self._connect_inter_link_slices()
+        
+    def _connect_inter_link_slices(self) -> None:
+        """连接不同链路之间的slice形成环路"""
+        print("DEBUG: 开始连接不同链路之间的slice...")
+        
+        for node_id in range(self.config.num_nodes):
+            connections = self._get_ring_connections(node_id)
+            
+            for direction_str, neighbor_id in connections.items():
+                # 获取当前节点的出链路
+                out_link_id = f"link_{node_id}_{direction_str}_to_{neighbor_id}"
+                out_link = self.crossring_links.get(out_link_id)
+                
+                if not out_link:
+                    continue
+                    
+                # 获取邻居节点的入链路（反向）
+                reverse_direction = self._get_reverse_direction(direction_str)
+                in_link_id = f"link_{neighbor_id}_{reverse_direction}_to_{node_id}"
+                in_link = self.crossring_links.get(in_link_id)
+                
+                if not in_link:
+                    continue
+                    
+                # 连接两个链路的slice
+                for channel in ["req", "rsp", "data"]:
+                    out_slices = out_link.ring_slices[channel]
+                    in_slices = in_link.ring_slices[channel]
+                    
+                    if out_slices and in_slices:
+                        # 出链路的最后一个slice连接到入链路的第一个slice
+                        last_out_slice = out_slices[-1]
+                        first_in_slice = in_slices[0]
+                        
+                        last_out_slice.downstream_slice = first_in_slice
+                        first_in_slice.upstream_slice = last_out_slice
+                        
+                        print(f"DEBUG: 连接 {out_link_id} 到 {in_link_id} ({channel}")
+                        
+        print("DEBUG: 链路间slice连接完成")
+        
+    def _get_reverse_direction(self, direction: str) -> str:
+        """获取相反方向"""
+        reverse_map = {
+            "TR": "TL",
+            "TL": "TR", 
+            "TU": "TD",
+            "TD": "TU"
+        }
+        return reverse_map.get(direction, direction)
 
     def _get_node_coordinates(self, node_id: NodeId) -> Tuple[int, int]:
         """
@@ -434,32 +590,12 @@ class CrossRingModel(BaseNoCModel):
 
     def _process_inject_to_ring_four_directions(self) -> None:
         """处理inject队列到ring网络的注入 - 四方向系统"""
+        # 注意：在新架构中，注入仲裁由节点内部的process_inject_arbitration处理
+        # 这里可以添加额外的全局控制逻辑
         for node_id, node in self.crossring_nodes.items():
-            for channel in ["req", "rsp", "data"]:
-                inject_queue = node.inject_queues[channel]
-
-                # 处理inject队列中的每个flit
-                while inject_queue:
-                    flit = inject_queue[0]  # 查看队首flit
-
-                    # 使用四方向系统确定路由方向
-                    ring_directions = self._determine_ring_directions_four_way(node_id, flit.destination)
-
-                    if not ring_directions:
-                        # 目标就是当前节点，直接移到eject队列
-                        flit = inject_queue.pop(0)
-                        node.eject_queues[channel].append(flit)
-                        flit.is_arrive = True
-                        flit.arrival_network_cycle = self.cycle
-                        self.logger.debug(f"周期{self.cycle}：数据包{flit.packet_id}到达目标节点{node_id}")
-                        continue
-
-                    # 尝试注入到ring网络（四方向系统）
-                    if self._try_inject_to_ring_four_directions(node, flit, channel, ring_directions):
-                        inject_queue.pop(0)  # 成功注入，移除flit
-                        self.logger.debug(f"周期{self.cycle}：数据包{flit.packet_id}成功注入到环形网络，方向{ring_directions}")
-                    else:
-                        break  # 注入失败，等待下个周期
+            # 节点内部会处理inject仲裁
+            # 这里可以记录统计信息或进行全局协调
+            pass
 
     def _determine_ring_directions_four_way(self, source: NodeId, destination: NodeId) -> List[RingDirection]:
         """确定路由方向（四方向系统）- 支持XY和YX路由策略"""
@@ -568,9 +704,9 @@ class CrossRingModel(BaseNoCModel):
 
     def _process_ring_transmission_true_topology(self) -> None:
         """处理真实环形拓扑的ring网络内部传输"""
-        # 处理四个方向的环形传输
-        for direction in [RingDirection.TL, RingDirection.TR, RingDirection.TU, RingDirection.TD]:
-            self._process_ring_direction_transmission(direction)
+        # 在新架构中，ring传输由RingSlice和CrossPoint处理
+        # 这里暂时不做处理
+        pass
 
     def _process_ring_direction_transmission(self, direction: RingDirection) -> None:
         """处理指定方向的环形传输"""

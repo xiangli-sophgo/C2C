@@ -118,3 +118,133 @@ The demo validates:
 - State management is centralized in protocol classes
 - The builder pattern ensures consistent topology construction
 - Address translation supports multiple address formats for different communication contexts
+
+## CrossRing NoC Architecture
+
+### Overview
+CrossRing is a Network-on-Chip (NoC) architecture based on Cross Ring Spec v2.0, featuring:
+- Ring-based topology with horizontal and vertical rings
+- Non-wrap-around boundary handling (edge nodes connect to themselves)
+- Advanced I-Tag/E-Tag anti-starvation mechanisms
+- XY dimension-order routing
+- Slot-based transmission with pipeline optimization
+
+### Key Components
+
+#### 1. CrossRingModel (`src/noc/crossring/model.py`)
+- Main model class for CrossRing simulation
+- Manages network topology setup and simulation loops
+- Coordinates IP interfaces, nodes, and links
+- Handles traffic injection and collection
+
+#### 2. CrossRingNode (`src/noc/crossring/node.py`)
+- Contains two CrossPoints (horizontal and vertical)
+- Manages IP injection/ejection queues
+- Handles local arbitration and flow control
+- Implements ring buffer and bridge logic
+
+#### 3. CrossRingCrossPoint (`src/noc/crossring/node.py`)
+- **Critical Architecture**: Each CrossPoint manages 4 slices (2 per direction)
+  - Arrival slice: For ejection decisions (from upstream ring)
+  - Departure slice: For injection decisions (to downstream ring)
+- Horizontal CP: Manages TL/TR directions
+- Vertical CP: Manages TU/TD directions
+- Integrates with Tag management for anti-starvation
+
+#### 4. CrossRingLink (`src/noc/crossring/crossring_link.py`)
+- Manages RingSlice chains forming the ring links
+- Handles slot transmission between slices
+- Implements pipeline flow control
+
+#### 5. CrossRingSlot (`src/noc/crossring/crossring_link.py`)
+- Basic transmission unit containing:
+  - Valid bit
+  - I-Tag (injection reservation)
+  - E-Tag (ejection priority)
+  - Flit data
+
+#### 6. Tag Mechanism (`src/noc/crossring/tag_mechanism.py`)
+- **I-Tag**: Injection reservation to prevent starvation
+- **E-Tag**: Priority-based ejection (T0/T1/T2 levels)
+- **FifoEntryManager**: Manages tiered entry allocation
+- **T0_Etag_Order_FIFO**: Global round-robin queue for T0 slots
+
+### Data Flow Paths
+
+#### Injection Flow
+1. IP → l2h_fifo → node channel_buffer
+2. Node channel_buffer → inject_direction_fifos  
+3. inject_direction_fifos → CrossPoint → departure slice
+4. Departure slice → ring transmission
+
+#### Ejection Flow
+1. Ring arrival slice → CrossPoint
+2. CrossPoint → eject_input_fifos
+3. eject_input_fifos → ip_eject_channel_buffers
+4. ip_eject_channel_buffers → h2l_fifos → IP
+
+### Key Architecture Rules
+
+1. **CrossPoint Slice Management**:
+   - Each CP has 4 slices: 2 directions × 2 types (arrival/departure)
+   - Arrival slices: Used for ejection decisions
+   - Departure slices: Used for injection decisions
+
+2. **Tag Mechanisms**:
+   - I-Tag: Triggered when injection waits exceed threshold (80-100 cycles)
+   - E-Tag: Priority upgrade after ejection failures (T2→T1→T0)
+   - T0 requires round-robin arbitration via global queue
+
+3. **Non-Wrap-Around Topology**:
+   - Edge nodes connect to themselves, not wrapping around
+   - Optimized for chip-to-chip communication patterns
+
+4. **Model Responsibilities**:
+   - Model coordinates simulation, does NOT handle inject/eject directly
+   - All inject/eject logic is in nodes and CrossPoints
+   - Model manages link transmission and node step coordination
+
+### Testing and Debugging
+
+#### Run CrossRing Debug Demo
+```bash
+python3 examples/noc/crossring_debug_demo.py
+```
+
+#### Key Debug Information
+- IP interface states and queue depths
+- CrossPoint slice connections and status
+- Ring transmission and slot movement
+- Tag mechanism triggers and upgrades
+- Request lifecycle tracking
+
+### Common Issues and Solutions
+
+1. **Flits not transmitting**: Check IP-to-node connections and CrossPoint slice connections
+2. **Starvation issues**: Verify I-Tag/E-Tag mechanisms are properly integrated
+3. **Simulation hangs**: Check for deadlocks in ring transmission or FIFO flow control
+4. **Tag mechanism not working**: Ensure Tag managers are properly initialized in CrossPoints
+
+### File Structure
+```
+src/noc/crossring/
+├── model.py              # Main CrossRing model
+├── node.py               # Node and CrossPoint implementation
+├── crossring_link.py     # Link and RingSlice implementation
+├── tag_mechanism.py      # I-Tag/E-Tag anti-starvation
+├── ip_interface.py       # CrossRing IP interface
+├── flit.py              # CrossRing flit definition
+└── config.py            # Configuration classes
+```
+
+### Architecture Documentation
+Refer to `/docs/CrossRing_Architecture_Documentation.md` for detailed specification compliance and implementation guidelines.
+
+## CrossRing Working Context
+When working with CrossRing:
+1. Always refer to CrossRing_Architecture_Documentation.md for spec compliance
+2. Remember that CrossPoint manages 4 slices (2 per direction: arrival/departure)
+3. Tag mechanisms are critical for preventing starvation
+4. Model coordinates but doesn't handle inject/eject directly
+5. All logging should be in Chinese
+6. Non-wrap-around topology means edge nodes connect to themselves

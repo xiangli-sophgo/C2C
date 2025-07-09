@@ -262,6 +262,10 @@ class RingSlice:
         self.input_buffer: Dict[str, Optional[CrossRingSlot]] = {"req": None, "rsp": None, "data": None}
 
         self.output_buffer: Dict[str, Optional[CrossRingSlot]] = {"req": None, "rsp": None, "data": None}
+        
+        # 上下游连接
+        self.upstream_slice: Optional['RingSlice'] = None
+        self.downstream_slice: Optional['RingSlice'] = None
 
         # 统计信息
         self.stats = {"slots_received": {"req": 0, "rsp": 0, "data": 0}, "slots_transmitted": {"req": 0, "rsp": 0, "data": 0}, "empty_cycles": {"req": 0, "rsp": 0, "data": 0}, "total_cycles": 0}
@@ -279,6 +283,10 @@ class RingSlice:
         """
         if channel not in self.input_buffer:
             return False
+            
+        # 检查输入缓存是否已满
+        if self.input_buffer[channel] is not None:
+            return False  # 输入缓存已满，无法接收
 
         self.input_buffer[channel] = slot
 
@@ -320,6 +328,7 @@ class RingSlice:
         1. 将输入缓存的内容移到当前槽
         2. 将当前槽的内容移到输出缓存
         3. 更新统计信息
+        4. 向下游传输slot
 
         Args:
             cycle: 当前周期
@@ -339,6 +348,14 @@ class RingSlice:
             if self.current_slots[channel] is not None:
                 self.current_slots[channel].increment_wait()
                 self.current_slots[channel].cycle = cycle
+                
+            # Step 4: 向下游传输slot
+            if self.downstream_slice and self.output_buffer[channel] is not None:
+                transmitted_slot = self.output_buffer[channel]
+                if self.downstream_slice.receive_slot(transmitted_slot, channel):
+                    self.output_buffer[channel] = None
+                    self.stats["slots_transmitted"][channel] += 1
+                    self.logger.debug(f"RingSlice {self.slice_id} 向下游传输slot {transmitted_slot.slot_id}")
 
     def peek_current_slot(self, channel: str) -> Optional[CrossRingSlot]:
         """

@@ -166,9 +166,23 @@ class CrossRingIPInterface(BaseIPInterface):
 
     def _inject_to_topology_network(self, flit, channel: str) -> None:
         """注入到CrossRing网络"""
-        # 这里应该调用网络的inject方法
-        # 模拟注入到网络（实际实现中需要与网络模块对接）
-        flit.flit_position = "IQ_CH"
+        # 获取对应的节点
+        if self.node_id in self.model.crossring_nodes:
+            node = self.model.crossring_nodes[self.node_id]
+            
+            # 注入到节点的对应IP的channel buffer
+            ip_key = f"{self.ip_type}_node{self.node_id}"
+            if ip_key in node.ip_inject_channel_buffers:
+                channel_buffer = node.ip_inject_channel_buffers[ip_key][channel]
+                if channel_buffer.write_input(flit):
+                    flit.flit_position = "IQ_CH"
+                    self.logger.debug(f"IP {self.ip_type} 成功注入flit到节点{self.node_id}的channel buffer")
+                else:
+                    self.logger.warning(f"IP {self.ip_type} 无法注入flit到节点{self.node_id}的channel buffer - buffer满")
+            else:
+                self.logger.error(f"节点{self.node_id}没有IP {ip_key}的channel buffer")
+        else:
+            self.logger.error(f"节点{self.node_id}不存在于CrossRing网络中")
 
         # 更新时间戳
         if channel == "req" and hasattr(flit, "req_attr") and flit.req_attr == "new":
@@ -183,8 +197,24 @@ class CrossRingIPInterface(BaseIPInterface):
 
     def _eject_from_topology_network(self, channel: str):
         """从CrossRing网络弹出"""
-        # 这里应该从网络的EQ获取flit
-        # 暂时返回None，实际实现中需要与网络模块对接
+        # 获取对应的节点
+        if self.node_id in self.model.crossring_nodes:
+            node = self.model.crossring_nodes[self.node_id]
+            
+            # 从节点的对应IP的eject channel buffer获取flit
+            ip_key = f"{self.ip_type}_node{self.node_id}"
+            if ip_key in node.ip_eject_channel_buffers:
+                eject_buffer = node.ip_eject_channel_buffers[ip_key][channel]
+                if eject_buffer.valid_signal():
+                    flit = eject_buffer.read_output()
+                    if flit:
+                        self.logger.debug(f"IP {self.ip_type} 成功从节点{self.node_id}的eject buffer获取flit")
+                    return flit
+            else:
+                self.logger.error(f"节点{self.node_id}没有IP {ip_key}的eject buffer")
+        else:
+            self.logger.error(f"节点{self.node_id}不存在于CrossRing网络中")
+        
         return None
 
     def _process_delayed_resource_release(self) -> None:

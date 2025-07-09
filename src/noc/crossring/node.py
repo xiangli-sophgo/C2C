@@ -32,11 +32,11 @@ class CrossRingCrossPoint:
     """
     CrossRing CrossPoint实现类 - 按Cross Ring Spec v2.0重新设计
     
-    CrossPoint是交换和控制单元，职责：
+    CrossPoint是交换和控制单元，包含4个slice（每个方向2个）：
     1. 控制Flit的上环和下环
     2. 实现I-Tag和E-Tag防饿死机制  
-    3. 管理与Ring Slice的标准接口
-    4. 处理路由决策但不直接操作Slot
+    3. 管理到达slice和离开slice
+    4. 处理路由决策和仲裁
     """
 
     def __init__(self, crosspoint_id: str, node_id: int, direction: CrossPointDirection, 
@@ -60,12 +60,19 @@ class CrossRingCrossPoint:
         # 获取Tag配置
         self.tag_config = config.tag_config
 
-        # Ring Slice接口 - 标准化的环路交互
-        self.ring_slice_interfaces: Dict[str, Optional[RingSlice]] = {
-            "req": None,
-            "rsp": None, 
-            "data": None
-        }
+        # 确定这个CrossPoint管理的方向
+        if direction == CrossPointDirection.HORIZONTAL:
+            self.managed_directions = ["TL", "TR"]
+        else:  # VERTICAL
+            self.managed_directions = ["TU", "TD"]
+
+        # 4个slice管理：每个方向2个slice（到达+离开）
+        self.slices: Dict[str, Dict[str, Optional[RingSlice]]] = {}
+        for dir_name in self.managed_directions:
+            self.slices[dir_name] = {
+                "arrival": None,    # 到达本节点的slice（用于下环判断）
+                "departure": None   # 离开本节点的slice（用于上环判断）
+            }
 
         # 注入等待队列 - 等待上环的flit
         self.injection_queues: Dict[str, List[Tuple[CrossRingFlit, int]]] = {
@@ -101,67 +108,74 @@ class CrossRingCrossPoint:
             "t0_arbitrations": {"req": 0, "rsp": 0, "data": 0}
         }
 
-        self.logger.info(f"CrossPoint {crosspoint_id} 初始化完成，方向：{direction.value}")
+        # 导入和初始化Tag管理器
+        from .tag_mechanism import CrossRingTagManager
+        self.tag_manager = CrossRingTagManager(node_id, config, logger)
+        
+        self.logger.info(f"CrossPoint {crosspoint_id} 初始化完成，方向：{direction.value}，管理方向：{self.managed_directions}")
 
-    def connect_ring_slice(self, channel: str, ring_slice: RingSlice) -> None:
+    def connect_slice(self, direction: str, slice_type: str, ring_slice: RingSlice) -> None:
         """
-        连接Ring Slice接口
+        连接Ring Slice到CrossPoint
         
         Args:
-            channel: 通道类型 (req/rsp/data)
+            direction: 方向 ("TL", "TR", "TU", "TD")
+            slice_type: slice类型 ("arrival"到达, "departure"离开)
             ring_slice: Ring Slice实例
         """
-        if channel in self.ring_slice_interfaces:
-            self.ring_slice_interfaces[channel] = ring_slice
-            self.logger.debug(f"CrossPoint {self.crosspoint_id} 连接到 {channel} 通道的Ring Slice")
+        if direction in self.slices and slice_type in self.slices[direction]:
+            self.slices[direction][slice_type] = ring_slice
+            self.logger.debug(f"CrossPoint {self.crosspoint_id} 连接{direction}方向的{slice_type} slice")
 
-    def can_inject_flit(self, flit: CrossRingFlit, channel: str) -> bool:
+    def can_inject_flit(self, direction: str, channel: str) -> bool:
         """
-        检查是否可以注入Flit
+        检查是否可以向指定方向注入Flit
         
         Args:
-            flit: 要注入的flit
-            channel: 通道类型
+            direction: 方向 ("TL", "TR", "TU", "TD")
+            channel: 通道类型 (req/rsp/data)
             
         Returns:
             是否可以注入
         """
-        ring_slice = self.ring_slice_interfaces.get(channel)
-        if not ring_slice:
+        if direction not in self.managed_directions:
             return False
             
-        # 检查Ring Slice是否有空闲空间
-        current_slot = ring_slice.peek_current_slot(channel)
+        departure_slice = self.slices[direction]["departure"]
+        if not departure_slice:
+            return False
+            
+        # 检查离开slice是否有空闲空间
+        current_slot = departure_slice.peek_current_slot(channel)
         
         # 如果当前没有slot或是空slot，可以注入
         if current_slot is None:
             return True
             
         # 如果有预约的slot且是本节点预约的，可以注入
-        if current_slot.is_reserved and current_slot.itag_reserver_id == self.node_id:
+        if current_slot and current_slot.is_reserved and current_slot.itag_reserver_id == self.node_id:
             return True
             
         # 否则不能注入
         return False
 
-    def try_inject_flit(self, flit: CrossRingFlit, channel: str) -> bool:
+    def try_inject_flit(self, direction: str, flit: CrossRingFlit, channel: str) -> bool:
         """
-        尝试注入Flit到环路
+        尝试注入Flit到指定方向的环路（带I-Tag机制）
         
         Args:
+            direction: 方向 ("TL", "TR", "TU", "TD")
             flit: 要注入的flit
             channel: 通道类型
             
         Returns:
             是否成功注入
         """
-        if not self.can_inject_flit(flit, channel):
-            # 加入等待队列
-            self.injection_queues[channel].append((flit, 0))
+        if not self.can_inject_flit(direction, channel):
             return False
             
-        ring_slice = self.ring_slice_interfaces[channel]
-        current_slot = ring_slice.peek_current_slot(channel)
+        departure_slice = self.slices[direction]["departure"]
+        current_slot = departure_slice.peek_current_slot(channel)
         
         # 创建新的slot或使用预约的slot
         if current_slot is None:
@@ -172,14 +186,63 @@ class CrossRingCrossPoint:
                 channel=channel
             )
             new_slot.assign_flit(flit)
-            ring_slice.receive_slot(new_slot, channel)
+            departure_slice.receive_slot(new_slot, channel)
         else:
-            # 使用预约的slot
-            current_slot.assign_flit(flit)
+            # 使用预约的slot（清除I-Tag预约）
+            if current_slot.itag_reserved and current_slot.itag_reserver_id == self.node_id:
+                current_slot.assign_flit(flit)
+                current_slot.clear_itag()  # 清除I-Tag预约
+                self.itag_reservations[channel]["active"] = False
+                self.logger.debug(f"CrossPoint {self.crosspoint_id} 使用I-Tag预约的slot注入flit")
+            else:
+                # 普通slot
+                current_slot.assign_flit(flit)
             
         self.stats["flits_injected"][channel] += 1
-        self.logger.debug(f"CrossPoint {self.crosspoint_id} 成功注入flit {flit.flit_id} 到 {channel} 通道")
+        self.logger.debug(f"CrossPoint {self.crosspoint_id} 成功注入flit {flit.flit_id} 到 {direction}方向{channel}通道")
         return True
+        
+    def process_injection_from_fifos(self, node_fifos: Dict[str, Dict[str, Any]], cycle: int) -> None:
+        """
+        处理从节点inject_direction_fifos的上环判断（带I-Tag机制）
+        
+        Args:
+            node_fifos: 节点的inject_direction_fifos
+            cycle: 当前周期
+        """
+        # 检查每个管理方向的inject_direction_fifos
+        for direction in self.managed_directions:
+            for channel in ["req", "rsp", "data"]:
+                if direction in node_fifos[channel]:
+                    direction_fifo = node_fifos[channel][direction]
+                    
+                    # 检查是否有flit等待注入
+                    if direction_fifo.valid_signal():
+                        flit = direction_fifo.peek_output()
+                        if flit:
+                            # 检查是否可以立即注入
+                            if self.can_inject_flit(direction, channel):
+                                # 可以注入，读取flit并注入
+                                flit = direction_fifo.read_output()
+                                if self.try_inject_flit(direction, flit, channel):
+                                    self.logger.debug(f"CrossPoint {self.crosspoint_id} 从{direction}方向FIFO成功注入flit到环路")
+                                else:
+                                    # 注入失败，放回FIFO
+                                    direction_fifo.priority_write(flit)
+                                    self.logger.debug(f"CrossPoint {self.crosspoint_id} 注入失败，flit返回{direction}方向FIFO")
+                            else:
+                                # 不能立即注入，检查是否需要触发I-Tag
+                                if not self.itag_reservations[channel]["active"]:
+                                    # 计算等待时间（简化：从FIFO深度估算）
+                                    wait_cycles = len(direction_fifo.internal_queue) * 2  # 简化估算
+                                    if wait_cycles >= self._get_itag_threshold():
+                                        # 触发I-Tag预约
+                                        if self._trigger_itag_reservation(direction, channel, cycle):
+                                            self.logger.debug(f"CrossPoint {self.crosspoint_id} 为{direction}方向{channel}通道触发I-Tag预约")
+                                        else:
+                                            self.logger.debug(f"CrossPoint {self.crosspoint_id} I-Tag预约失败")
+                                else:
+                                    self.logger.debug(f"CrossPoint {self.crosspoint_id} {channel}通道已有I-Tag预约活跃")
 
     def can_eject_flit(self, slot: CrossRingSlot, channel: str, target_fifo_occupancy: int, target_fifo_depth: int) -> bool:
         """
@@ -197,23 +260,32 @@ class CrossRingCrossPoint:
         if not slot.is_occupied:
             return False
             
-        priority = slot.etag_priority
+        # 获取子方向
         sub_direction = self._get_sub_direction_from_channel(channel)
-        limits = self._get_etag_limits(sub_direction)
-
-        if priority == PriorityLevel.T0:
-            # T0级：可使用全部空间，但需要轮询仲裁
-            if target_fifo_occupancy < target_fifo_depth:
-                return self._check_t0_round_robin_grant(slot.flit, channel)
-            return False
-
-        elif priority == PriorityLevel.T1:
-            # T1级：可使用T1+T2空间，直接下环
-            return target_fifo_occupancy < limits["t1_max"]
-
-        else:  # PriorityLevel.T2
-            # T2级：只能使用T2空间，直接下环
-            return target_fifo_occupancy < limits["t2_max"]
+        
+        # 使用Tag管理器检查是否可以下环
+        can_eject = self.tag_manager.can_eject_with_etag(
+            slot, channel, sub_direction, target_fifo_occupancy, target_fifo_depth
+        )
+        
+        return can_eject
+            
+    def should_eject_flit(self, flit: CrossRingFlit) -> bool:
+        """
+        判断flit是否应该在本节点下环
+        
+        Args:
+            flit: 要判断的flit
+            
+        Returns:
+            是否应该下环
+        """
+        # 检查flit的目标是否是当前节点
+        if hasattr(flit, 'destination') and flit.destination == self.node_id:
+            return True
+        if hasattr(flit, 'dest_node_id') and flit.dest_node_id == self.node_id:
+            return True
+        return False
 
     def try_eject_flit(self, slot: CrossRingSlot, channel: str, target_fifo_occupancy: int, target_fifo_depth: int) -> Optional[CrossRingFlit]:
         """
@@ -236,6 +308,10 @@ class CrossRingCrossPoint:
         # 成功下环
         ejected_flit = slot.release_flit()
         if ejected_flit:
+            # 使用Tag管理器处理成功下环
+            sub_direction = self._get_sub_direction_from_channel(channel)
+            self.tag_manager.on_slot_ejected_successfully(slot, channel, sub_direction)
+            
             self.stats["flits_ejected"][channel] += 1
             if slot.etag_priority == PriorityLevel.T0:
                 self.stats["t0_arbitrations"][channel] += 1
@@ -243,6 +319,44 @@ class CrossRingCrossPoint:
             self.logger.debug(f"CrossPoint {self.crosspoint_id} 成功下环flit {ejected_flit.flit_id} 从 {channel} 通道")
             
         return ejected_flit
+        
+    def process_ejection_to_fifos(self, node_fifos: Dict[str, Dict[str, Any]], cycle: int) -> None:
+        """
+        处理到eject_input_fifos的下环判断
+        
+        Args:
+            node_fifos: 节点的eject_input_fifos
+            cycle: 当前周期
+        """
+        # 检查每个管理方向的到达slice
+        for direction in self.managed_directions:
+            arrival_slice = self.slices[direction]["arrival"]
+            if not arrival_slice:
+                continue
+                
+            for channel in ["req", "rsp", "data"]:
+                current_slot = arrival_slice.peek_current_slot(channel)
+                if current_slot and current_slot.is_occupied:
+                    flit = current_slot.flit
+                    
+                    # 检查是否应该在本节点下环
+                    if self.should_eject_flit(flit):
+                        # 检查目标eject_input_fifo是否有空间
+                        if direction in node_fifos[channel]:
+                            eject_fifo = node_fifos[channel][direction]
+                            fifo_occupancy = len(eject_fifo.internal_queue)
+                            fifo_depth = eject_fifo.depth
+                            
+                            # 尝试下环
+                            ejected_flit = self.try_eject_flit(current_slot, channel, fifo_occupancy, fifo_depth)
+                            if ejected_flit:
+                                # 成功下环，写入eject_input_fifo
+                                if eject_fifo.write_input(ejected_flit):
+                                    self.logger.debug(f"CrossPoint {self.crosspoint_id} 成功下环flit到{direction}方向eject FIFO")
+                                else:
+                                    self.logger.warning(f"CrossPoint {self.crosspoint_id} 下环成功但写入eject FIFO失败")
+                            else:
+                                self.logger.debug(f"CrossPoint {self.crosspoint_id} 下环失败，flit继续在环路中传输")
 
     def process_itag_request(self, flit: CrossRingFlit, channel: str, wait_cycles: int) -> bool:
         """
@@ -307,13 +421,21 @@ class CrossRingCrossPoint:
                 
             self.logger.debug(f"CrossPoint {self.crosspoint_id} 将 {channel} 通道的slot {slot.slot_id} E-Tag从 {old_priority.value} 升级到 {new_priority.value}")
 
-    def step(self, cycle: int) -> None:
+    def step(self, cycle: int, node_inject_fifos: Dict[str, Dict[str, Any]], node_eject_fifos: Dict[str, Dict[str, Any]]) -> None:
         """
         执行一个周期的处理
         
         Args:
             cycle: 当前周期
+            node_inject_fifos: 节点的inject_direction_fifos
+            node_eject_fifos: 节点的eject_input_fifos
         """
+        # 处理下环判断：从到达slice到eject_input_fifos
+        self.process_ejection_to_fifos(node_eject_fifos, cycle)
+        
+        # 处理上环判断：从inject_direction_fifos到离开slice
+        self.process_injection_from_fifos(node_inject_fifos, cycle)
+        
         # 处理各通道的注入等待队列
         for channel in ["req", "rsp", "data"]:
             self._process_injection_queue(channel, cycle)
@@ -370,6 +492,28 @@ class CrossRingCrossPoint:
             return 80  # 简化配置
         else:
             return 80
+            
+    def _trigger_itag_reservation(self, direction: str, channel: str, cycle: int) -> bool:
+        """触发I-Tag预约"""
+        # 确定环路类型
+        ring_type = "horizontal" if direction in ["TL", "TR"] else "vertical"
+        
+        # 获取departure slice
+        departure_slice = self.slices[direction]["departure"]
+        if not departure_slice:
+            return False
+            
+        # 使用Tag管理器触发预约
+        success = self.tag_manager.trigger_itag_reservation(
+            channel, ring_type, departure_slice, cycle
+        )
+        
+        if success:
+            self.itag_reservations[channel]["active"] = True
+            self.itag_reservations[channel]["slot_id"] = f"reserved_{self.node_id}_{channel}"
+            self.itag_reservations[channel]["wait_cycles"] = 0
+            
+        return success
 
     def _get_sub_direction_from_channel(self, channel: str) -> str:
         """从通道获取子方向"""
@@ -387,15 +531,34 @@ class CrossRingCrossPoint:
 
     def _handle_eject_failure(self, slot: CrossRingSlot, channel: str) -> None:
         """处理下环失败，考虑E-Tag升级"""
-        flit_id = slot.flit.flit_id if slot.flit else "unknown"
+        sub_direction = self._get_sub_direction_from_channel(channel)
         
+        # 使用Tag管理器处理下环失败
+        self.tag_manager.on_slot_ejection_failed(slot, channel, sub_direction)
+        
+        # 更新本地统计
+        flit_id = slot.flit.flit_id if slot.flit else "unknown"
         if flit_id not in self.etag_states[channel]["failed_ejects"]:
             self.etag_states[channel]["failed_ejects"][flit_id] = 0
             
         self.etag_states[channel]["failed_ejects"][flit_id] += 1
         failed_count = self.etag_states[channel]["failed_ejects"][flit_id]
         
-        self.process_etag_upgrade(slot, channel, failed_count)
+        # 检查是否需要E-Tag升级
+        new_priority = self.tag_manager.should_upgrade_etag(slot, channel, sub_direction, failed_count)
+        if new_priority and new_priority != slot.etag_priority:
+            cycle = getattr(slot, 'cycle', 0)
+            success = self.tag_manager.upgrade_etag_priority(slot, channel, sub_direction, new_priority, cycle)
+            
+            if success:
+                # 更新统计
+                old_priority = slot.etag_priority
+                if old_priority == PriorityLevel.T1 and new_priority == PriorityLevel.T0:
+                    self.stats["etag_upgrades"][channel]["T1_to_T0"] += 1
+                elif old_priority == PriorityLevel.T2 and new_priority == PriorityLevel.T1:
+                    self.stats["etag_upgrades"][channel]["T2_to_T1"] += 1
+                    
+                self.logger.debug(f"CrossPoint {self.crosspoint_id} 升级slot {slot.slot_id} E-Tag从{old_priority.value}到{new_priority.value}")
 
     def get_crosspoint_status(self) -> Dict[str, Any]:
         """
@@ -804,6 +967,46 @@ class CrossRingNode:
             连接的IP ID列表
         """
         return self.connected_ips.copy()
+        
+    def get_crosspoint(self, direction: str) -> Optional[CrossRingCrossPoint]:
+        """
+        获取指定方向的CrossPoint
+        
+        Args:
+            direction: 方向 ("horizontal" 或 "vertical")
+            
+        Returns:
+            CrossPoint实例，如果不存在则返回None
+        """
+        if direction == "horizontal":
+            return self.horizontal_crosspoint
+        elif direction == "vertical":
+            return self.vertical_crosspoint
+        else:
+            return None
+            
+    def step_crosspoints(self, cycle: int) -> None:
+        """
+        执行一个周期的CrossPoint处理
+        
+        Args:
+            cycle: 当前周期
+        """
+        # 执行水平CrossPoint处理
+        if self.horizontal_crosspoint:
+            self.horizontal_crosspoint.step(
+                cycle, 
+                self.inject_direction_fifos, 
+                self.eject_input_fifos
+            )
+            
+        # 执行垂直CrossPoint处理
+        if self.vertical_crosspoint:
+            self.vertical_crosspoint.step(
+                cycle,
+                self.inject_direction_fifos,
+                self.eject_input_fifos
+            )
 
     def _get_ring_bridge_input_sources(self) -> List[str]:
         """
@@ -1213,8 +1416,8 @@ class CrossRingNode:
         self._step_compute_phase()
 
         # 处理CrossPoint的slot管理
-        self.horizontal_crosspoint.step(cycle)
-        self.vertical_crosspoint.step(cycle)
+        self.horizontal_crosspoint.step(cycle, self.inject_direction_fifos, self.eject_input_fifos)
+        self.vertical_crosspoint.step(cycle, self.inject_direction_fifos, self.eject_input_fifos)
 
         # 处理注入队列的轮询仲裁
         self.process_inject_arbitration(cycle)
