@@ -1192,7 +1192,7 @@ class CrossRingModel(BaseNoCModel):
                 + f"SN({ip_status['sn_active']}), 重试({ip_status['read_retries']}R+{ip_status['write_retries']}W)"
             )
 
-    def inject_test_traffic(self, source: NodeId, destination: NodeId, req_type: str, count: int = 1, burst_length: int = 4) -> List[str]:
+    def inject_test_traffic(self, source: NodeId, destination: NodeId, req_type: str, count: int = 1, burst_length: int = 4, ip_type: str = None) -> List[str]:
         """
         注入测试流量
 
@@ -1202,6 +1202,7 @@ class CrossRingModel(BaseNoCModel):
             req_type: 请求类型
             count: 请求数量
             burst_length: 突发长度
+            ip_type: IP类型 (可选，如果未指定则使用第一个找到的IP)
 
         Returns:
             生成的packet_id列表
@@ -1209,15 +1210,14 @@ class CrossRingModel(BaseNoCModel):
         packet_ids = []
 
         # 找到源节点对应的IP接口
-        # BUG: 不只需要node_id相同，还需要IP类型相，所以注入的接口需要修改。
-        source_ips = [ip for key, ip in self._ip_registry.items() if ip.node_id == source]
-
-        if not source_ips:
-            self.logger.warning(f"源节点 {source} 没有找到对应的IP接口")
+        ip_interface = self._find_ip_interface_for_request(source, req_type, ip_type)
+        
+        if not ip_interface:
+            if ip_type:
+                self.logger.warning(f"源节点 {source} 没有找到对应的IP接口 (类型: {ip_type})")
+            else:
+                self.logger.warning(f"源节点 {source} 没有找到对应的IP接口")
             return packet_ids
-
-        # 使用第一个找到的IP接口
-        ip_interface = source_ips[0]
 
         for i in range(count):
             # TODO: packet_id 不需要这么复杂，就用数字就可以了，但是要保证唯一性
@@ -1231,6 +1231,436 @@ class CrossRingModel(BaseNoCModel):
                 self.logger.warning(f"测试请求注入失败: {packet_id}")
 
         return packet_ids
+
+    def _find_ip_interface_for_request(self, node_id: NodeId, req_type: str, ip_type: str = None) -> Optional[CrossRingIPInterface]:
+        """
+        为请求查找合适的IP接口
+
+        Args:
+            node_id: 节点ID
+            req_type: 请求类型 ("read" | "write")
+            ip_type: IP类型 (可选)
+
+        Returns:
+            找到的IP接口，如果未找到则返回None
+        """
+        if ip_type:
+            # 如果指定了IP类型，则精确匹配
+            matching_ips = [ip for key, ip in self._ip_registry.items() if ip.node_id == node_id and ip.ip_type == ip_type]
+        else:
+            # 如果未指定IP类型，则根据请求类型选择合适的IP
+            matching_ips = [ip for key, ip in self._ip_registry.items() if ip.node_id == node_id]
+            
+            # 优先选择能发起该类型请求的IP
+            if req_type == "read":
+                # 对于读请求，优先选择DMA类型的IP
+                preferred_ips = [ip for ip in matching_ips if ip.ip_type in ["gdma", "sdma", "cdma"]]
+                if preferred_ips:
+                    matching_ips = preferred_ips
+            elif req_type == "write":
+                # 对于写请求，优先选择DMA类型的IP
+                preferred_ips = [ip for ip in matching_ips if ip.ip_type in ["gdma", "sdma", "cdma"]]
+                if preferred_ips:
+                    matching_ips = preferred_ips
+
+        if not matching_ips:
+            return None
+
+        # 返回第一个匹配的IP接口
+        return matching_ips[0]
+
+    def _find_ip_interface_for_response(self, node_id: NodeId, req_type: str, ip_type: str = None) -> Optional[CrossRingIPInterface]:
+        """
+        为响应查找合适的IP接口
+
+        Args:
+            node_id: 节点ID
+            req_type: 请求类型 ("read" | "write")
+            ip_type: IP类型 (可选)
+
+        Returns:
+            找到的IP接口，如果未找到则返回None
+        """
+        if ip_type:
+            # 如果指定了IP类型，则精确匹配
+            matching_ips = [ip for key, ip in self._ip_registry.items() if ip.node_id == node_id and ip.ip_type == ip_type]
+        else:
+            # 如果未指定IP类型，则根据请求类型选择合适的IP
+            matching_ips = [ip for key, ip in self._ip_registry.items() if ip.node_id == node_id]
+            
+            # 对于响应，优先选择能处理该类型请求的SN端IP
+            if req_type in ["read", "write"]:
+                # 优先选择存储类型的IP (DDR, L2M)
+                preferred_ips = [ip for ip in matching_ips if ip.ip_type in ["ddr", "l2m"]]
+                if preferred_ips:
+                    matching_ips = preferred_ips
+
+        if not matching_ips:
+            return None
+
+        # 返回第一个匹配的IP接口
+        return matching_ips[0]
+
+    def create_demo_traffic(self, pattern: str = "basic") -> List[Tuple]:
+        """
+        创建演示流量
+        
+        Args:
+            pattern: 流量模式 ("basic", "stress", "mixed")
+            
+        Returns:
+            流量列表，每个元素为 (源节点, 目标节点, 操作类型, 突发长度, IP类型)
+        """
+        traffic = []
+        
+        # 获取IP节点配置
+        gdma_nodes = self.config.gdma_send_position_list
+        ddr_nodes = self.config.ddr_send_position_list
+        l2m_nodes = self.config.l2m_send_position_list
+        
+        if pattern == "basic":
+            # 基础测试：GDMA读写DDR和L2M
+            for gdma_node in gdma_nodes:
+                for ddr_node in ddr_nodes:
+                    traffic.append((gdma_node, ddr_node, "read", 4, "gdma"))
+                    traffic.append((gdma_node, ddr_node, "write", 4, "gdma"))
+                
+                for l2m_node in l2m_nodes:
+                    traffic.append((gdma_node, l2m_node, "read", 4, "gdma"))
+                    traffic.append((gdma_node, l2m_node, "write", 4, "gdma"))
+        
+        elif pattern == "stress":
+            # 压力测试：更多的请求和更大的突发
+            for gdma_node in gdma_nodes:
+                for ddr_node in ddr_nodes:
+                    for _ in range(3):  # 多次请求
+                        traffic.append((gdma_node, ddr_node, "read", 8, "gdma"))
+                        traffic.append((gdma_node, ddr_node, "write", 8, "gdma"))
+        
+        elif pattern == "mixed":
+            # 混合测试：不同的IP类型和操作
+            # GDMA访问
+            for gdma_node in gdma_nodes:
+                for target in ddr_nodes + l2m_nodes:
+                    traffic.append((gdma_node, target, "read", 4, "gdma"))
+                    traffic.append((gdma_node, target, "write", 4, "gdma"))
+            
+            # SDMA访问
+            if self.config.sdma_send_position_list:
+                for sdma_node in self.config.sdma_send_position_list:
+                    for target in ddr_nodes:
+                        traffic.append((sdma_node, target, "read", 4, "sdma"))
+            
+            # CDMA访问
+            if self.config.cdma_send_position_list:
+                for cdma_node in self.config.cdma_send_position_list:
+                    for target in l2m_nodes:
+                        traffic.append((cdma_node, target, "write", 4, "cdma"))
+        
+        self.logger.info(f"生成 {pattern} 模式流量: {len(traffic)} 个请求")
+        return traffic
+
+    def inject_demo_traffic(self, traffic_list: List[Tuple]) -> int:
+        """
+        注入演示流量
+        
+        Args:
+            traffic_list: 流量列表
+            
+        Returns:
+            成功注入的请求数量
+        """
+        injected_count = 0
+        
+        for src, dst, op_type, burst, ip_type in traffic_list:
+            # 确保节点在有效范围内
+            if src < self.config.num_nodes and dst < self.config.num_nodes:
+                packet_ids = self.inject_test_traffic(
+                    source=src,
+                    destination=dst,
+                    req_type=op_type,
+                    count=1,
+                    burst_length=burst,
+                    ip_type=ip_type
+                )
+                
+                if packet_ids:
+                    injected_count += len(packet_ids)
+                    self.logger.debug(f"注入请求: {src}({ip_type}) -> {dst}, {op_type}, burst={burst}")
+        
+        self.logger.info(f"成功注入 {injected_count} 个请求")
+        return injected_count
+
+    def inject_from_traffic_file(self, traffic_file_path: str, max_requests: int = None) -> int:
+        """
+        从traffic文件注入流量
+        
+        Args:
+            traffic_file_path: traffic文件路径
+            max_requests: 最大请求数（可选）
+            
+        Returns:
+            成功注入的请求数量
+        """
+        injected_count = 0
+        
+        try:
+            with open(traffic_file_path, 'r') as f:
+                for line_num, line in enumerate(f, 1):
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    
+                    # 解析traffic文件格式：cycle src src_type dst dst_type op burst
+                    parts = line.split()
+                    if len(parts) < 7:
+                        continue
+                    
+                    cycle, src, src_type, dst, dst_type, op, burst = parts[:7]
+                    
+                    # 转换类型
+                    src = int(src)
+                    dst = int(dst)
+                    burst = int(burst)
+                    
+                    # 确保节点在有效范围内
+                    if src < self.config.num_nodes and dst < self.config.num_nodes:
+                        packet_ids = self.inject_test_traffic(
+                            source=src,
+                            destination=dst,
+                            req_type=op.lower(),
+                            count=1,
+                            burst_length=burst,
+                            ip_type=src_type
+                        )
+                        
+                        if packet_ids:
+                            injected_count += len(packet_ids)
+                    
+                    # 检查是否达到最大请求数
+                    if max_requests and injected_count >= max_requests:
+                        break
+                        
+        except FileNotFoundError:
+            self.logger.error(f"Traffic文件不存在: {traffic_file_path}")
+        except Exception as e:
+            self.logger.error(f"读取traffic文件失败: {e}")
+        
+        self.logger.info(f"从文件注入 {injected_count} 个请求")
+        return injected_count
+
+    def analyze_simulation_results(self, results: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        分析仿真结果
+        
+        Args:
+            results: 仿真结果
+            
+        Returns:
+            分析结果
+        """
+        analysis = {}
+        
+        # 基础指标
+        sim_info = results.get('simulation_info', {})
+        network_stats = results.get('network_stats', {})
+        
+        analysis['basic_metrics'] = {
+            'total_cycles': sim_info.get('total_cycles', 0),
+            'effective_cycles': sim_info.get('effective_cycles', 0),
+            'peak_active_requests': network_stats.get('peak_active_requests', 0),
+            'total_read_retries': network_stats.get('total_read_retries', 0),
+            'total_write_retries': network_stats.get('total_write_retries', 0),
+            'total_transactions': network_stats.get('total_transactions', 0)
+        }
+        
+        # 计算吞吐量
+        effective_cycles = analysis['basic_metrics']['effective_cycles']
+        total_transactions = analysis['basic_metrics']['total_transactions']
+        
+        if effective_cycles > 0 and total_transactions > 0:
+            analysis['basic_metrics']['throughput'] = total_transactions / effective_cycles
+            analysis['basic_metrics']['bandwidth_mbps'] = (total_transactions * 512) / (effective_cycles * 1e6)  # 假设512位/事务
+        else:
+            analysis['basic_metrics']['throughput'] = 0.0
+            analysis['basic_metrics']['bandwidth_mbps'] = 0.0
+        
+        # IP接口分析
+        ip_stats = results.get('ip_interface_stats', {})
+        analysis['ip_summary'] = self._analyze_ip_interfaces(ip_stats)
+        
+        # 拥塞分析
+        analysis['congestion_summary'] = self._analyze_congestion()
+        
+        return analysis
+
+    def _analyze_ip_interfaces(self, ip_stats: Dict[str, Any]) -> Dict[str, Any]:
+        """分析IP接口统计"""
+        summary = {
+            'total_interfaces': len(ip_stats),
+            'by_type': {},
+            'total_read_transactions': 0,
+            'total_write_transactions': 0,
+            'total_retries': 0
+        }
+        
+        for ip_key, stats in ip_stats.items():
+            ip_type = ip_key.split('_')[0]
+            
+            if ip_type not in summary['by_type']:
+                summary['by_type'][ip_type] = {
+                    'count': 0,
+                    'read_transactions': 0,
+                    'write_transactions': 0,
+                    'retries': 0
+                }
+            
+            summary['by_type'][ip_type]['count'] += 1
+            summary['by_type'][ip_type]['read_transactions'] += stats.get('rn_read_active', 0)
+            summary['by_type'][ip_type]['write_transactions'] += stats.get('rn_write_active', 0)
+            summary['by_type'][ip_type]['retries'] += stats.get('read_retries', 0) + stats.get('write_retries', 0)
+            
+            summary['total_read_transactions'] += stats.get('rn_read_active', 0)
+            summary['total_write_transactions'] += stats.get('rn_write_active', 0)
+            summary['total_retries'] += stats.get('read_retries', 0) + stats.get('write_retries', 0)
+        
+        return summary
+
+    def _analyze_congestion(self) -> Dict[str, Any]:
+        """分析拥塞情况"""
+        congestion_summary = {
+            'congestion_detected': False,
+            'total_congestion_events': 0,
+            'congestion_rate': 0.0
+        }
+        
+        if hasattr(self, 'get_congestion_statistics'):
+            congestion_stats = self.get_congestion_statistics()
+            total_congestion = congestion_stats.get('total_congestion_events', 0)
+            total_injections = congestion_stats.get('total_injections', 1)
+            
+            congestion_summary['congestion_detected'] = total_congestion > 0
+            congestion_summary['total_congestion_events'] = total_congestion
+            congestion_summary['congestion_rate'] = total_congestion / total_injections if total_injections > 0 else 0.0
+        
+        return congestion_summary
+
+    def generate_simulation_report(self, results: Dict[str, Any], analysis: Dict[str, Any] = None) -> str:
+        """
+        生成仿真报告
+        
+        Args:
+            results: 仿真结果
+            analysis: 分析结果（可选，如果未提供则自动分析）
+            
+        Returns:
+            报告文本
+        """
+        if analysis is None:
+            analysis = self.analyze_simulation_results(results)
+        
+        report = []
+        report.append("=" * 60)
+        report.append("CrossRing NoC 仿真报告")
+        report.append("=" * 60)
+        
+        # 拓扑信息
+        report.append(f"拓扑配置: {self.config.num_row}x{self.config.num_col}")
+        report.append(f"总节点数: {self.config.num_nodes}")
+        report.append("")
+        
+        # 基础指标
+        basic = analysis.get('basic_metrics', {})
+        report.append("性能指标:")
+        report.append(f"  仿真周期: {basic.get('total_cycles', 0):,}")
+        report.append(f"  有效周期: {basic.get('effective_cycles', 0):,}")
+        report.append(f"  总事务数: {basic.get('total_transactions', 0):,}")
+        report.append(f"  峰值活跃请求: {basic.get('peak_active_requests', 0)}")
+        report.append(f"  吞吐量: {basic.get('throughput', 0):.4f} 事务/周期")
+        report.append(f"  带宽: {basic.get('bandwidth_mbps', 0):.2f} Mbps")
+        report.append("")
+        
+        # 重试统计
+        report.append("重试统计:")
+        report.append(f"  读重试: {basic.get('total_read_retries', 0)}")
+        report.append(f"  写重试: {basic.get('total_write_retries', 0)}")
+        report.append("")
+        
+        # IP接口统计
+        ip_summary = analysis.get('ip_summary', {})
+        report.append("IP接口统计:")
+        report.append(f"  总接口数: {ip_summary.get('total_interfaces', 0)}")
+        
+        by_type = ip_summary.get('by_type', {})
+        for ip_type, stats in by_type.items():
+            report.append(f"  {ip_type}: {stats['count']}个接口, "
+                         f"读事务={stats['read_transactions']}, "
+                         f"写事务={stats['write_transactions']}, "
+                         f"重试={stats['retries']}")
+        
+        report.append("")
+        
+        # 拥塞分析
+        congestion = analysis.get('congestion_summary', {})
+        if congestion.get('congestion_detected', False):
+            report.append("拥塞分析:")
+            report.append(f"  拥塞事件: {congestion.get('total_congestion_events', 0)}")
+            report.append(f"  拥塞率: {congestion.get('congestion_rate', 0):.2%}")
+        else:
+            report.append("拥塞分析: 未检测到显著拥塞")
+        
+        report.append("")
+        report.append("=" * 60)
+        
+        return "\n".join(report)
+
+    def run_demo_simulation(self, 
+                           traffic_pattern: str = "basic",
+                           max_cycles: int = 1000,
+                           warmup_cycles: int = 100,
+                           stats_start_cycle: int = 100) -> Dict[str, Any]:
+        """
+        运行演示仿真
+        
+        Args:
+            traffic_pattern: 流量模式
+            max_cycles: 最大仿真周期
+            warmup_cycles: 热身周期
+            stats_start_cycle: 统计开始周期
+            
+        Returns:
+            包含仿真结果和分析的字典
+        """
+        self.logger.info(f"开始演示仿真: {traffic_pattern} 模式")
+        
+        # 生成和注入流量
+        traffic = self.create_demo_traffic(traffic_pattern)
+        injected_count = self.inject_demo_traffic(traffic)
+        
+        if injected_count == 0:
+            self.logger.warning("没有成功注入任何请求")
+            return {"success": False, "message": "No requests injected"}
+        
+        # 运行仿真
+        results = self.run_simulation(
+            max_cycles=max_cycles,
+            warmup_cycles=warmup_cycles,
+            stats_start_cycle=stats_start_cycle
+        )
+        
+        # 分析结果
+        analysis = self.analyze_simulation_results(results)
+        
+        # 生成报告
+        report = self.generate_simulation_report(results, analysis)
+        
+        return {
+            "success": True,
+            "injected_requests": injected_count,
+            "simulation_results": results,
+            "analysis": analysis,
+            "report": report
+        }
 
     def get_model_summary(self) -> Dict[str, Any]:
         """获取模型摘要信息"""

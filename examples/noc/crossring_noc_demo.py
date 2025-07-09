@@ -184,12 +184,18 @@ class CrossRingNoCDemo:
 
             for req in requests:
                 t, src, src_t, dst, dst_t, op, burst, traffic_id = req
-                # BUG：没有使用src_t和dst_t
-                # 注入请求到模型
-                success = self.model.inject_packet(src_node=src, dst_node=dst, op_type=op, burst_size=burst, cycle=int(t))
+                # 使用src_t和dst_t来指定IP类型
+                packet_ids = self.model.inject_test_traffic(
+                    source=src,
+                    destination=dst,
+                    req_type=op.lower(),  # 将操作类型转换为小写
+                    count=1,
+                    burst_length=burst,
+                    ip_type=src_t  # 使用源IP类型
+                )
 
-                if success:
-                    total_injected += 1
+                if packet_ids:
+                    total_injected += len(packet_ids)
                     if total_injected % 100 == 0:
                         self.logger.debug(f"已注入 {total_injected} 个请求")
 
@@ -261,10 +267,17 @@ class CrossRingNoCDemo:
 
                 # 确保节点ID在有效范围内
                 if src < self.model.get_node_count() and dst < self.model.get_node_count():
-                    success = self.model.inject_packet(src_node=src, dst_node=dst, op_type=op, burst_size=burst, cycle=max(0, int(t)))
+                    packet_ids = self.model.inject_test_traffic(
+                        source=src,
+                        destination=dst,
+                        req_type=op.lower(),
+                        count=1,
+                        burst_length=burst,
+                        ip_type=src_t  # 使用源IP类型
+                    )
 
-                    if success:
-                        total_injected += 1
+                    if packet_ids:
+                        total_injected += len(packet_ids)
 
         self.logger.info(f"从traffic文件注入流量: {total_injected} 个包")
 
@@ -278,56 +291,8 @@ class CrossRingNoCDemo:
 
         self.logger.info("开始性能分析")
 
-        results = self.simulation_results
-        analysis = {}
-
-        # 基础统计
-        global_stats = results.get("global_stats", {})
-        network_stats = results.get("network_stats", {})
-        simulation_info = results.get("simulation_info", {})
-
-        # 从模型中获取实际的完成请求数量
-        completed_requests_count = 0
-        if hasattr(self.model, "completed_requests"):
-            completed_requests_count = len(self.model.completed_requests)
-        elif hasattr(self.model, "get_completed_request_count"):
-            completed_requests_count = self.model.get_completed_request_count()
-
-        # 尝试从不同来源获取事务计数
-        total_transactions = max(network_stats.get("total_transactions", 0), completed_requests_count, global_stats.get("completed_transactions", 0))
-
-        analysis["basic_metrics"] = {
-            "total_cycles": simulation_info.get("total_cycles", self.model.cycle if self.model else 0),
-            "effective_cycles": simulation_info.get("effective_cycles", max(1, self.model.cycle) if self.model else 1),
-            "total_transactions": total_transactions,
-            "peak_active_requests": network_stats.get("peak_active_requests", 0),
-            "total_read_retries": network_stats.get("total_read_retries", 0),
-            "total_write_retries": network_stats.get("total_write_retries", 0),
-            "completed_requests": completed_requests_count,
-        }
-
-        # 计算吞吐量
-        effective_cycles = analysis["basic_metrics"]["effective_cycles"]
-        total_transactions = analysis["basic_metrics"]["total_transactions"]
-
-        self.logger.info(f"计算吞吐量: 事务数={total_transactions}, 有效周期={effective_cycles}")
-
-        if effective_cycles > 0 and total_transactions > 0:
-            throughput = total_transactions / effective_cycles
-            analysis["basic_metrics"]["throughput"] = throughput
-            analysis["basic_metrics"]["throughput_mbps"] = throughput * 512 / 1e6  # 假设512位/事务
-            self.logger.info(f"计算得到吞吐量: {throughput:.6f} 事务/周期")
-        else:
-            analysis["basic_metrics"]["throughput"] = 0.0
-            analysis["basic_metrics"]["throughput_mbps"] = 0.0
-            self.logger.warning(f"无法计算吞吐量: 事务数={total_transactions}, 有效周期={effective_cycles}")
-
-        # IP接口性能分析
-        ip_stats = results.get("ip_interface_stats", {})
-        analysis["ip_performance"] = self._analyze_ip_performance(ip_stats)
-
-        # 网络拥塞分析
-        analysis["congestion_analysis"] = self._analyze_congestion()
+        # 使用模型内置的分析功能
+        analysis = self.model.analyze_simulation_results(self.simulation_results)
 
         self.logger.info("性能分析完成")
         return analysis
@@ -401,58 +366,8 @@ class CrossRingNoCDemo:
 
         analysis = self.analyze_performance()
 
-        report = []
-        report.append("=" * 80)
-        report.append("CrossRing NoC 仿真报告")
-        report.append("=" * 80)
-
-        # 基础信息
-        config_info = self.simulation_results.get("simulation_info", {}).get("config", {})
-        report.append(f"拓扑配置: {config_info.get('num_row', 'N/A')}x{config_info.get('num_col', 'N/A')}")
-        report.append(f"总节点数: {config_info.get('num_nodes', 'N/A')}")
-        report.append("")
-
-        # 性能指标
-        basic_metrics = analysis.get("basic_metrics", {})
-        report.append("性能指标:")
-        report.append(f"  仿真周期: {basic_metrics.get('total_cycles', 0):,}")
-        report.append(f"  有效周期: {basic_metrics.get('effective_cycles', 0):,}")
-        report.append(f"  总事务数: {basic_metrics.get('total_transactions', 0):,}")
-        report.append(f"  峰值活跃请求: {basic_metrics.get('peak_active_requests', 0)}")
-
-        if "throughput" in basic_metrics:
-            report.append(f"  吞吐量: {basic_metrics['throughput']:.4f} 事务/周期")
-            report.append(f"  带宽: {basic_metrics.get('throughput_mbps', 0):.2f} Mbps")
-
-        report.append("")
-
-        # IP性能
-        ip_perf = analysis.get("ip_performance", {})
-        if ip_perf:
-            report.append("IP接口性能:")
-            summary = ip_perf.get("summary", {})
-            report.append(f"  总IP数量: {ip_perf.get('total_ips', 0)}")
-            report.append(f"  读事务: {summary.get('total_read_transactions', 0)}")
-            report.append(f"  写事务: {summary.get('total_write_transactions', 0)}")
-            report.append(f"  重试次数: {summary.get('total_retries', 0)}")
-            report.append(f"  平均利用率: {summary.get('avg_utilization', 0):.2%}")
-            report.append("")
-
-        # 拥塞分析
-        congestion = analysis.get("congestion_analysis", {})
-        if congestion.get("congestion_detected", False):
-            report.append("拥塞分析:")
-            summary = congestion.get("congestion_summary", {})
-            report.append(f"  检测到拥塞: 是")
-            report.append(f"  拥塞事件: {summary.get('total_congestion_events', 0)}")
-            report.append(f"  拥塞率: {summary.get('congestion_rate', 0):.2%}")
-        else:
-            report.append("拥塞分析: 未检测到显著拥塞")
-
-        report.append("")
-        report.append("=" * 80)
-
-        report_text = "\n".join(report)
+        # 使用模型内置的报告生成功能
+        report_text = self.model.generate_simulation_report(self.simulation_results, analysis)
 
         # 保存报告
         report_file = self.output_path / "simulation_report.txt"
