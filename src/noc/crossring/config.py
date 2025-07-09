@@ -43,6 +43,10 @@ class BasicConfiguration:
     eject_buffer_depth: int = 8
     crosspoint_buffer_depth: int = 4
 
+    # Link Slice配置 - CrossRing非环绕设计专用
+    normal_link_slices: int = 8    # 正常节点间连接的slice数量
+    self_link_slices: int = 2      # 自连接（边界节点到自己）的slice数量
+
     # 仲裁配置（用于支持不同路由策略）
     arbitration_timeout: int = 10  # 仲裁超时周期
 
@@ -668,7 +672,7 @@ class CrossRingConfig(BaseNoCConfig):
 
     # ========== 新增的NoC专用功能 ==========
 
-    def create_simulation_config(self, max_cycles: int = 10000, warmup_cycles: int = 1000, stats_start_cycle: int = 1000) -> Dict[str, Any]:
+    def create_simulation_config(self, max_cycles: int = 10000, warmup_cycles: int = 0, stats_start_cycle: int = 1000) -> Dict[str, Any]:
         """
         创建仿真配置
 
@@ -837,8 +841,8 @@ class CrossRingConfig(BaseNoCConfig):
         cycles = int(base_cycles * tracker_factor)
 
         return {
-            "warmup_cycles": min(5000, cycles // 10),
-            "stats_start_cycle": min(5000, cycles // 10),
+            "warmup_cycles": 0,
+            "stats_start_cycle": 0,
             "max_cycles": cycles,
             "recommended_min_cycles": cycles // 2,
             "recommended_max_cycles": cycles * 2,

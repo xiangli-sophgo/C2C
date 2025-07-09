@@ -529,17 +529,21 @@ def auto_select_topology(requirements: Dict[str, Any]) -> TopologyType:
 # 注册默认拓扑类型
 def register_default_topologies():
     """注册默认的拓扑类型。"""
-    # 注意：这里只是占位符，实际的拓扑实现类需要在具体实现后注册
-    # 例如：
+    # 注册CrossRing拓扑
+    try:
+        from ..crossring.topology import CrossRingTopology
+        NoCTopologyFactory.register_topology(TopologyType.CROSSRING, CrossRingTopology)
+        logging.info("CrossRing拓扑已注册")
+    except ImportError as e:
+        logging.warning(f"CrossRing拓扑注册失败: {e}")
+    
+    # 其他拓扑类型的注册将在实现类可用时添加
     # from .topologies.mesh import MeshTopology
     # from .topologies.ring import RingTopology
-    # from .topologies.crossring import CrossRingTopology
-    #
     # NoCTopologyFactory.register_topology(TopologyType.MESH, MeshTopology)
     # NoCTopologyFactory.register_topology(TopologyType.RING, RingTopology)
-    # NoCTopologyFactory.register_topology(TopologyType.CROSSRING, CrossRingTopology)
 
-    logging.info("默认拓扑类型将在实现类可用时注册")
+    logging.info("默认拓扑类型注册完成")
 
 
 # 模块初始化时注册默认拓扑

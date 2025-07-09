@@ -44,20 +44,17 @@ class CrossRingModel(BaseNoCModel):
     5. 性能统计收集
     """
 
-    def __init__(self, config: CrossRingConfig):
+    def __init__(self, config: CrossRingConfig, traffic_file_path: str = None):
         """
         初始化CrossRing模型
 
         Args:
             config: CrossRing配置实例
+            traffic_file_path: 可选的traffic文件路径，用于优化IP接口创建
         """
         # 调用父类初始化
-        super().__init__(config, model_name="CrossRingModel")
-
-        # IP接口管理
-        self.ip_interfaces: Dict[str, CrossRingIPInterface] = {}
-        self._ip_registry: Dict[str, CrossRingIPInterface] = {}  # 全局debug视图
-
+        super().__init__(config, model_name="CrossRingModel", traffic_file_path=traffic_file_path)
+        
         # CrossRing网络组件 - 使用新的架构
         self.crossring_nodes: Dict[NodeId, Any] = {}  # {node_id: CrossRingNode}
         self.crossring_links: Dict[str, Any] = {}  # {link_id: CrossRingLink}
@@ -65,46 +62,35 @@ class CrossRingModel(BaseNoCModel):
         # Tag管理器
         self.tag_managers: Dict[NodeId, Any] = {}  # {node_id: CrossRingTagManager}
 
-        # 性能统计
-        self.stats = {
-            "total_requests": 0,
-            "total_responses": 0,
-            "total_data_flits": 0,
-            "read_retries": 0,
-            "write_retries": 0,
-            "average_latency": 0.0,
-            "peak_active_requests": 0,
-            "current_active_requests": 0,
+        # CrossRing特有的统计信息
+        self.crossring_stats = {
             "dimension_turns": 0,
             "ring_transmissions": 0,
             "wrap_around_hops": 0,
+            "crosspoint_arbitrations": 0,
+            "tag_upgrades": {"itag": 0, "etag": 0},
         }
 
-        # 仿真状态
-        self.is_running = False
-        self.is_finished = False
+        # CrossRing特有的调试信息
+        self.crossring_debug = {
+            "track_ring_slots": False,
+            "track_crosspoint_arbitration": False,
+            "track_tag_mechanisms": False,
+        }
 
-        # 日志配置
-        self.logger = logging.getLogger(f"CrossRingModel_{id(self)}")
-
-        # 调试和追踪系统
-        self.request_tracker = RequestTracker(network_frequency=1)  # 简化为1GHz = 1
-        self.debug_enabled = False
-        self.trace_packets = set()
-
-        # 初始化所有组件
-        self._setup_ip_interfaces()
-        self._setup_crossring_networks()
+        # 初始化模型（包括IP接口创建）
+        self.initialize_model()
 
         # 验证CrossRing网络初始化
         if len(self.crossring_nodes) != self.config.num_nodes:
-            self.logger.error("CrossRing节点初始化不完整")
+            self.logger.error(f"CrossRing节点初始化不完整: 期望{self.config.num_nodes}，实际{len(self.crossring_nodes)}")
+            self.logger.error("debug: 当前crossring_nodes内容: {}".format(list(self.crossring_nodes.keys())))
             raise RuntimeError("CrossRing网络初始化失败")
 
         self.logger.info(f"CrossRing模型初始化完成: {config.num_row}x{config.num_col}")
 
-    def _setup_ip_interfaces(self) -> None:
-        """设置所有IP接口"""
+    def _setup_all_ip_interfaces(self) -> None:
+        """创建所有IP接口（传统模式）"""
         ip_type_configs = [
             ("gdma", self.config.gdma_send_position_list),
             ("sdma", self.config.sdma_send_position_list),
@@ -115,20 +101,188 @@ class CrossRingModel(BaseNoCModel):
 
         for ip_type, positions in ip_type_configs:
             for node_id in positions:
-                key = f"{ip_type}_{node_id}"
-                self.ip_interfaces[key] = CrossRingIPInterface(config=self.config, ip_type=ip_type, node_id=node_id, model=self)
+                # 为每个节点创建多个IP通道
+                channel_count = self.config.channel_spec.get(ip_type, 2)
+                for channel_id in range(channel_count):
+                    key = f"{ip_type}_{channel_id}_node{node_id}"
+                    ip_interface = CrossRingIPInterface(config=self.config, ip_type=f"{ip_type}_{channel_id}", node_id=node_id, model=self)
+                    self.ip_interfaces[key] = ip_interface
+                    self._ip_registry[key] = ip_interface
 
-                self.logger.debug(f"创建IP接口: {key} at node {node_id}")
+                    self.logger.debug(f"创建IP接口: {key} at node {node_id}")
+                    
+    def _create_specific_ip_interfaces(self, required_ips: List[Tuple[int, str]]) -> None:
+        """创建特定的IP接口"""
+        for node_id, ip_type in required_ips:
+            # 验证ip_type格式
+            if not ip_type or not isinstance(ip_type, str):
+                self.logger.warning(f"无效的IP类型: {ip_type} for node {node_id}")
+                continue
+                
+            key = f"{ip_type}_node{node_id}"
+            try:
+                ip_interface = CrossRingIPInterface(config=self.config, ip_type=ip_type, node_id=node_id, model=self)
+                self.ip_interfaces[key] = ip_interface
+                self._ip_registry[key] = ip_interface
+                
+                self.logger.info(f"创建优化IP接口: {key} at node {node_id} (ip_type={ip_type})")
+            except Exception as e:
+                self.logger.error(f"创建IP接口失败: {key} - {e}")
+                continue
+        
+        # 打印所有创建的IP接口
+        self.logger.info(f"总共创建了 {len(self.ip_interfaces)} 个IP接口")
+        for key, ip_interface in self.ip_interfaces.items():
+            self.logger.info(f"  {key}: node_id={ip_interface.node_id}, ip_type={ip_interface.ip_type}")
 
+    def _setup_topology_network(self) -> None:
+        """设置拓扑网络（BaseNoCModel抽象方法的实现）"""
+        print("DEBUG: 调用_setup_topology_network方法")
+        self._setup_crossring_networks()
+        print(f"DEBUG: _setup_topology_network完成，已创建{len(self.crossring_nodes)}个节点")
+    
+    def _setup_flit_pools(self) -> None:
+        """设置Flit对象池（重写父类方法）"""
+        from .flit import CrossRingFlit
+        from src.noc.base.flit import FlitPool
+        self.flit_pools[CrossRingFlit] = FlitPool(CrossRingFlit)
+        
     def _setup_crossring_networks(self) -> None:
         """设置CrossRing网络组件的完整实现 - 真实环形拓扑"""
         # 用CrossRingNode实例替换原有dict结构
         self.crossring_nodes: Dict[NodeId, CrossRingNode] = {}
+        
+        print(f"DEBUG: 开始创建CrossRing网络: {self.config.num_nodes}个节点")
+        print(f"DEBUG: 配置详情: num_row={self.config.num_row}, num_col={self.config.num_col}")
+        
+        # 导入CrossRingNode类
+        from .node import CrossRingNode
+        
         for node_id in range(self.config.num_nodes):
             coordinates = self._get_node_coordinates(node_id)
-            node = CrossRingNode(node_id=node_id, coordinates=coordinates, config=self.config, logger=self.logger)
-            self.crossring_nodes[node_id] = node
-        self.logger.info(f"CrossRing网络创建完成: {len(self.crossring_nodes)}个节点")
+            print(f"DEBUG: 创建节点{node_id}: coordinates={coordinates}")
+            
+            try:
+                node = CrossRingNode(node_id=node_id, coordinates=coordinates, config=self.config, logger=self.logger)
+                self.crossring_nodes[node_id] = node
+                print(f"DEBUG: 成功创建节点{node_id}")
+            except Exception as e:
+                print(f"DEBUG: 创建节点{node_id}失败: {e}")
+                import traceback
+                traceback.print_exc()
+                
+        print(f"DEBUG: CrossRing网络创建完成: {len(self.crossring_nodes)}个节点")
+        
+        # 创建链接
+        self._setup_crossring_links()
+
+    def _setup_crossring_links(self) -> None:
+        """创建CrossRing链接"""
+        print("DEBUG: 开始创建CrossRing链接...")
+        
+        # 导入必要的类
+        from .crossring_link import CrossRingLink
+        from ..base.link import Direction
+        
+        # 获取slice配置
+        normal_slices = getattr(self.config.basic_config, 'normal_link_slices', 8)
+        self_slices = getattr(self.config.basic_config, 'self_link_slices', 2)
+        
+        print(f"DEBUG: 链接配置 - 正常链接: {normal_slices} slices, 自连接: {self_slices} slices")
+        
+        link_count = 0
+        for node_id in range(self.config.num_nodes):
+            # 获取节点的四个方向连接
+            connections = self._get_ring_connections(node_id)
+            
+            for direction_str, neighbor_id in connections.items():
+                # 确定链接方向
+                direction = Direction[direction_str.upper()]
+                
+                # 确定slice数量
+                if neighbor_id == node_id:
+                    # 自连接
+                    num_slices = self_slices
+                    link_type = "self"
+                else:
+                    # 正常连接
+                    num_slices = normal_slices
+                    link_type = "normal"
+                
+                # 创建链接ID
+                link_id = f"link_{node_id}_{direction_str}_to_{neighbor_id}"
+                
+                # 创建链接
+                try:
+                    link = CrossRingLink(
+                        link_id=link_id,
+                        source_node=node_id,
+                        dest_node=neighbor_id,
+                        direction=direction,
+                        config=self.config,
+                        num_slices=num_slices,
+                        logger=self.logger
+                    )
+                    self.crossring_links[link_id] = link
+                    link_count += 1
+                    print(f"DEBUG: 创建链接 {link_id} ({link_type}, {num_slices} slices)")
+                except Exception as e:
+                    print(f"DEBUG: 创建链接失败 {link_id}: {e}")
+                    import traceback
+                    traceback.print_exc()
+        
+        print(f"DEBUG: CrossRing链接创建完成: {link_count} 个链接")
+
+    def _step_topology_network(self) -> None:
+        """拓扑网络步进（BaseNoCModel抽象方法的实现）"""
+        # 在这里实现CrossRing网络的步进逻辑
+        for node in self.crossring_nodes.values():
+            if hasattr(node, 'step'):
+                node.step()
+    
+    def _get_topology_info(self) -> Dict[str, Any]:
+        """获取拓扑信息（BaseNoCModel抽象方法的实现）"""
+        return {
+            "topology_type": "CrossRing",
+            "num_rows": self.config.num_row,
+            "num_cols": self.config.num_col,
+            "num_nodes": self.config.num_nodes,
+            "total_links": len(self.crossring_links),
+            "crossring_stats": self.crossring_stats.copy()
+        }
+    
+    def _calculate_path(self, source: NodeId, destination: NodeId) -> List[NodeId]:
+        """计算路径（BaseNoCModel抽象方法的实现）"""
+        if source == destination:
+            return [source]
+        
+        # 使用简单的HV路由算法
+        path = [source]
+        current = source
+        
+        # 获取源和目标的坐标
+        src_x, src_y = self._get_node_coordinates(source)
+        dst_x, dst_y = self._get_node_coordinates(destination)
+        
+        # 水平移动
+        while src_x != dst_x:
+            if src_x < dst_x:
+                src_x += 1
+            else:
+                src_x -= 1
+            current = src_y * self.config.num_col + src_x
+            path.append(current)
+        
+        # 垂直移动
+        while src_y != dst_y:
+            if src_y < dst_y:
+                src_y += 1
+            else:
+                src_y -= 1
+            current = src_y * self.config.num_col + src_x
+            path.append(current)
+        
+        return path
 
     def _get_node_coordinates(self, node_id: NodeId) -> Tuple[int, int]:
         """
@@ -223,76 +377,24 @@ class CrossRingModel(BaseNoCModel):
 
         self.logger.debug(f"注册IP接口到全局registry: {key}")
 
-    def step(self) -> None:
-        """执行一个仿真周期（使用两阶段执行模型）"""
-        self.cycle += 1
-
-        # 阶段1：组合逻辑阶段 - 所有组件计算传输决策
-        self._step_compute_phase()
-
-        # 阶段2：时序逻辑阶段 - 所有组件执行传输和状态更新
-        self._step_update_phase()
-
-        # 更新统计信息
-        self._update_statistics()
-
-        # 调试功能
-        self.debug_func()
-
-        # 简化的包完成模拟逻辑（用于demo）
-        self._simulate_packet_completion()
-
-        # 定期输出调试信息
-        if self.cycle % 1000 == 0:
-            self.logger.debug(f"周期 {self.cycle}: {self.get_active_request_count()}个活跃请求")
-
-    def _step_compute_phase(self) -> None:
-        """阶段1：组合逻辑阶段 - 所有组件计算传输决策，不修改状态"""
-        # 1. 所有IP接口计算阶段
-        for ip_interface in self.ip_interfaces.values():
-            if hasattr(ip_interface, "step_compute_phase"):
-                ip_interface.step_compute_phase(self.cycle)
-            else:
-                # 兼容性：如果没有两阶段方法，调用compute阶段
-                ip_interface._compute_phase(self.cycle)
-
-        # 2. CrossRing网络组件计算阶段
-        self._step_crossring_networks_compute_phase()
-
-    def _step_update_phase(self) -> None:
-        """阶段2：时序逻辑阶段 - 所有组件执行传输和状态更新"""
-        # 1. 所有IP接口更新阶段
-        for ip_interface in self.ip_interfaces.values():
-            if hasattr(ip_interface, "step_update_phase"):
-                ip_interface.step_update_phase(self.cycle)
-            else:
-                # 兼容性：如果没有两阶段方法，调用sync和update阶段
-                ip_interface._sync_phase(self.cycle)
-                ip_interface._update_phase(self.cycle)
-
-        # 2. CrossRing网络组件更新阶段
-        self._step_crossring_networks_update_phase()
-
-    def _step_crossring_networks_compute_phase(self) -> None:
+    def _step_topology_network_compute(self) -> None:
         """CrossRing网络组件计算阶段"""
         # 所有CrossRing节点计算阶段
         for node in self.crossring_nodes.values():
             if hasattr(node, "step_compute_phase"):
                 node.step_compute_phase(self.cycle)
 
-    def _step_crossring_networks_update_phase(self) -> None:
+    def _step_topology_network_update(self) -> None:
         """CrossRing网络组件更新阶段"""
         # 所有CrossRing节点更新阶段
         for node in self.crossring_nodes.values():
             if hasattr(node, "update_state"):
                 node.update_state(self.cycle)
 
-        # 3. 兼容性：如需保留旧接口可在此补充
-
-    def _step_crossring_networks(self) -> None:
-        """兼容性接口：使用两阶段执行模型"""
-        self._step_crossring_networks_compute_phase()
-        self._step_crossring_networks_update_phase()
+    def _step_topology_network(self) -> None:
+        """兼容性接口：单阶段执行模型"""
+        self._step_topology_network_compute()
+        self._step_topology_network_update()
 
     def _step_crossring_networks_legacy(self) -> None:
         """
@@ -1024,137 +1126,40 @@ class CrossRingModel(BaseNoCModel):
             "total_injections": sum(getattr(self, "injection_stats", {}).values()),
         }
 
-    def _update_statistics(self) -> None:
-        """更新性能统计"""
-        # 更新活跃请求数
-        current_active = self.get_active_request_count()
-        self.stats["current_active_requests"] = current_active
-        if current_active > self.stats["peak_active_requests"]:
-            self.stats["peak_active_requests"] = current_active
+    def _update_crossring_statistics(self) -> None:
+        """更新CrossRing特有的统计信息"""
+        # 更新CrossRing特有的统计
+        for node in self.crossring_nodes.values():
+            if hasattr(node, 'crossring_stats'):
+                node_stats = node.crossring_stats
+                self.crossring_stats["dimension_turns"] += node_stats.get("dimension_turns", 0)
+                self.crossring_stats["ring_transmissions"] += node_stats.get("ring_transmissions", 0)
+                self.crossring_stats["crosspoint_arbitrations"] += node_stats.get("crosspoint_arbitrations", 0)
+                
+        # 更新tag统计
+        for tag_manager in self.tag_managers.values():
+            if hasattr(tag_manager, 'stats'):
+                tag_stats = tag_manager.stats
+                self.crossring_stats["tag_upgrades"]["itag"] += sum(tag_stats.get("itag_triggers", {}).values())
+                self.crossring_stats["tag_upgrades"]["etag"] += sum(sum(upgrades.values()) for upgrades in tag_stats.get("etag_upgrades", {}).values())
 
-        # 累计重试数
-        total_read_retries = sum(ip.read_retry_num_stat for ip in self._ip_registry.values())
-        total_write_retries = sum(ip.write_retry_num_stat for ip in self._ip_registry.values())
-        self.stats["read_retries"] = total_read_retries
-        self.stats["write_retries"] = total_write_retries
-
-    def run_simulation(self, max_cycles: int = 10000, warmup_cycles: int = 1000, stats_start_cycle: int = 1000) -> Dict[str, Any]:
-        """
-        运行完整仿真
-
-        Args:
-            max_cycles: 最大仿真周期数
-            warmup_cycles: 热身周期数
-            stats_start_cycle: 统计开始周期
-
-        Returns:
-            仿真结果字典
-        """
-        self.logger.info(f"开始CrossRing仿真: max_cycles={max_cycles}, warmup={warmup_cycles}")
-
-        self.is_running = True
-        stats_enabled = False
-
-        try:
-            for cycle in range(1, max_cycles + 1):
-                self.step()
-
-                # 启用统计收集
-                if cycle == stats_start_cycle:
-                    stats_enabled = True
-                    self._reset_statistics()
-                    self.logger.info(f"周期 {cycle}: 开始收集统计数据")
-
-                # 检查仿真结束条件
-                if self._should_stop_simulation():
-                    self.logger.info(f"周期 {cycle}: 检测到仿真结束条件")
-                    break
-
-                # 定期输出进度
-                if cycle % 5000 == 0:
-                    self.logger.info(f"仿真进度: {cycle}/{max_cycles} 周期")
-
-        except KeyboardInterrupt:
-            self.logger.warning("仿真被用户中断")
-
-        except Exception as e:
-            self.logger.error(f"仿真过程中发生错误: {e}")
-            raise
-
-        finally:
-            self.is_running = False
-            self.is_finished = True
-
-        # 生成仿真结果
-        results = self._generate_simulation_results(stats_start_cycle)
-        self.logger.info(f"CrossRing仿真完成: 总周期={self.cycle}")
-
-        return results
-
-    def _should_stop_simulation(self) -> bool:
-        """检查是否应该停止仿真"""
-        # 简单的停止条件：没有活跃请求
-        active_requests = self.get_active_request_count()
-
-        # 如果连续1000个周期没有活跃请求，则停止
-        if not hasattr(self, "_idle_cycles"):
-            self._idle_cycles = 0
-
-        if active_requests == 0:
-            self._idle_cycles += 1
-        else:
-            self._idle_cycles = 0
-
-        return self._idle_cycles >= 1000
-
-    def _reset_statistics(self) -> None:
-        """重置统计计数器"""
-        for ip in self._ip_registry.values():
-            ip.read_retry_num_stat = 0
-            ip.write_retry_num_stat = 0
-            # 可以重置更多统计信息
-
-    def _generate_simulation_results(self, stats_start_cycle: int) -> Dict[str, Any]:
-        """生成仿真结果"""
-        effective_cycles = self.cycle - stats_start_cycle
-
-        # 汇总IP接口统计
-        ip_stats = {}
-        for key, ip in self._ip_registry.items():
-            ip_stats[key] = ip.get_status()
-
-        # 计算平均延迟等指标
-        total_transactions = sum(ip.rn_tracker_pointer["read"] + ip.rn_tracker_pointer["write"] for ip in self._ip_registry.values())
-
-        results = {
-            "simulation_info": {
-                "total_cycles": self.cycle,
-                "effective_cycles": effective_cycles,
-                "config": self.config.to_dict(),
-            },
-            "global_stats": self.stats.copy(),
-            "ip_interface_stats": ip_stats,
-            "network_stats": {
-                "total_transactions": total_transactions,
-                "peak_active_requests": self.stats["peak_active_requests"],
-                "total_read_retries": self.stats["read_retries"],
-                "total_write_retries": self.stats["write_retries"],
-            },
-            "memory_stats": {
-                "flit_pool": get_crossring_flit_pool_stats(),
-            },
+    def _get_config_summary(self) -> Dict[str, Any]:
+        """获取CrossRing配置摘要"""
+        return {
+            "model_type": self.__class__.__name__,
+            "topology_type": "CrossRing",
+            "num_row": self.config.num_row,
+            "num_col": self.config.num_col,
+            "num_nodes": self.config.num_nodes,
+            "ring_buffer_depth": self.config.ring_buffer_depth,
+            "routing_strategy": self.config.routing_strategy.value if hasattr(self.config.routing_strategy, 'value') else str(self.config.routing_strategy),
+            "ip_interface_count": len(self.ip_interfaces),
+            "crossring_stats": self.crossring_stats.copy(),
         }
 
-        return results
-
     def get_active_request_count(self) -> int:
-        """获取当前活跃请求总数"""
-        total = 0
-        for ip in self._ip_registry.values():
-            total += len(ip.rn_tracker["read"])
-            total += len(ip.rn_tracker["write"])
-            total += len(ip.sn_tracker)
-        return total
+        """获取当前活跃请求总数（兼容性方法）"""
+        return self.get_total_active_requests()
 
     def get_global_tracker_status(self) -> Dict[str, Any]:
         """
@@ -1180,57 +1185,75 @@ class CrossRingModel(BaseNoCModel):
 
     def print_debug_status(self) -> None:
         """打印调试状态"""
-        status = self.get_global_tracker_status()
-        print(f"\n=== CrossRing Model Cycle {self.cycle} Debug Status ===")
-        print(f"活跃请求总数: {self.get_active_request_count()}")
-        print(f"统计信息: {self.stats}")
+        # 调用base类的调试状态打印
+        super().print_debug_status()
+        
+        # 打印CrossRing特有的调试信息
+        print(f"\nCrossRing特有统计:")
+        print(f"  维度转换: {self.crossring_stats['dimension_turns']}")
+        print(f"  环形传输: {self.crossring_stats['ring_transmissions']}")
+        print(f"  交叉点仲裁: {self.crossring_stats['crosspoint_arbitrations']}")
+        print(f"  Tag升级: I-Tag={self.crossring_stats['tag_upgrades']['itag']}, E-Tag={self.crossring_stats['tag_upgrades']['etag']}")
+        
+        if hasattr(self, 'get_global_tracker_status'):
+            status = self.get_global_tracker_status()
+            print("\nIP接口状态:")
+            for ip_key, ip_status in status.items():
+                print(
+                    f"  {ip_key}: RN({ip_status['rn_read_active']}R+{ip_status['rn_write_active']}W), " + f"SN({ip_status['sn_active']}), 重试({ip_status['read_retries']}R+{ip_status['write_retries']}W)"
+                )
 
-        print("\nIP接口状态:")
-        for ip_key, ip_status in status.items():
-            print(
-                f"  {ip_key}: RN({ip_status['rn_read_active']}R+{ip_status['rn_write_active']}W), "
-                + f"SN({ip_status['sn_active']}), 重试({ip_status['read_retries']}R+{ip_status['write_retries']}W)"
-            )
-
-    def inject_test_traffic(self, source: NodeId, destination: NodeId, req_type: str, count: int = 1, burst_length: int = 4, ip_type: str = None) -> List[str]:
+    def _find_ip_interface_for_request(self, node_id: NodeId, req_type: str, ip_type: str = None) -> Optional[CrossRingIPInterface]:
         """
-        注入测试流量
+        为请求查找合适的IP接口（CrossRing特定版本）
 
         Args:
-            source: 源节点
-            destination: 目标节点
-            req_type: 请求类型
-            count: 请求数量
-            burst_length: 突发长度
-            ip_type: IP类型 (可选，如果未指定则使用第一个找到的IP)
+            node_id: 节点ID
+            req_type: 请求类型 ("read" | "write")
+            ip_type: IP类型 (可选，格式如 "gdma_0", "ddr_1")
 
         Returns:
-            生成的packet_id列表
+            找到的IP接口，如果未找到则返回None
         """
-        packet_ids = []
-
-        # 找到源节点对应的IP接口
-        ip_interface = self._find_ip_interface_for_request(source, req_type, ip_type)
-        
-        if not ip_interface:
-            if ip_type:
-                self.logger.warning(f"源节点 {source} 没有找到对应的IP接口 (类型: {ip_type})")
+        # 首先尝试父类的通用方法
+        ip_interface = super()._find_ip_interface_for_request(node_id, req_type, ip_type)
+        if ip_interface:
+            return ip_interface
+            
+        # CrossRing特定的查找逻辑
+        if ip_type:
+            # 如果指定了IP类型，则精确匹配
+            # 格式转换：gdma_0 -> gdma_0_nodeX
+            target_key = f"{ip_type}_node{node_id}"
+            if target_key in self._ip_registry:
+                return self._ip_registry[target_key]
             else:
-                self.logger.warning(f"源节点 {source} 没有找到对应的IP接口")
-            return packet_ids
+                # 如果找不到精确匹配，尝试寻找该类型的任何通道
+                base_type = ip_type.split('_')[0]  # 从 gdma_0 提取 gdma
+                matching_ips = [ip for key, ip in self._ip_registry.items() 
+                               if ip.node_id == node_id and ip.ip_type.startswith(base_type)]
+                if matching_ips:
+                    return matching_ips[0]
+        else:
+            # 如果未指定IP类型，则根据请求类型选择合适的IP
+            matching_ips = [ip for key, ip in self._ip_registry.items() if ip.node_id == node_id]
 
-        for i in range(count):
-            # TODO: packet_id 不需要这么复杂，就用数字就可以了，但是要保证唯一性
-            packet_id = f"test_{source}_{destination}_{req_type}_{self.cycle}_{i}"
-            success = ip_interface.enqueue_request(source=source, destination=destination, req_type=req_type, burst_length=burst_length, packet_id=packet_id)
+            # 优先选择能发起该类型请求的IP
+            if req_type == "read":
+                # 对于读请求，优先选择DMA类型的IP
+                preferred_ips = [ip for ip in matching_ips if ip.ip_type.startswith(("gdma", "sdma", "cdma"))]
+                if preferred_ips:
+                    return preferred_ips[0]
+            elif req_type == "write":
+                # 对于写请求，优先选择DMA类型的IP
+                preferred_ips = [ip for ip in matching_ips if ip.ip_type.startswith(("gdma", "sdma", "cdma"))]
+                if preferred_ips:
+                    return preferred_ips[0]
 
-            if success:
-                packet_ids.append(packet_id)
-                self.logger.debug(f"注入测试请求: {packet_id}")
-            else:
-                self.logger.warning(f"测试请求注入失败: {packet_id}")
+            if matching_ips:
+                return matching_ips[0]
 
-        return packet_ids
+        return None
 
     def _find_ip_interface_for_request(self, node_id: NodeId, req_type: str, ip_type: str = None) -> Optional[CrossRingIPInterface]:
         """
@@ -1239,35 +1262,44 @@ class CrossRingModel(BaseNoCModel):
         Args:
             node_id: 节点ID
             req_type: 请求类型 ("read" | "write")
-            ip_type: IP类型 (可选)
+            ip_type: IP类型 (可选，格式如 "gdma_0", "ddr_1")
 
         Returns:
             找到的IP接口，如果未找到则返回None
         """
         if ip_type:
             # 如果指定了IP类型，则精确匹配
-            matching_ips = [ip for key, ip in self._ip_registry.items() if ip.node_id == node_id and ip.ip_type == ip_type]
+            # 格式转换：gdma_0 -> gdma_0_nodeX
+            target_key = f"{ip_type}_node{node_id}"
+            if target_key in self._ip_registry:
+                return self._ip_registry[target_key]
+            else:
+                # 如果找不到精确匹配，尝试寻找该类型的任何通道
+                base_type = ip_type.split('_')[0]  # 从 gdma_0 提取 gdma
+                matching_ips = [ip for key, ip in self._ip_registry.items() 
+                               if ip.node_id == node_id and ip.ip_type.startswith(base_type)]
+                if matching_ips:
+                    return matching_ips[0]
         else:
             # 如果未指定IP类型，则根据请求类型选择合适的IP
             matching_ips = [ip for key, ip in self._ip_registry.items() if ip.node_id == node_id]
-            
+
             # 优先选择能发起该类型请求的IP
             if req_type == "read":
                 # 对于读请求，优先选择DMA类型的IP
-                preferred_ips = [ip for ip in matching_ips if ip.ip_type in ["gdma", "sdma", "cdma"]]
+                preferred_ips = [ip for ip in matching_ips if ip.ip_type.startswith(("gdma", "sdma", "cdma"))]
                 if preferred_ips:
                     matching_ips = preferred_ips
             elif req_type == "write":
                 # 对于写请求，优先选择DMA类型的IP
-                preferred_ips = [ip for ip in matching_ips if ip.ip_type in ["gdma", "sdma", "cdma"]]
+                preferred_ips = [ip for ip in matching_ips if ip.ip_type.startswith(("gdma", "sdma", "cdma"))]
                 if preferred_ips:
                     matching_ips = preferred_ips
 
-        if not matching_ips:
-            return None
+            if matching_ips:
+                return matching_ips[0]
 
-        # 返回第一个匹配的IP接口
-        return matching_ips[0]
+        return None
 
     def _find_ip_interface_for_response(self, node_id: NodeId, req_type: str, ip_type: str = None) -> Optional[CrossRingIPInterface]:
         """
@@ -1287,7 +1319,7 @@ class CrossRingModel(BaseNoCModel):
         else:
             # 如果未指定IP类型，则根据请求类型选择合适的IP
             matching_ips = [ip for key, ip in self._ip_registry.items() if ip.node_id == node_id]
-            
+
             # 对于响应，优先选择能处理该类型请求的SN端IP
             if req_type in ["read", "write"]:
                 # 优先选择存储类型的IP (DDR, L2M)
@@ -1301,276 +1333,410 @@ class CrossRingModel(BaseNoCModel):
         # 返回第一个匹配的IP接口
         return matching_ips[0]
 
-    def create_demo_traffic(self, pattern: str = "basic") -> List[Tuple]:
-        """
-        创建演示流量
-        
-        Args:
-            pattern: 流量模式 ("basic", "stress", "mixed")
-            
-        Returns:
-            流量列表，每个元素为 (源节点, 目标节点, 操作类型, 突发长度, IP类型)
-        """
-        traffic = []
-        
-        # 获取IP节点配置
-        gdma_nodes = self.config.gdma_send_position_list
-        ddr_nodes = self.config.ddr_send_position_list
-        l2m_nodes = self.config.l2m_send_position_list
-        
-        if pattern == "basic":
-            # 基础测试：GDMA读写DDR和L2M
-            for gdma_node in gdma_nodes:
-                for ddr_node in ddr_nodes:
-                    traffic.append((gdma_node, ddr_node, "read", 4, "gdma"))
-                    traffic.append((gdma_node, ddr_node, "write", 4, "gdma"))
-                
-                for l2m_node in l2m_nodes:
-                    traffic.append((gdma_node, l2m_node, "read", 4, "gdma"))
-                    traffic.append((gdma_node, l2m_node, "write", 4, "gdma"))
-        
-        elif pattern == "stress":
-            # 压力测试：更多的请求和更大的突发
-            for gdma_node in gdma_nodes:
-                for ddr_node in ddr_nodes:
-                    for _ in range(3):  # 多次请求
-                        traffic.append((gdma_node, ddr_node, "read", 8, "gdma"))
-                        traffic.append((gdma_node, ddr_node, "write", 8, "gdma"))
-        
-        elif pattern == "mixed":
-            # 混合测试：不同的IP类型和操作
-            # GDMA访问
-            for gdma_node in gdma_nodes:
-                for target in ddr_nodes + l2m_nodes:
-                    traffic.append((gdma_node, target, "read", 4, "gdma"))
-                    traffic.append((gdma_node, target, "write", 4, "gdma"))
-            
-            # SDMA访问
-            if self.config.sdma_send_position_list:
-                for sdma_node in self.config.sdma_send_position_list:
-                    for target in ddr_nodes:
-                        traffic.append((sdma_node, target, "read", 4, "sdma"))
-            
-            # CDMA访问
-            if self.config.cdma_send_position_list:
-                for cdma_node in self.config.cdma_send_position_list:
-                    for target in l2m_nodes:
-                        traffic.append((cdma_node, target, "write", 4, "cdma"))
-        
-        self.logger.info(f"生成 {pattern} 模式流量: {len(traffic)} 个请求")
-        return traffic
 
-    def inject_demo_traffic(self, traffic_list: List[Tuple]) -> int:
+    def inject_from_traffic_file_legacy(self, traffic_file_path: str, max_requests: int = None, cycle_accurate: bool = False) -> int:
         """
-        注入演示流量
-        
-        Args:
-            traffic_list: 流量列表
-            
-        Returns:
-            成功注入的请求数量
-        """
-        injected_count = 0
-        
-        for src, dst, op_type, burst, ip_type in traffic_list:
-            # 确保节点在有效范围内
-            if src < self.config.num_nodes and dst < self.config.num_nodes:
-                packet_ids = self.inject_test_traffic(
-                    source=src,
-                    destination=dst,
-                    req_type=op_type,
-                    count=1,
-                    burst_length=burst,
-                    ip_type=ip_type
-                )
-                
-                if packet_ids:
-                    injected_count += len(packet_ids)
-                    self.logger.debug(f"注入请求: {src}({ip_type}) -> {dst}, {op_type}, burst={burst}")
-        
-        self.logger.info(f"成功注入 {injected_count} 个请求")
-        return injected_count
+        从traffic文件注入流量（增强版）
 
-    def inject_from_traffic_file(self, traffic_file_path: str, max_requests: int = None) -> int:
-        """
-        从traffic文件注入流量
-        
         Args:
             traffic_file_path: traffic文件路径
             max_requests: 最大请求数（可选）
-            
+            cycle_accurate: 是否按照cycle精确注入（如果False则立即注入所有请求）
+
         Returns:
             成功注入的请求数量
         """
         injected_count = 0
-        
+        failed_count = 0
+        pending_requests = []  # 用于cycle_accurate模式
+
         try:
-            with open(traffic_file_path, 'r') as f:
+            with open(traffic_file_path, "r") as f:
                 for line_num, line in enumerate(f, 1):
                     line = line.strip()
-                    if not line or line.startswith('#'):
+                    if not line or line.startswith("#"):
                         continue
+
+                    # 支持多种分隔符格式
+                    if ',' in line:
+                        parts = line.split(',')
+                    else:
+                        parts = line.split()
                     
-                    # 解析traffic文件格式：cycle src src_type dst dst_type op burst
-                    parts = line.split()
                     if len(parts) < 7:
+                        self.logger.warning(f"第{line_num}行格式不正确，跳过: {line}")
                         continue
-                    
-                    cycle, src, src_type, dst, dst_type, op, burst = parts[:7]
-                    
-                    # 转换类型
-                    src = int(src)
-                    dst = int(dst)
-                    burst = int(burst)
-                    
-                    # 确保节点在有效范围内
-                    if src < self.config.num_nodes and dst < self.config.num_nodes:
-                        packet_ids = self.inject_test_traffic(
-                            source=src,
-                            destination=dst,
-                            req_type=op.lower(),
-                            count=1,
-                            burst_length=burst,
-                            ip_type=src_type
-                        )
+
+                    try:
+                        cycle, src, src_type, dst, dst_type, op, burst = parts[:7]
                         
-                        if packet_ids:
-                            injected_count += len(packet_ids)
+                        # 转换类型
+                        injection_cycle = int(cycle)
+                        src = int(src)
+                        dst = int(dst)
+                        burst = int(burst)
+                        
+                        # 验证节点范围
+                        if src >= self.config.num_nodes or dst >= self.config.num_nodes:
+                            self.logger.warning(f"第{line_num}行节点范围无效（src={src}, dst={dst}），跳过")
+                            failed_count += 1
+                            continue
+                        
+                        # 验证操作类型
+                        if op.upper() not in ['R', 'W', 'READ', 'WRITE']:
+                            self.logger.warning(f"第{line_num}行操作类型无效（{op}），跳过")
+                            failed_count += 1
+                            continue
+                        
+                        # 标准化操作类型
+                        op_type = "read" if op.upper() in ['R', 'READ'] else "write"
+                        
+                        if cycle_accurate:
+                            # 存储请求以便后续按cycle注入
+                            pending_requests.append({
+                                'cycle': injection_cycle,
+                                'src': src,
+                                'dst': dst,
+                                'op_type': op_type,
+                                'burst': burst,
+                                'ip_type': src_type,
+                                'line_num': line_num
+                            })
+                        else:
+                            # 立即注入
+                            packet_ids = self.inject_test_traffic(
+                                source=src, 
+                                destination=dst, 
+                                req_type=op_type, 
+                                count=1, 
+                                burst_length=burst, 
+                                ip_type=src_type
+                            )
+                            
+                            if packet_ids:
+                                injected_count += len(packet_ids)
+                                self.logger.debug(f"注入请求: {src}({src_type}) -> {dst}({dst_type}), {op_type}, burst={burst}")
+                            else:
+                                failed_count += 1
                     
+                    except (ValueError, IndexError) as e:
+                        self.logger.warning(f"第{line_num}行解析失败: {e}")
+                        failed_count += 1
+                        continue
+
                     # 检查是否达到最大请求数
                     if max_requests and injected_count >= max_requests:
+                        self.logger.info(f"达到最大请求数限制: {max_requests}")
                         break
-                        
+
         except FileNotFoundError:
             self.logger.error(f"Traffic文件不存在: {traffic_file_path}")
+            return 0
         except Exception as e:
             self.logger.error(f"读取traffic文件失败: {e}")
+            return 0
+
+        # 如果是cycle_accurate模式，存储pending_requests供后续使用
+        if cycle_accurate:
+            self.pending_file_requests = sorted(pending_requests, key=lambda x: x['cycle'])
+            self.logger.info(f"加载了 {len(self.pending_file_requests)} 个待注入请求")
+            return len(self.pending_file_requests)
+        else:
+            self.logger.info(f"从文件注入 {injected_count} 个请求，失败 {failed_count} 个")
+            return injected_count
+
+    def _inject_pending_file_requests(self) -> int:
+        """
+        注入当前周期应该注入的文件请求（用于cycle_accurate模式）
         
-        self.logger.info(f"从文件注入 {injected_count} 个请求")
+        Returns:
+            本周期注入的请求数量
+        """
+        if not hasattr(self, 'pending_file_requests') or not self.pending_file_requests:
+            return 0
+        
+        injected_count = 0
+        
+        # 查找当前周期应该注入的请求
+        requests_to_inject = []
+        remaining_requests = []
+        
+        for request in self.pending_file_requests:
+            if request['cycle'] <= self.cycle:
+                requests_to_inject.append(request)
+            else:
+                remaining_requests.append(request)
+        
+        # 更新pending列表
+        self.pending_file_requests = remaining_requests
+        
+        # 注入当前周期的请求
+        for request in requests_to_inject:
+            packet_ids = self.inject_test_traffic(
+                source=request['src'],
+                destination=request['dst'],
+                req_type=request['op_type'],
+                count=1,
+                burst_length=request['burst'],
+                ip_type=request['src_type']  # 使用src_type作为ip_type
+            )
+            
+            if packet_ids:
+                injected_count += len(packet_ids)
+                self.logger.debug(f"周期{self.cycle}注入请求: {request['src']}({request['src_type']}) -> {request['dst']}, {request['op_type']}, burst={request['burst']}")
+        
         return injected_count
+
+    def run_file_simulation(self, traffic_file_path: str, max_cycles: int = 10000, warmup_cycles: int = 1000, 
+                           stats_start_cycle: int = 1000, cycle_accurate: bool = False, 
+                           max_requests: int = None) -> Dict[str, Any]:
+        """
+        运行基于文件的仿真
+        
+        Args:
+            traffic_file_path: 流量文件路径
+            max_cycles: 最大仿真周期
+            warmup_cycles: 热身周期
+            stats_start_cycle: 统计开始周期
+            cycle_accurate: 是否按照cycle精确注入
+            max_requests: 最大请求数限制
+            
+        Returns:
+            包含仿真结果和分析的字典
+        """
+        self.logger.info(f"开始基于文件的仿真: {traffic_file_path}")
+        
+        # 加载流量文件
+        if cycle_accurate:
+            loaded_count = self.inject_from_traffic_file(
+                traffic_file_path, 
+                max_requests=max_requests, 
+                cycle_accurate=True
+            )
+        else:
+            loaded_count = self.inject_from_traffic_file(
+                traffic_file_path, 
+                max_requests=max_requests, 
+                cycle_accurate=False
+            )
+        
+        if loaded_count == 0:
+            self.logger.warning("没有成功加载任何请求")
+            return {"success": False, "message": "No requests loaded from file"}
+        
+        # 如果是cycle_accurate模式，需要在仿真过程中逐步注入
+        if cycle_accurate:
+            # 修改仿真循环以支持cycle_accurate注入
+            total_injected = self._run_simulation_with_cycle_accurate_injection(
+                max_cycles, warmup_cycles, stats_start_cycle
+            )
+            
+            # 生成仿真结果
+            results = self._generate_simulation_results(stats_start_cycle)
+            analysis = self.analyze_simulation_results(results)
+            report = self.generate_simulation_report(results, analysis)
+            
+            return {
+                "success": True,
+                "traffic_file": traffic_file_path,
+                "loaded_requests": loaded_count,
+                "injected_requests": total_injected,
+                "simulation_results": results,
+                "analysis": analysis,
+                "report": report,
+                "cycle_accurate": True
+            }
+        else:
+            # 运行标准仿真
+            total_injected = loaded_count
+            results = self.run_simulation(
+                max_cycles=max_cycles, 
+                warmup_cycles=warmup_cycles, 
+                stats_start_cycle=stats_start_cycle
+            )
+            
+            # 分析结果
+            analysis = self.analyze_simulation_results(results)
+            report = self.generate_simulation_report(results, analysis)
+            
+            return {
+                "success": True,
+                "traffic_file": traffic_file_path,
+                "loaded_requests": loaded_count,
+                "injected_requests": total_injected,
+                "simulation_results": results,
+                "analysis": analysis,
+                "report": report
+            }
+
+    def _run_simulation_with_cycle_accurate_injection(self, max_cycles: int, warmup_cycles: int, stats_start_cycle: int) -> int:
+        """
+        运行支持cycle_accurate注入的仿真
+        
+        Args:
+            max_cycles: 最大仿真周期
+            warmup_cycles: 热身周期
+            stats_start_cycle: 统计开始周期
+            
+        Returns:
+            总共注入的请求数
+        """
+        self.logger.info(f"开始cycle_accurate仿真: max_cycles={max_cycles}")
+        
+        self.is_running = True
+        stats_enabled = False
+        total_injected = 0
+        
+        try:
+            for cycle in range(1, max_cycles + 1):
+                # 在每个周期开始时注入应该注入的请求
+                injected_this_cycle = self._inject_pending_file_requests()
+                total_injected += injected_this_cycle
+                
+                # 执行一个仿真周期
+                self.step()
+                
+                # 启用统计收集
+                if cycle == stats_start_cycle:
+                    stats_enabled = True
+                    self._reset_statistics()
+                    self.logger.info(f"周期 {cycle}: 开始收集统计数据")
+                
+                # 检查仿真结束条件
+                if self._should_stop_simulation():
+                    self.logger.info(f"周期 {cycle}: 检测到仿真结束条件")
+                    break
+                
+                # 检查是否还有待注入的请求
+                if not hasattr(self, 'pending_file_requests') or not self.pending_file_requests:
+                    if self.get_active_request_count() == 0:
+                        self.logger.info(f"周期 {cycle}: 所有请求已处理完毕")
+                        break
+                
+                # 定期输出进度
+                if cycle % 5000 == 0:
+                    remaining_requests = len(getattr(self, 'pending_file_requests', []))
+                    self.logger.info(f"仿真进度: {cycle}/{max_cycles} 周期, 剩余请求: {remaining_requests}")
+                    
+        except KeyboardInterrupt:
+            self.logger.warning("仿真被用户中断")
+        except Exception as e:
+            self.logger.error(f"仿真过程中发生错误: {e}")
+            raise
+        finally:
+            self.is_running = False
+            self.is_finished = True
+            
+        self.logger.info(f"Cycle_accurate仿真完成: 总周期={self.cycle}, 总注入={total_injected}")
+        return total_injected
 
     def analyze_simulation_results(self, results: Dict[str, Any]) -> Dict[str, Any]:
         """
         分析仿真结果
-        
+
         Args:
             results: 仿真结果
-            
+
         Returns:
             分析结果
         """
         analysis = {}
-        
+
         # 基础指标
-        sim_info = results.get('simulation_info', {})
-        network_stats = results.get('network_stats', {})
-        
-        analysis['basic_metrics'] = {
-            'total_cycles': sim_info.get('total_cycles', 0),
-            'effective_cycles': sim_info.get('effective_cycles', 0),
-            'peak_active_requests': network_stats.get('peak_active_requests', 0),
-            'total_read_retries': network_stats.get('total_read_retries', 0),
-            'total_write_retries': network_stats.get('total_write_retries', 0),
-            'total_transactions': network_stats.get('total_transactions', 0)
+        sim_info = results.get("simulation_info", {})
+        network_stats = results.get("network_stats", {})
+
+        analysis["basic_metrics"] = {
+            "total_cycles": sim_info.get("total_cycles", 0),
+            "effective_cycles": sim_info.get("effective_cycles", 0),
+            "peak_active_requests": network_stats.get("peak_active_requests", 0),
+            "total_read_retries": network_stats.get("total_read_retries", 0),
+            "total_write_retries": network_stats.get("total_write_retries", 0),
+            "total_transactions": network_stats.get("total_transactions", 0),
         }
-        
+
         # 计算吞吐量
-        effective_cycles = analysis['basic_metrics']['effective_cycles']
-        total_transactions = analysis['basic_metrics']['total_transactions']
-        
+        effective_cycles = analysis["basic_metrics"]["effective_cycles"]
+        total_transactions = analysis["basic_metrics"]["total_transactions"]
+
         if effective_cycles > 0 and total_transactions > 0:
-            analysis['basic_metrics']['throughput'] = total_transactions / effective_cycles
-            analysis['basic_metrics']['bandwidth_mbps'] = (total_transactions * 512) / (effective_cycles * 1e6)  # 假设512位/事务
+            analysis["basic_metrics"]["throughput"] = total_transactions / effective_cycles
+            analysis["basic_metrics"]["bandwidth_mbps"] = (total_transactions * 512) / (effective_cycles * 1e6)  # 假设512位/事务
         else:
-            analysis['basic_metrics']['throughput'] = 0.0
-            analysis['basic_metrics']['bandwidth_mbps'] = 0.0
-        
+            analysis["basic_metrics"]["throughput"] = 0.0
+            analysis["basic_metrics"]["bandwidth_mbps"] = 0.0
+
         # IP接口分析
-        ip_stats = results.get('ip_interface_stats', {})
-        analysis['ip_summary'] = self._analyze_ip_interfaces(ip_stats)
-        
+        ip_stats = results.get("ip_interface_stats", {})
+        analysis["ip_summary"] = self._analyze_ip_interfaces(ip_stats)
+
         # 拥塞分析
-        analysis['congestion_summary'] = self._analyze_congestion()
-        
+        analysis["congestion_summary"] = self._analyze_congestion()
+
         return analysis
 
     def _analyze_ip_interfaces(self, ip_stats: Dict[str, Any]) -> Dict[str, Any]:
         """分析IP接口统计"""
-        summary = {
-            'total_interfaces': len(ip_stats),
-            'by_type': {},
-            'total_read_transactions': 0,
-            'total_write_transactions': 0,
-            'total_retries': 0
-        }
-        
+        summary = {"total_interfaces": len(ip_stats), "by_type": {}, "total_read_transactions": 0, "total_write_transactions": 0, "total_retries": 0}
+
         for ip_key, stats in ip_stats.items():
-            ip_type = ip_key.split('_')[0]
-            
-            if ip_type not in summary['by_type']:
-                summary['by_type'][ip_type] = {
-                    'count': 0,
-                    'read_transactions': 0,
-                    'write_transactions': 0,
-                    'retries': 0
-                }
-            
-            summary['by_type'][ip_type]['count'] += 1
-            summary['by_type'][ip_type]['read_transactions'] += stats.get('rn_read_active', 0)
-            summary['by_type'][ip_type]['write_transactions'] += stats.get('rn_write_active', 0)
-            summary['by_type'][ip_type]['retries'] += stats.get('read_retries', 0) + stats.get('write_retries', 0)
-            
-            summary['total_read_transactions'] += stats.get('rn_read_active', 0)
-            summary['total_write_transactions'] += stats.get('rn_write_active', 0)
-            summary['total_retries'] += stats.get('read_retries', 0) + stats.get('write_retries', 0)
-        
+            ip_type = ip_key.split("_")[0]
+
+            if ip_type not in summary["by_type"]:
+                summary["by_type"][ip_type] = {"count": 0, "read_transactions": 0, "write_transactions": 0, "retries": 0}
+
+            summary["by_type"][ip_type]["count"] += 1
+            summary["by_type"][ip_type]["read_transactions"] += stats.get("rn_read_active", 0)
+            summary["by_type"][ip_type]["write_transactions"] += stats.get("rn_write_active", 0)
+            summary["by_type"][ip_type]["retries"] += stats.get("read_retries", 0) + stats.get("write_retries", 0)
+
+            summary["total_read_transactions"] += stats.get("rn_read_active", 0)
+            summary["total_write_transactions"] += stats.get("rn_write_active", 0)
+            summary["total_retries"] += stats.get("read_retries", 0) + stats.get("write_retries", 0)
+
         return summary
 
     def _analyze_congestion(self) -> Dict[str, Any]:
         """分析拥塞情况"""
-        congestion_summary = {
-            'congestion_detected': False,
-            'total_congestion_events': 0,
-            'congestion_rate': 0.0
-        }
-        
-        if hasattr(self, 'get_congestion_statistics'):
+        congestion_summary = {"congestion_detected": False, "total_congestion_events": 0, "congestion_rate": 0.0}
+
+        if hasattr(self, "get_congestion_statistics"):
             congestion_stats = self.get_congestion_statistics()
-            total_congestion = congestion_stats.get('total_congestion_events', 0)
-            total_injections = congestion_stats.get('total_injections', 1)
-            
-            congestion_summary['congestion_detected'] = total_congestion > 0
-            congestion_summary['total_congestion_events'] = total_congestion
-            congestion_summary['congestion_rate'] = total_congestion / total_injections if total_injections > 0 else 0.0
-        
+            total_congestion = congestion_stats.get("total_congestion_events", 0)
+            total_injections = congestion_stats.get("total_injections", 1)
+
+            congestion_summary["congestion_detected"] = total_congestion > 0
+            congestion_summary["total_congestion_events"] = total_congestion
+            congestion_summary["congestion_rate"] = total_congestion / total_injections if total_injections > 0 else 0.0
+
         return congestion_summary
 
     def generate_simulation_report(self, results: Dict[str, Any], analysis: Dict[str, Any] = None) -> str:
         """
         生成仿真报告
-        
+
         Args:
             results: 仿真结果
             analysis: 分析结果（可选，如果未提供则自动分析）
-            
+
         Returns:
             报告文本
         """
         if analysis is None:
             analysis = self.analyze_simulation_results(results)
-        
+
         report = []
         report.append("=" * 60)
         report.append("CrossRing NoC 仿真报告")
         report.append("=" * 60)
-        
+
         # 拓扑信息
         report.append(f"拓扑配置: {self.config.num_row}x{self.config.num_col}")
         report.append(f"总节点数: {self.config.num_nodes}")
         report.append("")
-        
+
         # 基础指标
-        basic = analysis.get('basic_metrics', {})
+        basic = analysis.get("basic_metrics", {})
         report.append("性能指标:")
         report.append(f"  仿真周期: {basic.get('total_cycles', 0):,}")
         report.append(f"  有效周期: {basic.get('effective_cycles', 0):,}")
@@ -1579,121 +1745,37 @@ class CrossRingModel(BaseNoCModel):
         report.append(f"  吞吐量: {basic.get('throughput', 0):.4f} 事务/周期")
         report.append(f"  带宽: {basic.get('bandwidth_mbps', 0):.2f} Mbps")
         report.append("")
-        
+
         # 重试统计
         report.append("重试统计:")
         report.append(f"  读重试: {basic.get('total_read_retries', 0)}")
         report.append(f"  写重试: {basic.get('total_write_retries', 0)}")
         report.append("")
-        
+
         # IP接口统计
-        ip_summary = analysis.get('ip_summary', {})
+        ip_summary = analysis.get("ip_summary", {})
         report.append("IP接口统计:")
         report.append(f"  总接口数: {ip_summary.get('total_interfaces', 0)}")
-        
-        by_type = ip_summary.get('by_type', {})
+
+        by_type = ip_summary.get("by_type", {})
         for ip_type, stats in by_type.items():
-            report.append(f"  {ip_type}: {stats['count']}个接口, "
-                         f"读事务={stats['read_transactions']}, "
-                         f"写事务={stats['write_transactions']}, "
-                         f"重试={stats['retries']}")
-        
+            report.append(f"  {ip_type}: {stats['count']}个接口, " f"读事务={stats['read_transactions']}, " f"写事务={stats['write_transactions']}, " f"重试={stats['retries']}")
+
         report.append("")
-        
+
         # 拥塞分析
-        congestion = analysis.get('congestion_summary', {})
-        if congestion.get('congestion_detected', False):
+        congestion = analysis.get("congestion_summary", {})
+        if congestion.get("congestion_detected", False):
             report.append("拥塞分析:")
             report.append(f"  拥塞事件: {congestion.get('total_congestion_events', 0)}")
             report.append(f"  拥塞率: {congestion.get('congestion_rate', 0):.2%}")
         else:
             report.append("拥塞分析: 未检测到显著拥塞")
-        
+
         report.append("")
         report.append("=" * 60)
-        
+
         return "\n".join(report)
-
-    def run_demo_simulation(self, 
-                           traffic_pattern: str = "basic",
-                           max_cycles: int = 1000,
-                           warmup_cycles: int = 100,
-                           stats_start_cycle: int = 100) -> Dict[str, Any]:
-        """
-        运行演示仿真
-        
-        Args:
-            traffic_pattern: 流量模式
-            max_cycles: 最大仿真周期
-            warmup_cycles: 热身周期
-            stats_start_cycle: 统计开始周期
-            
-        Returns:
-            包含仿真结果和分析的字典
-        """
-        self.logger.info(f"开始演示仿真: {traffic_pattern} 模式")
-        
-        # 生成和注入流量
-        traffic = self.create_demo_traffic(traffic_pattern)
-        injected_count = self.inject_demo_traffic(traffic)
-        
-        if injected_count == 0:
-            self.logger.warning("没有成功注入任何请求")
-            return {"success": False, "message": "No requests injected"}
-        
-        # 运行仿真
-        results = self.run_simulation(
-            max_cycles=max_cycles,
-            warmup_cycles=warmup_cycles,
-            stats_start_cycle=stats_start_cycle
-        )
-        
-        # 分析结果
-        analysis = self.analyze_simulation_results(results)
-        
-        # 生成报告
-        report = self.generate_simulation_report(results, analysis)
-        
-        return {
-            "success": True,
-            "injected_requests": injected_count,
-            "simulation_results": results,
-            "analysis": analysis,
-            "report": report
-        }
-
-    def get_model_summary(self) -> Dict[str, Any]:
-        """获取模型摘要信息"""
-        return {
-            "config_name": self.config.config_name,
-            "topology": f"{self.config.num_row}x{self.config.num_col}",
-            "total_nodes": self.config.num_nodes,
-            "ip_interfaces": len(self.ip_interfaces),
-            "current_cycle": self.cycle,
-            "active_requests": self.get_active_request_count(),
-            "simulation_status": {
-                "is_running": self.is_running,
-                "is_finished": self.is_finished,
-            },
-            "networks_ready": len(self.crossring_nodes) > 0,
-        }
-
-    def cleanup(self) -> None:
-        """清理资源"""
-        self.logger.info("开始清理CrossRing模型资源")
-
-        # 清理IP接口
-        for ip in self.ip_interfaces.values():
-            # 这里可以添加IP接口的清理逻辑
-            pass
-
-        # 清理网络组件
-        self.crossring_nodes.clear()
-
-        # 清理统计信息
-        self.stats.clear()
-
-        self.logger.info("CrossRing模型资源清理完成")
 
     def __del__(self):
         """析构函数"""
@@ -1705,14 +1787,79 @@ class CrossRingModel(BaseNoCModel):
         """总活跃请求数（属性访问）"""
         return self.get_active_request_count()
 
+    # ========== 实现BaseNoCModel抽象方法 ==========
+
+    def _get_topology_info(self) -> Dict[str, Any]:
+        """获取拓扑信息（拓扑特定）"""
+        return {
+            "topology_type": "CrossRing",
+            "num_row": self.config.num_row,
+            "num_col": self.config.num_col,
+            "total_nodes": self.config.num_nodes,
+            "ring_directions": ["TL", "TR", "TU", "TD"],
+            "channels": ["req", "rsp", "data"],
+            "routing_strategy": self.config.routing_strategy.value if hasattr(self.config.routing_strategy, 'value') else str(self.config.routing_strategy),
+            "ring_buffer_depth": self.config.ring_buffer_depth,
+        }
+
+    def _calculate_path(self, source: NodeId, destination: NodeId) -> List[NodeId]:
+        """计算路径（拓扑特定）"""
+        if source == destination:
+            return [source]
+            
+        # 计算CrossRing路径
+        src_x, src_y = self._get_node_coordinates(source)
+        dst_x, dst_y = self._get_node_coordinates(destination)
+        
+        path = [source]
+        current_x, current_y = src_x, src_y
+        
+        # 根据路由策略计算路径
+        if self.config.routing_strategy == RoutingStrategy.XY:
+            # XY路由：先水平后垂直
+            # 水平移动
+            while current_x != dst_x:
+                if current_x < dst_x:
+                    current_x += 1
+                else:
+                    current_x -= 1
+                node_id = current_y * self.config.num_col + current_x
+                path.append(node_id)
+            
+            # 垂直移动
+            while current_y != dst_y:
+                if current_y < dst_y:
+                    current_y += 1
+                else:
+                    current_y -= 1
+                node_id = current_y * self.config.num_col + current_x
+                path.append(node_id)
+                
+        elif self.config.routing_strategy == RoutingStrategy.YX:
+            # YX路由：先垂直后水平
+            # 垂直移动
+            while current_y != dst_y:
+                if current_y < dst_y:
+                    current_y += 1
+                else:
+                    current_y -= 1
+                node_id = current_y * self.config.num_col + current_x
+                path.append(node_id)
+            
+            # 水平移动
+            while current_x != dst_x:
+                if current_x < dst_x:
+                    current_x += 1
+                else:
+                    current_x -= 1
+                node_id = current_y * self.config.num_col + current_x
+                path.append(node_id)
+        
+        return path
+
     def __repr__(self) -> str:
         """字符串表示"""
-        return (
-            f"CrossRingModel({self.config.config_name}, "
-            f"{self.config.num_row}x{self.config.num_col}, "
-            f"cycle={self.cycle}, "
-            f"active_requests={self.get_active_request_count()})"
-        )
+        return f"CrossRingModel({self.config.config_name}, " f"{self.config.num_row}x{self.config.num_col}, " f"cycle={self.cycle}, " f"active_requests={self.get_active_request_count()})"
 
     # ========== 统一接口方法（用于兼容性） ==========
 
@@ -1936,10 +2083,6 @@ class CrossRingModel(BaseNoCModel):
 
     # ========== 实现BaseNoCModel抽象方法 ==========
 
-    def _setup_topology_network(self) -> None:
-        """设置拓扑网络（拓扑特定）"""
-        # CrossRing拓扑已在__init__中设置
-        pass
 
     def _step_topology_network(self) -> None:
         """拓扑网络步进（拓扑特定）"""

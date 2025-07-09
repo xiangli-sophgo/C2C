@@ -30,6 +30,10 @@ class TrafficFileReader:
         self.write_req = 0
         self.read_flit = 0
         self.write_flit = 0
+        
+        # IP接口使用信息
+        self.required_ips = set()  # 存储需要的IP接口 (node_id, ip_type)
+        self.used_nodes = set()  # 存储使用的节点ID
 
         # 文件状态
         self._file_handle = None
@@ -41,27 +45,63 @@ class TrafficFileReader:
         self._calculate_file_stats()
 
     def _calculate_file_stats(self):
-        """预先扫描文件计算总请求数和flit数"""
+        """预先扫描文件计算总请求数和flit数，并收集需要的IP接口信息"""
         if self._stats_calculated:
             return
 
         with open(self.abs_path, "r") as f:
             for line in f:
-                parts = line.strip().split(",")
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                    
+                # 支持逗号和空格分隔符
+                if ',' in line:
+                    parts = line.split(',')
+                else:
+                    parts = line.split()
+                    
                 if len(parts) < 7:
                     continue
 
-                op, burst = parts[5], int(parts[6])
-                if op == "R":
-                    self.read_req += 1
-                    self.read_flit += burst
-                else:
-                    self.write_req += 1
-                    self.write_flit += burst
+                try:
+                    cycle, src_node, src_ip, dst_node, dst_ip, op, burst = parts[:7]
+                    
+                    # 转换类型
+                    src_node = int(src_node)
+                    dst_node = int(dst_node)
+                    burst = int(burst)
+                    
+                    # 收集统计信息
+                    if op.upper() in ["R", "READ"]:
+                        self.read_req += 1
+                        self.read_flit += burst
+                    else:
+                        self.write_req += 1
+                        self.write_flit += burst
+                    
+                    # 收集IP接口使用信息
+                    self.required_ips.add((src_node, src_ip))
+                    self.required_ips.add((dst_node, dst_ip))
+                    self.used_nodes.add(src_node)
+                    self.used_nodes.add(dst_node)
+                    
+                except (ValueError, IndexError):
+                    continue
 
         self.total_req = self.read_req + self.write_req
         self.total_flit = self.read_flit + self.write_flit
         self._stats_calculated = True
+        
+    def get_required_ip_interfaces(self):
+        """获取需要的IP接口信息"""
+        self._calculate_file_stats()  # 确保已经分析过文件
+        return {
+            'required_ips': list(self.required_ips),
+            'used_nodes': list(self.used_nodes),
+            'total_interfaces': len(self.required_ips),
+            'total_nodes': len(self.used_nodes)
+        }
 
     def _open_file(self):
         """打开文件句柄"""

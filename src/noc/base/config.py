@@ -49,7 +49,7 @@ class BaseNoCConfig(ABC):
 
         # 仿真参数
         self.simulation_cycles = 10000
-        self.warmup_cycles = 1000
+        self.warmup_cycles = 0
         self.stats_start_cycle = 1000
 
         # 时钟和时序

@@ -878,3 +878,129 @@ class CrossRingIPInterface(BaseIPInterface):
         except Exception as e:
             self.logger.error(f"注入网络失败: {e}")
             return False
+
+    def inject_request(self, source: NodeId, destination: NodeId, req_type: str, 
+                      burst_length: int = 4, packet_id: str = None, **kwargs) -> bool:
+        """
+        注入请求到IP接口，遵循正确的流程: inject_request -> L2H -> inject_fifos
+        
+        Args:
+            source: 源节点ID
+            destination: 目标节点ID  
+            req_type: 请求类型 ("read" | "write")
+            burst_length: 突发长度
+            packet_id: 包ID
+            **kwargs: 其他参数
+            
+        Returns:
+            是否成功注入
+        """
+        if not packet_id:
+            packet_id = f"{req_type}_{source}_{destination}_{self.current_cycle}"
+            
+        try:
+            # 创建CrossRing Flit
+            flit = create_crossring_flit(
+                packet_id=packet_id,
+                source=source,
+                destination=destination,
+                req_type=req_type,
+                burst_length=burst_length,
+                current_cycle=self.current_cycle
+            )
+            
+            # 注册到请求追踪器
+            if hasattr(self.model, 'request_tracker'):
+                self.model.request_tracker.start_request(
+                    packet_id=packet_id,
+                    source=source,
+                    destination=destination,
+                    op_type=req_type,
+                    burst_size=burst_length,
+                    cycle=kwargs.get("inject_cycle", self.current_cycle)
+                )
+            
+            # 遵循正确流程: 直接注入到L2H FIFO
+            channel = "req"  # 请求类型对应req通道
+            if self.l2h_fifos[channel].can_accept_input():
+                success = self.l2h_fifos[channel].write_input(flit)
+                if success:
+                    # 添加到活跃请求追踪
+                    self.active_requests[packet_id] = {
+                        "flit": flit,
+                        "source": source,
+                        "destination": destination,
+                        "req_type": req_type,
+                        "burst_length": burst_length,
+                        "inject_cycle": kwargs.get("inject_cycle", self.current_cycle),
+                        "created_cycle": self.current_cycle,
+                        "stage": "l2h_fifo"
+                    }
+                    
+                    self.logger.debug(f"成功注入请求到L2H: {packet_id} ({req_type}: {source}->{destination})")
+                    return True
+                else:
+                    self.logger.warning(f"L2H FIFO写入失败: {packet_id}")
+                    return False
+            else:
+                self.logger.warning(f"L2H FIFO已满，无法注入: {packet_id}")
+                return False
+            
+        except Exception as e:
+            self.logger.error(f"注入请求失败: {e}")
+            return False
+
+    def step(self, current_cycle: int) -> None:
+        """
+        IP接口周期步进，处理L2H -> inject_fifos -> Node的数据流
+        
+        Args:
+            current_cycle: 当前周期
+        """
+        self.current_cycle = current_cycle
+        
+        # 执行计算阶段
+        self.step_compute_phase(current_cycle)
+        
+        # 执行更新阶段  
+        self.step_update_phase(current_cycle)
+    
+    def step_compute_phase(self, current_cycle: int) -> None:
+        """计算阶段：准备传输"""
+        # 更新所有FIFO的计算阶段
+        for channel in ["req", "rsp", "data"]:
+            self.l2h_fifos[channel].step_compute_phase()
+            self.inject_fifos[channel].step_compute_phase()
+    
+    def step_update_phase(self, current_cycle: int) -> None:
+        """更新阶段：执行数据传输 L2H -> inject_fifos"""
+        # 处理L2H到inject_fifos的传输
+        for channel in ["req", "rsp", "data"]:
+            # 检查是否可以从L2H传输到inject_fifos
+            if (self.l2h_fifos[channel].valid_signal() and 
+                self.inject_fifos[channel].can_accept_input()):
+                
+                # 读取L2H FIFO的输出
+                flit = self.l2h_fifos[channel].read_output()
+                if flit:
+                    # 写入到inject_fifos (相当于channel_buffer)
+                    success = self.inject_fifos[channel].write_input(flit)
+                    if success:
+                        # 更新请求状态
+                        if hasattr(flit, 'packet_id') and flit.packet_id in self.active_requests:
+                            self.active_requests[flit.packet_id]["stage"] = "inject_fifos"
+                        
+                        self.logger.debug(f"周期{current_cycle}: L2H->{channel}_inject_fifos传输成功: {flit.packet_id}")
+                    else:
+                        self.logger.warning(f"inject_fifos[{channel}]写入失败")
+        
+        # 更新所有FIFO的时序状态
+        for channel in ["req", "rsp", "data"]:
+            self.l2h_fifos[channel].step_update_phase()
+            self.inject_fifos[channel].step_update_phase()
+
+    # 保持向后兼容
+    def enqueue_request(self, source: NodeId, destination: NodeId, req_type: str, 
+                       burst_length: int = 4, packet_id: str = None, **kwargs) -> bool:
+        """向后兼容的别名"""
+        return self.inject_request(source, destination, req_type, burst_length, packet_id, **kwargs)
