@@ -279,8 +279,13 @@ class CrossRingFlit(BaseFlit):
             ip_type = parts[0]  # gdma, ddr, sdma, cdma, l2m
             ip_index = parts[1]  # 0, 1, 2, ...
             
-            # 获取IP类型首字母
-            ip_char = ip_type[0] if ip_type else '?'
+            # 获取IP类型简写
+            if ip_type == "ddr":
+                ip_char = "D"
+            elif ip_type == "l2m":
+                ip_char = "L"
+            else:
+                ip_char = ip_type[0].upper() if ip_type else '?'
             
             # 返回格式：节点ID:IP类型首字母+索引
             return f"{node_id}:{ip_char}{ip_index}"
@@ -288,9 +293,9 @@ class CrossRingFlit(BaseFlit):
             return "??"
 
     def _get_detailed_position_string(self) -> str:
-        """获取详细的位置字符串"""
+        """获取简化的位置字符串"""
         if self.flit_position == "Ring_slice":
-            # 在环路slice中：简洁显示格式 source->dest:slice
+            # 在环路slice中：显示source->dest:slice格式
             slice_pos = getattr(self, 'current_slice_index', -1)
             source_node = getattr(self, 'link_source_node', -1)
             dest_node = getattr(self, 'link_dest_node', -1)
@@ -298,36 +303,41 @@ class CrossRingFlit(BaseFlit):
             if source_node >= 0 and dest_node >= 0 and slice_pos >= 0:
                 return f"{source_node}->{dest_node}:{slice_pos}"
             elif slice_pos >= 0:
-                return f"Link:S{slice_pos}"
+                return f"S{slice_pos}"
             return "Link"
         elif self.flit_position in ["CP_arrival", "CP_departure"]:
-            # 在CrossPoint中：显示节点ID.CP.方向
-            cp_dir = self.crosspoint_direction if self.crosspoint_direction else "unknown"
-            return f"N{self.current_node_id}.CP.{cp_dir}"
+            # 在CrossPoint中：显示节点ID.CP
+            return f"N{self.current_node_id}.CP"
         elif self.flit_position in ["TR_FIFO", "TL_FIFO", "TU_FIFO", "TD_FIFO"]:
-            # 在注入方向FIFO中
-            return f"N{self.current_node_id}.{self.flit_position}"
+            # 在注入方向FIFO中，简化为IQ_方向
+            direction = self.flit_position.replace("_FIFO", "")
+            return f"N{self.current_node_id}.IQ_{direction}"
+        elif "eject_" in self.flit_position and "_FIFO" in self.flit_position:
+            # 在eject FIFO中，简化显示为EQ_方向
+            direction = self.flit_position.replace("eject_", "").replace("_FIFO", "")
+            return f"N{self.current_node_id}.EQ_{direction}"
         elif self.flit_position == "channel":
             # 在节点channel_buffer中
             return f"N{self.current_node_id}.channel"
         elif self.flit_position in ["l2h_fifo", "h2l_fifo"]:
             # 在IP接口FIFO中
-            return f"N{self.current_node_id}.IP.{self.flit_position}"
+            return f"N{self.current_node_id}.{self.flit_position}"
         elif self.flit_position == "pending":
             # 在IP接口pending队列中
-            return f"N{self.current_node_id}.IP.pending"
+            return f"N{self.current_node_id}.pending"
         elif self.flit_position == "RB":
-            # 在Ring Buffer中
-            return f"N{self.current_node_id}.RB"
+            # 在Ring Buffer中 - 使用具体的FIFO名称
+            rb_fifo = getattr(self, 'rb_fifo_name', None)
+            if rb_fifo:
+                return f"N{self.current_node_id}.{rb_fifo}"
+            else:
+                return f"N{self.current_node_id}.RB"
         elif self.current_node_id >= 0:
             # 有节点信息但位置类型不在预期范围内
             return f"N{self.current_node_id}.{self.flit_position}"
         else:
-            # 传统显示方式（兼容旧代码）
-            if self.flit_position == "Link" and self.current_link:
-                return f"({self.current_position}: {self.current_link[0]}->{self.current_link[1]}).{self.current_seat_index}"
-            else:
-                return f"{self.current_position}:{self.flit_position}"
+            # 简化显示
+            return self.flit_position
 
 
 # 重写基类的重置方法以支持CrossRing特有字段

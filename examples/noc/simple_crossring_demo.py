@@ -84,17 +84,43 @@ def run_crossring_simulation(rows=2, cols=3, max_cycles=1000, max_requests=10):
         print("\n" + "=" * 50)
         print("📊 仿真结果")
         print("=" * 50)
-        print(f"总周期: {results.get('total_cycles', 0)}")
-        print(f"总请求: {results.get('total_requests', 0)}")
-        print(f"完成请求: {results.get('completed_requests', 0)}")
-        print(f"平均延迟: {analysis.get('avg_latency', 0):.1f} 周期")
-        print(f"最大延迟: {analysis.get('max_latency', 0)} 周期")
-        print(f"网络利用率: {analysis.get('network_utilization', 0):.1f}%")
+        
+        # 基础指标
+        basic = analysis.get('basic_metrics', {})
+        print(f"总周期: {basic.get('total_cycles', 0)}")
+        print(f"总请求: {basic.get('total_requests', 0)}")
+        print(f"完成请求: {basic.get('completed_requests', 0)}")
+        print(f"活跃请求: {basic.get('active_requests', 0)}")
+        print(f"完成率: {basic.get('completion_rate', 0):.1f}%")
+        
+        # 延迟指标
+        latency = analysis.get('latency_metrics', {})
+        if latency.get('avg_latency', 0) > 0:
+            print(f"\n📊 延迟统计:")
+            print(f"  平均延迟: {latency.get('avg_latency', 0):.1f} 周期")
+            print(f"  最小延迟: {latency.get('min_latency', 0)} 周期") 
+            print(f"  最大延迟: {latency.get('max_latency', 0)} 周期")
+            print(f"  P95延迟: {latency.get('p95_latency', 0):.1f} 周期")
+        
+        # 吞吐量指标
+        throughput = analysis.get('throughput_metrics', {})
+        if throughput.get('requests_per_cycle', 0) > 0:
+            print(f"\n📊 吞吐量统计:")
+            print(f"  请求/周期: {throughput.get('requests_per_cycle', 0):.4f}")
+            print(f"  请求/秒: {throughput.get('requests_per_second', 0):.0f}")
+        
+        # 带宽指标
+        bandwidth = analysis.get('bandwidth_metrics', {})
+        if bandwidth.get('total_bytes', 0) > 0:
+            print(f"\n📊 带宽统计:")
+            print(f"  总传输: {bandwidth.get('total_bytes', 0)} 字节")
+            print(f"  字节/周期: {bandwidth.get('bytes_per_cycle', 0):.2f}")
+            print(f"  带宽: {bandwidth.get('gbps', 0):.4f} Gbps")
 
-        if analysis.get("completion_rate", 0) < 100:
-            print(f"⚠️  完成率: {analysis.get('completion_rate', 0):.1f}%")
+        if basic.get("completion_rate", 0) < 100:
+            print(f"\n⚠️  部分请求未完成: {basic.get('completed_requests', 0)}/{basic.get('total_requests', 0)}")
         else:
-            print("✅ 所有请求完成")
+            print("\n✅ 所有请求完成")
 
         print("=" * 50)
         return True

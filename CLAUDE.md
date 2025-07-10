@@ -95,6 +95,7 @@ The framework supports creating various topology types:
 - Uses type hints throughout
 - Comprehensive docstrings for all public methods
 - Abstract base classes for extensibility
+- **ALL LOGGING AND DEBUG OUTPUT MUST BE IN CHINESE** - 所有日志和调试输出必须使用中文
 
 ### Testing
 Run the demo script to verify core functionality:
@@ -248,6 +249,54 @@ When working with CrossRing:
 4. Model coordinates but doesn't handle inject/eject directly
 5. All logging should be in Chinese
 6. Non-wrap-around topology means edge nodes connect to themselves
+
+## ⚠️ 两阶段执行模型 (Two-Phase Execution Model) - 关键架构要求
+
+**所有组件必须严格遵循两阶段执行模型，确保每个周期内flit只前进一个阶段。**
+
+### 正确的Flit传输时序
+```
+cycle 0: 请求生成 → pending_requests
+cycle 1: pending_requests → l2h_fifo 
+cycle 2: l2h_fifo → channel_buffer
+cycle 3: channel_buffer → inject_direction_fifos (IQ_TR/TL/TU/TD)
+cycle 4: inject_direction_fifos → 环路slice S0
+```
+
+### 组件两阶段实现要求
+
+#### 1. IP接口 (CrossRingIPInterface)
+- **compute阶段**: 更新FIFO状态，不执行传输
+- **update阶段**: 执行数据传输，每周期只执行一个传输操作
+  - 优先级：pending → l2h > l2h → channel_buffer
+  - 绝对禁止同一个flit在同一周期跳跃多个阶段
+
+#### 2. 节点 (CrossRingNode)  
+- **compute阶段** (`step_compute_phase`):
+  - 更新所有FIFO组合逻辑
+  - **计算注入仲裁**：确定要从channel_buffer转移到IQ的flit，但**不执行传输**
+  - 处理CrossPoint计算阶段
+- **update阶段** (`step_update_phase`):
+  - 更新所有FIFO寄存器状态
+  - **执行注入仲裁**：基于compute阶段计算结果执行channel_buffer → inject_direction_fifos传输
+  - 处理CrossPoint更新阶段
+
+#### 3. 模型 (CrossRingModel)
+- **compute阶段**: 调用所有组件的compute阶段
+- **update阶段**: 调用所有组件的update阶段
+
+### 调试验证命令
+```bash
+python3 test_flit_flow.py 2>&1 | grep -E "(周期|🔄|RequestTracker)"
+```
+
+正确输出示例：
+```
+周期1: pending->L2H传输
+周期2: L2H->channel_buffer注入成功 (flit显示在N0.channel)
+周期3: channel_buffer->IQ_TR (flit显示在N0.IQ_TR)
+周期4: flit显示在0->1:0 (环路slice)
+```
 
 ## Recent Major Fixes (2025-07-10)
 

@@ -904,7 +904,7 @@ class BaseNoCModel(ABC):
                         
                         if immediate_inject or not cycle_accurate:
                             # 立即注入模式
-                            packet_ids = self.inject_test_traffic(
+                            packet_ids = self.inject_request(
                                 source=src, 
                                 destination=dst, 
                                 req_type=op_type, 
@@ -973,7 +973,7 @@ class BaseNoCModel(ABC):
         for request in self.pending_file_requests:
             if request['cycle'] <= self.cycle:
                 # 注入这个请求
-                packet_ids = self.inject_test_traffic(
+                packet_ids = self.inject_request(
                     source=request['src'],
                     destination=request['dst'],
                     req_type=request['op_type'],
@@ -1166,94 +1166,6 @@ class BaseNoCModel(ABC):
 
         report.append("=" * 60)
         return "\n".join(report)
-
-    def inject_from_traffic_file(self, traffic_file_path: str, max_requests: int = None, 
-                                cycle_accurate: bool = True, immediate_inject: bool = True) -> int:
-        """
-        从traffic文件注入请求
-        
-        Args:
-            traffic_file_path: traffic文件路径
-            max_requests: 最大请求数量限制（可选）
-            cycle_accurate: 是否使用周期精确注入模式
-            immediate_inject: 是否立即注入请求（默认True）
-            
-        Returns:
-            成功注入的请求数量
-        """
-        import os
-        from pathlib import Path
-        
-        # 验证文件存在
-        traffic_file = Path(traffic_file_path)
-        if not traffic_file.exists():
-            self.logger.error(f"Traffic文件不存在: {traffic_file_path}")
-            return 0
-            
-        self.logger.info(f"开始从文件注入流量: {traffic_file_path}")
-        
-        injected_count = 0
-        try:
-            with open(traffic_file, 'r', encoding='utf-8') as f:
-                for line_num, line in enumerate(f, 1):
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-                        
-                    # 检查最大请求数限制
-                    if max_requests and injected_count >= max_requests:
-                        break
-                        
-                    try:
-                        # 解析traffic文件行格式: cycle,src,src_type,dst,dst_type,req_type,burst_length
-                        # 支持逗号分隔或空格分隔
-                        if ',' in line:
-                            parts = line.split(',')
-                        else:
-                            parts = line.split()
-                        
-                        if len(parts) < 6:
-                            self.logger.warning(f"第{line_num}行格式错误，跳过: {line}")
-                            continue
-                            
-                        inject_cycle = int(parts[0])
-                        src_node = int(parts[1])
-                        src_type = parts[2] if len(parts) > 2 else "gdma"
-                        dst_node = int(parts[3])
-                        dst_type = parts[4] if len(parts) > 4 else "ddr"
-                        req_type_raw = parts[5] if len(parts) > 5 else "R"
-                        burst_length = int(parts[6]) if len(parts) > 6 else 4
-                        
-                        # 转换请求类型格式
-                        req_type = "read" if req_type_raw == "R" else "write" if req_type_raw == "W" else req_type_raw
-                        
-                        # 注入请求
-                        packet_ids = self.inject_request(
-                            source=src_node,
-                            destination=dst_node,
-                            req_type=req_type,
-                            count=1,
-                            burst_length=burst_length,
-                            ip_type=src_type,
-                            inject_cycle=inject_cycle if cycle_accurate else None
-                        )
-                        
-                        if packet_ids:
-                            injected_count += len(packet_ids)
-                            self.logger.debug(f"注入请求: {src_node}->{dst_node} {req_type} ({src_type}) 周期{inject_cycle}")
-                        else:
-                            self.logger.warning(f"第{line_num}行请求注入失败: {line}")
-                            
-                    except (ValueError, IndexError) as e:
-                        self.logger.warning(f"第{line_num}行解析错误: {e}, 跳过: {line}")
-                        continue
-                        
-        except IOError as e:
-            self.logger.error(f"读取traffic文件失败: {e}")
-            return 0
-            
-        self.logger.info(f"流量注入完成: 成功注入{injected_count}个请求")
-        return injected_count
 
     def __repr__(self) -> str:
         """字符串表示"""

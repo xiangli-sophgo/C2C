@@ -122,11 +122,11 @@ class TrackerConfiguration:
 class LatencyConfiguration:
     """延迟配置数据类。"""
 
-    ddr_r_latency: int = 100
+    ddr_r_latency: int = 5  # 从100降到5，方便观察读数据返回
     ddr_r_latency_var: int = 0
     ddr_w_latency: int = 0
     ddr_w_latency_var: int = 0
-    l2m_r_latency: int = 12
+    l2m_r_latency: int = 3  # 从12降到3，方便观察读数据返回
     l2m_r_latency_var: int = 0
     l2m_w_latency: int = 16
     l2m_w_latency_var: int = 0

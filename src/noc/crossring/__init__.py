@@ -109,7 +109,7 @@ def quick_start_simulation(config_name: str = "2262", max_cycles: int = 10000, n
         destination = random.randint(0, config.num_nodes - 1)
         if source != destination:
             req_type = random.choice(["read", "write"])
-            model.inject_test_traffic(source, destination, req_type)
+            model.inject_request(source=source, destination=destination, req_type=req_type, count=1)
 
     # 运行仿真
     recommended_cycles = config.get_recommended_simulation_cycles()

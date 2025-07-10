@@ -12,6 +12,7 @@ import logging
 from collections import defaultdict
 import time
 from enum import Enum
+import numpy as np
 
 from .config import CrossRingConfig, RoutingStrategy
 from .ip_interface import CrossRingIPInterface
@@ -230,7 +231,7 @@ class CrossRingModel(BaseNoCModel):
                     link_type = "normal"
                 
                 # 创建链接ID
-                link_id = f"link_{node_id}_{direction_str}_to_{neighbor_id}"
+                link_id = f"link_{node_id}_{direction_str}_{neighbor_id}"
                 
                 # 创建链接
                 try:
@@ -318,38 +319,43 @@ class CrossRingModel(BaseNoCModel):
         print("DEBUG: 开始连接slice到CrossPoint...")
         
         for node_id, node in self.crossring_nodes.items():
-            # 获取该节点的所有链接
-            node_links = self._get_node_links(node_id)
-            
-            for direction_str, link in node_links.items():
-                if not link:
-                    continue
-                    
+            # 处理每个方向
+            for direction_str in ["TR", "TL", "TU", "TD"]:
                 # 确定CrossPoint方向
                 crosspoint_direction = "horizontal" if direction_str in ["TR", "TL"] else "vertical"
                 crosspoint = node.get_crosspoint(crosspoint_direction)
                 
                 if not crosspoint:
-                    print(f"DEBUG: 节点{node_id}没有{crosspoint_direction}CrossPoint")
                     continue
-                    
-                # 连接到达和离开slice
+                
+                # 获取该方向的出链路（departure）
+                out_link = None
+                for link_id, link in self.crossring_links.items():
+                    if link.source_node == node_id and direction_str in link_id:
+                        out_link = link
+                        break
+                
+                # 获取该方向的入链路（arrival）
+                reverse_direction = self._get_reverse_direction(direction_str)
+                in_link = None
+                for link_id, link in self.crossring_links.items():
+                    if link.dest_node == node_id and reverse_direction in link_id:
+                        in_link = link
+                        break
+                
+                # 连接slice
                 for channel in ["req", "rsp", "data"]:
-                    # 获取链接的第一个和最后一个RingSlice
-                    ring_slices = link.ring_slices[channel]
-                    
-                    if ring_slices:
-                        # 第一个slice作为离开slice（从CrossPoint向下游传输）
-                        departure_slice = ring_slices[0]
+                    # 连接departure slice（出链路的第一个slice）
+                    if out_link and out_link.ring_slices[channel]:
+                        departure_slice = out_link.ring_slices[channel][0]
                         crosspoint.connect_slice(direction_str, "departure", departure_slice)
-                        
-                        # 最后一个slice作为到达slice（从上游到达CrossPoint）
-                        arrival_slice = ring_slices[-1]
+                    
+                    # 连接arrival slice（入链路的最后一个slice）
+                    if in_link and in_link.ring_slices[channel]:
+                        arrival_slice = in_link.ring_slices[channel][-1]
                         crosspoint.connect_slice(direction_str, "arrival", arrival_slice)
                         
-                        # CrossPoint slice连接完成
-                        
-        # slice到CrossPoint连接完成
+        print("DEBUG: slice到CrossPoint连接完成")
         
     def _get_node_links(self, node_id: int) -> Dict[str, Any]:
         """获取节点的所有链接"""
@@ -399,7 +405,7 @@ class CrossRingModel(BaseNoCModel):
             
             for direction_str, neighbor_id in connections.items():
                 # 获取当前节点的出链路
-                out_link_id = f"link_{node_id}_{direction_str}_to_{neighbor_id}"
+                out_link_id = f"link_{node_id}_{direction_str}_{neighbor_id}"
                 out_link = self.crossring_links.get(out_link_id)
                 
                 if not out_link:
@@ -407,7 +413,7 @@ class CrossRingModel(BaseNoCModel):
                     
                 # 获取邻居节点的入链路（反向）
                 reverse_direction = self._get_reverse_direction(direction_str)
-                in_link_id = f"link_{neighbor_id}_{reverse_direction}_to_{node_id}"
+                in_link_id = f"link_{neighbor_id}_{reverse_direction}_{node_id}"
                 in_link = self.crossring_links.get(in_link_id)
                 
                 if not in_link:
@@ -553,9 +559,6 @@ class CrossRingModel(BaseNoCModel):
 
         # 阶段2：时序逻辑阶段 - 所有组件执行传输和状态更新
         self._step_update_phase()
-        
-        # 明确调用CrossRing网络更新
-        self._crossring_network_update()
 
         # 更新全局统计
         self._update_global_statistics()
@@ -573,24 +576,18 @@ class CrossRingModel(BaseNoCModel):
             import time
             time.sleep(self.debug_config["sleep_time"])
     
-    def _crossring_network_update(self) -> None:
-        """强制执行CrossRing网络更新"""
+
+    def _step_topology_network_update(self) -> None:
+        """CrossRing网络组件更新阶段"""
         # 所有CrossRing节点更新阶段
         for node_id, node in self.crossring_nodes.items():
-            if hasattr(node, "update_state"):
-                node.update_state(self.cycle)
-            else:
-                print(f"  节点{node_id}没有update_state方法")
+            if hasattr(node, "step_update_phase"):
+                node.step_update_phase(self.cycle)
         
         # 所有CrossRing链路传输阶段
         for link_id, link in self.crossring_links.items():
             if hasattr(link, "step_transmission"):
                 link.step_transmission(self.cycle)
-
-    def _step_topology_network_update(self) -> None:
-        """CrossRing网络组件更新阶段"""
-        # 这个方法现在被_crossring_network_update替代
-        pass
 
     def _step_topology_network(self) -> None:
         """兼容性接口：单阶段执行模型"""
@@ -1585,7 +1582,7 @@ class CrossRingModel(BaseNoCModel):
                             })
                         else:
                             # 立即注入
-                            packet_ids = self.inject_test_traffic(
+                            packet_ids = self.inject_request(
                                 source=src, 
                                 destination=dst, 
                                 req_type=op_type, 
@@ -1653,7 +1650,7 @@ class CrossRingModel(BaseNoCModel):
         
         # 注入当前周期的请求
         for request in requests_to_inject:
-            packet_ids = self.inject_test_traffic(
+            packet_ids = self.inject_request(
                 source=request['src'],
                 destination=request['dst'],
                 req_type=request['op_type'],
@@ -1825,27 +1822,90 @@ class CrossRingModel(BaseNoCModel):
 
         # 基础指标
         sim_info = results.get("simulation_info", {})
-        network_stats = results.get("network_stats", {})
-
+        
+        # **改进：从RequestTracker获取准确的请求统计**
+        total_requests = len(self.request_tracker.completed_requests) + len(self.request_tracker.active_requests)
+        completed_requests = len(self.request_tracker.completed_requests)
+        active_requests = len(self.request_tracker.active_requests)
+        
         analysis["basic_metrics"] = {
-            "total_cycles": sim_info.get("total_cycles", 0),
-            "effective_cycles": sim_info.get("effective_cycles", 0),
-            "peak_active_requests": network_stats.get("peak_active_requests", 0),
-            "total_read_retries": network_stats.get("total_read_retries", 0),
-            "total_write_retries": network_stats.get("total_write_retries", 0),
-            "total_transactions": network_stats.get("total_transactions", 0),
+            "total_cycles": sim_info.get("total_cycles", self.cycle),
+            "effective_cycles": sim_info.get("effective_cycles", self.cycle),
+            "total_requests": total_requests,
+            "completed_requests": completed_requests,
+            "active_requests": active_requests,
+            "completion_rate": (completed_requests / total_requests * 100) if total_requests > 0 else 0.0,
         }
 
-        # 计算吞吐量
-        effective_cycles = analysis["basic_metrics"]["effective_cycles"]
-        total_transactions = analysis["basic_metrics"]["total_transactions"]
-
-        if effective_cycles > 0 and total_transactions > 0:
-            analysis["basic_metrics"]["throughput"] = total_transactions / effective_cycles
-            analysis["basic_metrics"]["bandwidth_mbps"] = (total_transactions * 512) / (effective_cycles * 1e6)  # 假设512位/事务
+        # **改进：计算真实的延迟统计**
+        latencies = []
+        read_latencies = []
+        write_latencies = []
+        total_bytes = 0
+        
+        for lifecycle in self.request_tracker.completed_requests.values():
+            if lifecycle.completed_cycle > 0:
+                total_latency = lifecycle.get_total_latency()
+                latencies.append(total_latency)
+                
+                # 按类型分类
+                if lifecycle.op_type == "read":
+                    read_latencies.append(total_latency)
+                elif lifecycle.op_type == "write":
+                    write_latencies.append(total_latency)
+                
+                # 计算传输的字节数
+                total_bytes += lifecycle.burst_size * 64  # 假设64字节/burst
+        
+        # 延迟统计
+        if latencies:
+            analysis["latency_metrics"] = {
+                "avg_latency": np.mean(latencies),
+                "min_latency": np.min(latencies),
+                "max_latency": np.max(latencies),
+                "p50_latency": np.percentile(latencies, 50),
+                "p95_latency": np.percentile(latencies, 95),
+                "p99_latency": np.percentile(latencies, 99),
+            }
+            
+            if read_latencies:
+                analysis["read_latency_metrics"] = {
+                    "avg_latency": np.mean(read_latencies),
+                    "min_latency": np.min(read_latencies),
+                    "max_latency": np.max(read_latencies),
+                }
+            
+            if write_latencies:
+                analysis["write_latency_metrics"] = {
+                    "avg_latency": np.mean(write_latencies),
+                    "min_latency": np.min(write_latencies),
+                    "max_latency": np.max(write_latencies),
+                }
         else:
-            analysis["basic_metrics"]["throughput"] = 0.0
-            analysis["basic_metrics"]["bandwidth_mbps"] = 0.0
+            analysis["latency_metrics"] = {"avg_latency": 0, "min_latency": 0, "max_latency": 0}
+
+        # **改进：计算真实的带宽和吞吐量**
+        effective_cycles = analysis["basic_metrics"]["effective_cycles"]
+        
+        if effective_cycles > 0 and completed_requests > 0:
+            # 吞吐量 (请求/周期)
+            analysis["throughput_metrics"] = {
+                "requests_per_cycle": completed_requests / effective_cycles,
+                "requests_per_second": (completed_requests / effective_cycles) * 1e9,  # 假设1GHz
+            }
+            
+            # 带宽 (bytes/cycle)
+            if total_bytes > 0:
+                analysis["bandwidth_metrics"] = {
+                    "bytes_per_cycle": total_bytes / effective_cycles,
+                    "gbps": (total_bytes * 8 / effective_cycles) / 1e9,  # 转换为Gbps
+                    "total_bytes": total_bytes,
+                }
+            else:
+                analysis["bandwidth_metrics"] = {"bytes_per_cycle": 0, "gbps": 0, "total_bytes": 0}
+        else:
+            analysis["throughput_metrics"] = {"requests_per_cycle": 0, "requests_per_second": 0}
+            analysis["bandwidth_metrics"] = {"bytes_per_cycle": 0, "gbps": 0, "total_bytes": 0}
 
         # IP接口分析
         ip_stats = results.get("ip_interface_stats", {})
@@ -2068,7 +2128,7 @@ class CrossRingModel(BaseNoCModel):
             self.request_tracker.start_request(packet_id, src_node, dst_node, op_type, burst_size, cycle)
 
         # 使用现有的inject_test_traffic方法
-        packet_ids = self.inject_test_traffic(src_node, dst_node, op_type, 1, burst_size)
+        packet_ids = self.inject_request(source=src_node, destination=dst_node, req_type=op_type, count=1, burst_length=burst_size)
 
         if len(packet_ids) > 0 and self.debug_enabled:
             self.request_tracker.update_request_state(packet_id, RequestState.INJECTED, cycle)

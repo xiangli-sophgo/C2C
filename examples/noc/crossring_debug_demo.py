@@ -30,7 +30,18 @@ from src.noc.debug import RequestTracker, RequestState, FlitType
 
 def setup_debug_logging():
     """设置详细的调试日志"""
-    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", handlers=[logging.StreamHandler(), logging.FileHandler("crossring_debug.log", mode="w")])
+    # 获取项目根目录
+    project_root = Path(__file__).parent.parent.parent
+    output_dir = project_root / "output"
+    output_dir.mkdir(exist_ok=True)
+
+    log_file = output_dir / "crossring_debug.log"
+
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[logging.StreamHandler(), logging.FileHandler(str(log_file), mode="w")],
+    )
     return logging.getLogger(__name__)
 
 
@@ -200,7 +211,7 @@ def run_debug_simulation(target_packet_id: Optional[str] = None, debug_sleep_tim
                 # 如果有活动或者前几个周期，打印详细信息
                 if active_count > 0 or completed_count > 0 or cycle < 10:
                     print(f"\n{'='*50}")
-                    print(f"📊 周期 {cycle:3d}: 活跃请求={active_count}, 完成请求={completed_count}")
+                    print(f"📊 周期 {model.cycle:3d}: 活跃请求={active_count}, 完成请求={completed_count}")
                     print(f"{'='*50}")
 
                     # 显示活跃请求的flit信息（使用RequestTracker）
@@ -244,7 +255,7 @@ def run_debug_simulation(target_packet_id: Optional[str] = None, debug_sleep_tim
 
                     # 添加sleep以便观察
                     if debug_sleep_time > 0:
-                        print(f"\n⏱️  休眠 {debug_sleep_time} 秒...")
+                        # print(f"\n⏱️  休眠 {debug_sleep_time} 秒...")
                         time.sleep(debug_sleep_time)
 
                 # 检查是否所有请求都完成
