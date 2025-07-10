@@ -254,6 +254,7 @@ class BaseIPInterface(ABC):
         # ========== 等待队列和跟踪 ==========
         self.active_requests = {}  # {packet_id: request_info}
         self.completed_requests = {}  # {packet_id: completion_info}
+        self.pending_requests = deque()  # 无限大的待注入队列
 
         # 日志
         self.logger = logging.getLogger(f"{self.__class__.__name__}_{ip_type}_{node_id}")
@@ -297,6 +298,10 @@ class BaseIPInterface(ABC):
     def step(self, cycle: int) -> None:
         """
         执行一个周期，使用三阶段执行模型确保正确的时序行为
+        
+        数据流路径：
+        1. pending_requests → L2H FIFO (时钟域转换)
+        2. L2H FIFO → 拓扑网络
 
         Args:
             cycle: 当前仿真周期

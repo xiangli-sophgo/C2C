@@ -373,3 +373,33 @@ class RequestTracker:
             "data_errors": 0,
             "response_errors": 0,
         }
+
+    # ========== IP接口兼容性方法 ==========
+    
+    def mark_request_injected(self, packet_id: str, cycle: int):
+        """标记请求已注入（IP接口兼容性方法）"""
+        self.update_request_state(packet_id, RequestState.INJECTED, cycle)
+        
+    def add_request_flit(self, packet_id: str, flit: Any):
+        """添加请求flit（IP接口兼容性方法）"""
+        if packet_id in self.active_requests:
+            self.active_requests[packet_id].request_flits.append(flit)
+            # 如果flit有位置信息，同时追踪位置
+            if hasattr(flit, 'current_node') and hasattr(flit, 'current_cycle'):
+                self.track_flit_position(packet_id, FlitType.REQUEST, flit.current_node, flit.current_cycle, flit)
+    
+    def add_response_flit(self, packet_id: str, flit: Any):
+        """添加响应flit（IP接口兼容性方法）"""
+        if packet_id in self.active_requests:
+            self.active_requests[packet_id].response_flits.append(flit)
+            # 如果flit有位置信息，同时追踪位置
+            if hasattr(flit, 'current_node') and hasattr(flit, 'current_cycle'):
+                self.track_flit_position(packet_id, FlitType.RESPONSE, flit.current_node, flit.current_cycle, flit)
+    
+    def add_data_flit(self, packet_id: str, flit: Any):
+        """添加数据flit（IP接口兼容性方法）"""
+        if packet_id in self.active_requests:
+            self.active_requests[packet_id].data_flits.append(flit)
+            # 如果flit有位置信息，同时追踪位置
+            if hasattr(flit, 'current_node') and hasattr(flit, 'current_cycle'):
+                self.track_flit_position(packet_id, FlitType.DATA, flit.current_node, flit.current_cycle, flit)

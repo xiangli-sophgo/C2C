@@ -40,7 +40,7 @@ class CrossRingCrossPoint:
     """
 
     def __init__(self, crosspoint_id: str, node_id: int, direction: CrossPointDirection, 
-                 config: CrossRingConfig, logger: Optional[logging.Logger] = None):
+                 config: CrossRingConfig, coordinates: Tuple[int, int] = None, parent_node: Optional['CrossRingNode'] = None, logger: Optional[logging.Logger] = None):
         """
         初始化CrossPoint
 
@@ -49,12 +49,16 @@ class CrossRingCrossPoint:
             node_id: 所属节点ID
             direction: CrossPoint方向（水平/垂直）
             config: CrossRing配置
+            coordinates: 节点坐标
+            parent_node: 父Node引用
             logger: 日志记录器
         """
         self.crosspoint_id = crosspoint_id
         self.node_id = node_id
         self.direction = direction
         self.config = config
+        self.coordinates = coordinates or (0, 0)
+        self.parent_node = parent_node
         self.logger = logger or logging.getLogger(__name__)
 
         # 获取Tag配置
@@ -198,19 +202,46 @@ class CrossRingCrossPoint:
                 # 普通slot
                 current_slot.assign_flit(flit)
             
+        # 更新flit状态信息
+        flit.flit_position = "Ring_slice"
+        flit.current_node_id = self.node_id
+        flit.current_link_id = f"link_{self.node_id}_{direction}"
+        flit.current_slice_index = 0  # 刚注入到departure slice
+        flit.crosspoint_direction = "departure"
+        flit.current_position = self.node_id
+        
         self.stats["flits_injected"][channel] += 1
         self.logger.debug(f"CrossPoint {self.crosspoint_id} 成功注入flit {flit.flit_id} 到 {direction}方向{channel}通道")
         return True
         
     def process_injection_from_fifos(self, node_fifos: Dict[str, Dict[str, Any]], cycle: int) -> None:
         """
-        处理从节点inject_direction_fifos的上环判断（带I-Tag机制）
+        处理从节点inject_direction_fifos和ring_bridge输出的上环判断（带I-Tag机制）
         
         Args:
             node_fifos: 节点的inject_direction_fifos
             cycle: 当前周期
         """
-        # 检查每个管理方向的inject_direction_fifos
+        # 首先处理ring_bridge输出的重新注入（更高优先级）
+        for direction in self.managed_directions:
+            for channel in ["req", "rsp", "data"]:
+                # 检查ring_bridge输出
+                if self.parent_node:
+                    ring_bridge_flit = self.parent_node.get_ring_bridge_output_flit(direction, channel)
+                    if ring_bridge_flit:
+                        # 检查是否可以立即注入
+                        if self.can_inject_flit(direction, channel):
+                            # 更新flit状态
+                            ring_bridge_flit.flit_position = f"inject_{direction}"
+                            
+                            if self.try_inject_flit(direction, ring_bridge_flit, channel):
+                                print(f"✅ CrossPoint {self.crosspoint_id} 从ring_bridge {direction}方向注入flit {ring_bridge_flit.packet_id}到环路")
+                                self.logger.debug(f"CrossPoint {self.crosspoint_id} 从ring_bridge {direction}方向成功注入flit到环路")
+                            else:
+                                # 注入失败，需要放回ring_bridge输出（简化处理：记录失败）
+                                self.logger.debug(f"CrossPoint {self.crosspoint_id} ring_bridge注入失败")
+        
+        # 然后处理正常的inject_direction_fifos
         for direction in self.managed_directions:
             for channel in ["req", "rsp", "data"]:
                 if direction in node_fifos[channel]:
@@ -225,6 +256,7 @@ class CrossRingCrossPoint:
                                 # 可以注入，读取flit并注入
                                 flit = direction_fifo.read_output()
                                 if self.try_inject_flit(direction, flit, channel):
+                                    print(f"✅ CrossPoint {self.crosspoint_id} 从{direction}方向注入flit {flit.packet_id}到环路")
                                     self.logger.debug(f"CrossPoint {self.crosspoint_id} 从{direction}方向FIFO成功注入flit到环路")
                                 else:
                                     # 注入失败，放回FIFO
@@ -269,10 +301,70 @@ class CrossRingCrossPoint:
         )
         
         return can_eject
+    
+    def _is_local_destination(self, flit: CrossRingFlit) -> bool:
+        """
+        检查flit是否是本节点的目标
+        
+        Args:
+            flit: 要检查的flit
             
+        Returns:
+            是否是本节点的目标
+        """
+        if hasattr(flit, 'destination') and flit.destination == self.node_id:
+            return True
+        if hasattr(flit, 'dest_node_id') and flit.dest_node_id == self.node_id:
+            return True
+        return False
+            
+    def should_eject_to_ip(self, flit: CrossRingFlit) -> bool:
+        """
+        判断flit是否应该最终下环到IP
+        
+        Args:
+            flit: 要判断的flit
+            
+        Returns:
+            是否应该下环到IP
+        """
+        # 必须是目标节点
+        if not self._is_local_destination(flit):
+            return False
+            
+        # 必须完成所有维度的路由
+        return self._is_routing_complete(flit)
+    
+    def should_eject_to_ring_bridge(self, flit: CrossRingFlit, current_direction: str) -> bool:
+        """
+        判断flit是否应该下环到ring_bridge进行维度转换
+        
+        Args:
+            flit: 要判断的flit  
+            current_direction: 当前到达的方向
+            
+        Returns:
+            是否应该下环到ring_bridge
+        """
+        if not hasattr(flit, 'dest_coordinates'):
+            return False
+            
+        dest_x, dest_y = flit.dest_coordinates
+        curr_x, curr_y = self.coordinates
+        
+        # 根据CrossPoint方向和路由策略判断
+        if self.direction == CrossPointDirection.HORIZONTAL:
+            # 水平CrossPoint：检查X维度路由完成，但Y维度未完成
+            return self._should_horizontal_cp_transfer_to_rb(flit, dest_x, dest_y, curr_x, curr_y, current_direction)
+        elif self.direction == CrossPointDirection.VERTICAL:
+            # 垂直CrossPoint：检查Y维度路由完成，但X维度未完成  
+            return self._should_vertical_cp_transfer_to_rb(flit, dest_x, dest_y, curr_x, curr_y, current_direction)
+            
+        return False
+        
     def should_eject_flit(self, flit: CrossRingFlit) -> bool:
         """
-        判断flit是否应该在本节点下环
+        判断flit是否应该在本节点下环（兼容性方法）
         
         Args:
             flit: 要判断的flit
@@ -280,12 +372,149 @@ class CrossRingCrossPoint:
         Returns:
             是否应该下环
         """
-        # 检查flit的目标是否是当前节点
-        if hasattr(flit, 'destination') and flit.destination == self.node_id:
-            return True
-        if hasattr(flit, 'dest_node_id') and flit.dest_node_id == self.node_id:
-            return True
+        # Debug信息（限制输出）
+        should_eject_ip = self.should_eject_to_ip(flit)
+        if hasattr(flit, 'destination') and not hasattr(flit, '_eject_debug_shown'):
+            print(f"🔍 节点{self.node_id}检查下环到IP: flit目标={flit.destination}, 是否下环={should_eject_ip}")
+            flit._eject_debug_shown = True
+        
+        return should_eject_ip
+    
+    def _is_routing_complete(self, flit: CrossRingFlit) -> bool:
+        """
+        检查flit是否已完成所有维度的路由
+        
+        Args:
+            flit: 要检查的flit
+            
+        Returns:
+            是否完成所有路由
+        """
+        if not hasattr(flit, 'dest_coordinates'):
+            return True  # 没有坐标信息，假设完成
+            
+        dest_x, dest_y = flit.dest_coordinates
+        curr_x, curr_y = self.coordinates
+        
+        # 必须同时满足X和Y坐标到达目标
+        return dest_x == curr_x and dest_y == curr_y
+    
+    def _should_horizontal_cp_transfer_to_rb(self, flit: CrossRingFlit, dest_x: int, dest_y: int, 
+                                           curr_x: int, curr_y: int, current_direction: str) -> bool:
+        """
+        水平CrossPoint判断是否需要转移到ring_bridge
+        
+        Args:
+            flit: flit对象
+            dest_x, dest_y: 目标坐标
+            curr_x, curr_y: 当前坐标  
+            current_direction: 当前到达方向
+            
+        Returns:
+            是否需要转移到ring_bridge
+        """
+        # 水平CrossPoint在XY路由中负责X维度移动
+        # 检查：X维度已到达目标，但Y维度未到达
+        x_complete = (dest_x == curr_x)
+        y_incomplete = (dest_y != curr_y)
+        
+        # 只有当flit从水平方向到达时才考虑转换
+        if current_direction in ["TR", "TL"]:
+            return x_complete and y_incomplete
+            
         return False
+    
+    def _should_vertical_cp_transfer_to_rb(self, flit: CrossRingFlit, dest_x: int, dest_y: int,
+                                         curr_x: int, curr_y: int, current_direction: str) -> bool:
+        """
+        垂直CrossPoint判断是否需要转移到ring_bridge
+        
+        Args:
+            flit: flit对象
+            dest_x, dest_y: 目标坐标
+            curr_x, curr_y: 当前坐标
+            current_direction: 当前到达方向
+            
+        Returns:
+            是否需要转移到ring_bridge
+        """
+        # 垂直CrossPoint在YX路由中负责Y维度移动
+        # 检查：Y维度已到达目标，但X维度未到达
+        y_complete = (dest_y == curr_y) 
+        x_incomplete = (dest_x != curr_x)
+        
+        # 只有当flit从垂直方向到达时才考虑转换
+        if current_direction in ["TU", "TD"]:
+            return y_complete and x_incomplete
+            
+        return False
+    
+    def _should_transfer_to_ring_bridge(self, flit: CrossRingFlit, current_direction: str) -> bool:
+        """
+        判断flit是否需要转移到ring_bridge进行维度转换（兼容性方法）
+        
+        Args:
+            flit: 要判断的flit
+            current_direction: 当前到达的方向
+            
+        Returns:
+            是否需要转移到ring_bridge
+        """
+        # 使用新的维度感知逻辑
+        return self.should_eject_to_ring_bridge(flit, current_direction)
+    
+    def _try_transfer_to_ring_bridge(self, flit: CrossRingFlit, slot: Any, from_direction: str, channel: str) -> bool:
+        """
+        尝试将flit从当前环转移到ring_bridge
+        
+        Args:
+            flit: 要转移的flit
+            slot: 包含flit的slot
+            from_direction: 来源方向
+            channel: 通道类型
+            
+        Returns:
+            是否成功转移
+        """
+        # 从slot中取出flit
+        transferred_flit = slot.release_flit()
+        if not transferred_flit:
+            return False
+            
+        # 更新flit状态
+        transferred_flit.flit_position = "RB"
+        transferred_flit.current_node_id = self.node_id
+        
+        # 添加到ring_bridge输入
+        success = self.add_to_ring_bridge_input(transferred_flit, from_direction, channel)
+        if success:
+            self.logger.debug(f"CrossPoint {self.crosspoint_id} 成功将flit转移到ring_bridge")
+        
+        return success
+
+    def add_to_ring_bridge_input(self, flit: CrossRingFlit, from_direction: str, channel: str) -> bool:
+        """
+        将flit添加到ring_bridge输入
+        
+        Args:
+            flit: 要添加的flit
+            from_direction: 来源方向
+            channel: 通道类型
+            
+        Returns:
+            是否成功添加
+        """
+        if self.parent_node is None:
+            self.logger.error(f"CrossPoint {self.crosspoint_id} 没有parent_node引用，无法访问ring_bridge")
+            return False
+            
+        # 调用父Node的ring_bridge输入方法
+        success = self.parent_node.add_to_ring_bridge_input(flit, from_direction, channel)
+        if success:
+            print(f"✅ 节点{self.node_id}: flit {flit.packet_id} 成功写入ring_bridge input {from_direction}_{channel}")
+        else:
+            print(f"❌ 节点{self.node_id}: flit {flit.packet_id} 写入ring_bridge input {from_direction}_{channel}失败")
+        return success
 
     def try_eject_flit(self, slot: CrossRingSlot, channel: str, target_fifo_occupancy: int, target_fifo_depth: int) -> Optional[CrossRingFlit]:
         """
@@ -308,6 +537,11 @@ class CrossRingCrossPoint:
         # 成功下环
         ejected_flit = slot.release_flit()
         if ejected_flit:
+            # 更新flit位置状态 - 从arrival slice下环到eject input FIFO
+            ejected_flit.flit_position = "CP_arrival"
+            ejected_flit.current_node_id = self.node_id
+            ejected_flit.crosspoint_direction = "arrival"
+            
             # 使用Tag管理器处理成功下环
             sub_direction = self._get_sub_direction_from_channel(channel)
             self.tag_manager.on_slot_ejected_successfully(slot, channel, sub_direction)
@@ -339,24 +573,36 @@ class CrossRingCrossPoint:
                 if current_slot and current_slot.is_occupied:
                     flit = current_slot.flit
                     
-                    # 检查是否应该在本节点下环
-                    if self.should_eject_flit(flit):
+                    # 首先检查是否应该最终下环到IP
+                    if self.should_eject_to_ip(flit):
                         # 检查目标eject_input_fifo是否有空间
                         if direction in node_fifos[channel]:
                             eject_fifo = node_fifos[channel][direction]
                             fifo_occupancy = len(eject_fifo.internal_queue)
-                            fifo_depth = eject_fifo.depth
+                            fifo_depth = eject_fifo.max_depth
                             
-                            # 尝试下环
+                            # 尝试下环到IP
                             ejected_flit = self.try_eject_flit(current_slot, channel, fifo_occupancy, fifo_depth)
                             if ejected_flit:
                                 # 成功下环，写入eject_input_fifo
                                 if eject_fifo.write_input(ejected_flit):
+                                    # 更新flit位置状态 - 进入eject input FIFO
+                                    ejected_flit.flit_position = f"eject_{direction}_FIFO"
+                                    ejected_flit.current_node_id = self.node_id
+                                    
+                                    print(f"✅ 节点{self.node_id}: flit {flit.packet_id} 成功下环到IP")
                                     self.logger.debug(f"CrossPoint {self.crosspoint_id} 成功下环flit到{direction}方向eject FIFO")
                                 else:
                                     self.logger.warning(f"CrossPoint {self.crosspoint_id} 下环成功但写入eject FIFO失败")
                             else:
-                                self.logger.debug(f"CrossPoint {self.crosspoint_id} 下环失败，flit继续在环路中传输")
+                                self.logger.debug(f"CrossPoint {self.crosspoint_id} 下环到IP失败，flit继续在环路中传输")
+                    # 检查是否需要维度转换（下环到ring_bridge）
+                    elif self.should_eject_to_ring_bridge(flit, direction):
+                        # 尝试将flit转移到ring_bridge
+                        if self._try_transfer_to_ring_bridge(flit, current_slot, direction, channel):
+                            print(f"🔄 节点{self.node_id}: flit {flit.packet_id} 从{direction}环转移到ring_bridge")
+                        else:
+                            self.logger.debug(f"CrossPoint {self.crosspoint_id} 维度转换失败，flit继续在{direction}环路中传输")
 
     def process_itag_request(self, flit: CrossRingFlit, channel: str, wait_cycles: int) -> bool:
         """
@@ -876,11 +1122,11 @@ class CrossRingNode:
 
         # 初始化CrossPoint实例 - 每个节点有2个CrossPoint
         self.horizontal_crosspoint = CrossRingCrossPoint(
-            crosspoint_id=f"node_{node_id}_horizontal", node_id=node_id, direction=CrossPointDirection.HORIZONTAL, config=config, logger=logger
+            crosspoint_id=f"node_{node_id}_horizontal", node_id=node_id, direction=CrossPointDirection.HORIZONTAL, config=config, coordinates=coordinates, parent_node=self, logger=logger
         )
 
         self.vertical_crosspoint = CrossRingCrossPoint(
-            crosspoint_id=f"node_{node_id}_vertical", node_id=node_id, direction=CrossPointDirection.VERTICAL, config=config, logger=logger
+            crosspoint_id=f"node_{node_id}_vertical", node_id=node_id, direction=CrossPointDirection.VERTICAL, config=config, coordinates=coordinates, parent_node=self, logger=logger
         )
 
         self.logger.debug(f"CrossRing节点初始化: ID={node_id}, 坐标={coordinates}")
@@ -1072,6 +1318,17 @@ class CrossRingNode:
 
         # 为每个通道处理ring_bridge仲裁
         for channel in ["req", "rsp", "data"]:
+            # 只检查req通道的ring_bridge输入FIFO
+            if channel == "req":
+                has_input = False
+                for direction in ["TR", "TL", "TU", "TD"]:
+                    rb_fifo = self.ring_bridge_input_fifos[channel][direction]
+                    if rb_fifo.valid_signal():
+                        has_input = True
+                        print(f"🔍 节点{self.node_id}: ring_bridge input {direction}_{channel} 有flit等待处理")
+                
+                if has_input:
+                    print(f"🔄 节点{self.node_id}: 开始处理{channel}通道的ring_bridge仲裁")
             self._process_channel_ring_bridge_arbitration(channel, cycle)
 
     def _process_channel_ring_bridge_arbitration(self, channel: str, cycle: int) -> None:
@@ -1093,12 +1350,21 @@ class CrossRingNode:
             # 获取来自当前输入源的flit
             flit = self._get_flit_from_ring_bridge_input(input_source, channel)
             if flit is not None:
+                print(f"🎯 节点{self.node_id}: 从{input_source}获取到flit {flit.packet_id}")
                 # 找到flit，现在确定输出方向并分配
                 output_direction = self._determine_ring_bridge_output_direction(flit)
+                print(f"🎯 节点{self.node_id}: flit {flit.packet_id} 输出方向={output_direction}")
                 if self._assign_flit_to_ring_bridge_output(flit, output_direction, channel, cycle):
                     # 成功分配，更新输入仲裁状态
                     arb_state["last_served_input"][input_source] = cycle
+                    print(f"✅ 节点{self.node_id}: flit {flit.packet_id} 成功分配到ring_bridge输出{output_direction}")
                     break
+                else:
+                    print(f"❌ 节点{self.node_id}: flit {flit.packet_id} 分配到ring_bridge输出{output_direction}失败")
+            else:
+                # 只在节点1且为req通道时显示debug信息
+                if self.node_id == 1 and channel == "req":
+                    print(f"🔍 节点{self.node_id}: 输入源{input_source}没有flit")
 
             # 移动到下一个输入源
             arb_state["current_input"] = (current_input_idx + 1) % len(input_sources)
@@ -1412,14 +1678,19 @@ class CrossRingNode:
         Args:
             cycle: 当前周期
         """
-        # 阶段1：组合逻辑阶段 - 更新所有FIFO的组合逻辑
+        
+        # 阶段1：时序逻辑阶段 - 先更新所有FIFO的寄存器状态
+        # 这样可以获取到IP在本周期注入的数据
+        self._step_update_phase()
+        
+        # 阶段2：组合逻辑阶段 - 基于最新寄存器状态更新组合逻辑
         self._step_compute_phase()
 
         # 处理CrossPoint的slot管理
         self.horizontal_crosspoint.step(cycle, self.inject_direction_fifos, self.eject_input_fifos)
         self.vertical_crosspoint.step(cycle, self.inject_direction_fifos, self.eject_input_fifos)
 
-        # 处理注入队列的轮询仲裁
+        # 处理注入队列的轮询仲裁 - 现在基于最新的channel_buffer状态
         self.process_inject_arbitration(cycle)
 
         # 处理ring_bridge的轮询仲裁
@@ -1433,9 +1704,6 @@ class CrossRingNode:
 
         # 更新拥塞控制状态
         self._update_congestion_state()
-
-        # 阶段2：时序逻辑阶段 - 更新所有FIFO的寄存器
-        self._step_update_phase()
 
     def _step_compute_phase(self) -> None:
         """更新所有FIFO的组合逻辑阶段"""
@@ -1745,9 +2013,14 @@ class CrossRingNode:
             cycle: 当前周期
         """
         # 检查IP的inject channel_buffer是否有数据
-        channel_buffer = self.ip_inject_channel_buffers[ip_id][channel]
-        if not channel_buffer.valid_signal():
+        if ip_id not in self.ip_inject_channel_buffers:
+            self.logger.warning(f"节点{self.node_id}: IP {ip_id} 的channel_buffer不存在")
             return
+            
+        channel_buffer = self.ip_inject_channel_buffers[ip_id][channel]
+        
+        if not channel_buffer.valid_signal():
+            return  # 静默处理空buffer
 
         # 获取当前仲裁状态
         arb_state = self.inject_arbitration_state[channel]
@@ -1755,23 +2028,46 @@ class CrossRingNode:
         # 首先peek flit来确定正确的路由方向
         flit = channel_buffer.peek_output()
         if flit is None:
+            self.logger.warning(f"节点{self.node_id}: peek_output返回None")
             return
 
         # 计算正确的路由方向
         correct_direction = self._calculate_routing_direction(flit)
+        
+        # Debug路由决策
+        if hasattr(flit, 'dest_coordinates'):
+            dest_x, dest_y = flit.dest_coordinates
+            curr_x, curr_y = self.coordinates
+            debug_key = f"route_{self.node_id}_{dest_x}_{dest_y}"
+            if not hasattr(flit, '_route_debug_count'):
+                flit._route_debug_count = {}
+            if debug_key not in flit._route_debug_count:
+                flit._route_debug_count[debug_key] = 0
+            flit._route_debug_count[debug_key] += 1
+            
+            # 只显示前几次或异常循环情况
+            if flit._route_debug_count[debug_key] <= 2 or flit._route_debug_count[debug_key] % 5 == 0:
+                print(f"🧭 节点{self.node_id}({curr_x},{curr_y}) → 目标({dest_x},{dest_y}): 路由方向={correct_direction} [第{flit._route_debug_count[debug_key]}次]")
 
         # 检查正确方向的FIFO是否可用
         target_fifo = self.inject_direction_fifos[channel][correct_direction]
+        
         if target_fifo.ready_signal():
             # 现在读取并传输flit
             flit = channel_buffer.read_output()
+            
             if flit is not None and target_fifo.write_input(flit):
+                # 更新flit位置状态
+                flit.flit_position = f"{correct_direction}_FIFO"
+                flit.current_node_id = self.node_id
+                flit.current_position = self.node_id
+                
                 # 成功传输，更新仲裁状态
                 arb_state["last_served"][correct_direction] = cycle
-                self.logger.debug(f"节点{self.node_id}成功将IP {ip_id} {channel}通道flit仲裁到{correct_direction}方向")
-        else:
-            # 目标方向FIFO不可用，等待下个周期
-            self.logger.debug(f"节点{self.node_id} IP {ip_id} {channel}通道目标方向{correct_direction}FIFO不可用，等待")
+                print(f"🎉 节点{self.node_id}: 成功将flit {flit.packet_id}仲裁到{correct_direction}方向")
+                self.logger.info(f"节点{self.node_id}成功将IP {ip_id} {channel}通道flit仲裁到{correct_direction}方向")
+            else:
+                self.logger.error(f"节点{self.node_id}: flit读取或写入失败")
 
     def _should_route_to_direction(self, flit: CrossRingFlit, direction: str) -> bool:
         """
@@ -1825,9 +2121,13 @@ class CrossRingNode:
         # 获取目标坐标
         if hasattr(flit, "dest_coordinates"):
             dest_x, dest_y = flit.dest_coordinates
+        elif hasattr(flit, "dest_xid") and hasattr(flit, "dest_yid"):
+            dest_x, dest_y = flit.dest_xid, flit.dest_yid
         else:
-            # 如果没有坐标信息，默认返回TR
-            return "TR"
+            # 如果没有坐标信息，尝试从destination计算
+            num_col = getattr(self.config, "num_col", 3)
+            dest_x = flit.destination % num_col
+            dest_y = flit.destination // num_col
 
         curr_x, curr_y = self.coordinates
 
@@ -1861,18 +2161,18 @@ class CrossRingNode:
             elif dest_x < curr_x:
                 return "TL"  # 向左
             elif dest_y > curr_y:
-                return "TU"  # 向上
+                return "TD"  # 向下（y坐标增加）
             elif dest_y < curr_y:
-                return "TD"  # 向下
+                return "TU"  # 向上（y坐标减少）
             else:
                 return "EQ"  # 本地
 
         elif strategy == "YX":
             # YX路由：先垂直后水平
             if dest_y > curr_y:
-                return "TU"  # 向上
+                return "TD"  # 向下（y坐标增加）
             elif dest_y < curr_y:
-                return "TD"  # 向下
+                return "TU"  # 向上（y坐标减少）
             elif dest_x > curr_x:
                 return "TR"  # 向右
             elif dest_x < curr_x:

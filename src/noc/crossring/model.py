@@ -347,9 +347,9 @@ class CrossRingModel(BaseNoCModel):
                         arrival_slice = ring_slices[-1]
                         crosspoint.connect_slice(direction_str, "arrival", arrival_slice)
                         
-                        print(f"DEBUG: 连接节点{node_id} {direction_str}方向的slice到CrossPoint")
+                        # CrossPoint slice连接完成
                         
-        print("DEBUG: slice到CrossPoint连接完成")
+        # slice到CrossPoint连接完成
         
     def _get_node_links(self, node_id: int) -> Dict[str, Any]:
         """获取节点的所有链接"""
@@ -367,7 +367,7 @@ class CrossRingModel(BaseNoCModel):
         
     def _connect_ring_slices(self) -> None:
         """连接链路的RingSlice形成传输链"""
-        print("DEBUG: 开始连接RingSlice形成传输链...")
+        # 开始连接RingSlice形成传输链
         
         connected_count = 0
         for link_id, link in self.crossring_links.items():
@@ -385,14 +385,14 @@ class CrossRingModel(BaseNoCModel):
                     
                     connected_count += 1
                     
-        print(f"DEBUG: RingSlice连接完成，共连接{connected_count}个链接")
+        # RingSlice连接完成
         
         # 连接不同链路之间的slice（形成环路）
         self._connect_inter_link_slices()
         
     def _connect_inter_link_slices(self) -> None:
         """连接不同链路之间的slice形成环路"""
-        print("DEBUG: 开始连接不同链路之间的slice...")
+        # 开始连接不同链路之间的slice
         
         for node_id in range(self.config.num_nodes):
             connections = self._get_ring_connections(node_id)
@@ -426,9 +426,9 @@ class CrossRingModel(BaseNoCModel):
                         last_out_slice.downstream_slice = first_in_slice
                         first_in_slice.upstream_slice = last_out_slice
                         
-                        print(f"DEBUG: 连接 {out_link_id} 到 {in_link_id} ({channel}")
+                        # 连接链路slice
                         
-        print("DEBUG: 链路间slice连接完成")
+        # 链路间slice连接完成
         
     def _get_reverse_direction(self, direction: str) -> str:
         """获取相反方向"""
@@ -540,12 +540,57 @@ class CrossRingModel(BaseNoCModel):
             if hasattr(node, "step_compute_phase"):
                 node.step_compute_phase(self.cycle)
 
-    def _step_topology_network_update(self) -> None:
-        """CrossRing网络组件更新阶段"""
+    def step(self) -> None:
+        """重写step方法以确保正确的调用顺序"""
+        self.cycle += 1
+
+        # 阶段0：如果有待注入的文件请求，检查是否需要注入
+        if hasattr(self, 'pending_file_requests') and self.pending_file_requests:
+            self._inject_pending_file_requests()
+
+        # 阶段1：组合逻辑阶段 - 所有组件计算传输决策
+        self._step_compute_phase()
+
+        # 阶段2：时序逻辑阶段 - 所有组件执行传输和状态更新
+        self._step_update_phase()
+        
+        # 明确调用CrossRing网络更新
+        self._crossring_network_update()
+
+        # 更新全局统计
+        self._update_global_statistics()
+
+        # 调试功能
+        if self.debug_enabled:
+            self.debug_func()
+
+        # 定期输出调试信息
+        if self.cycle % self.debug_config["log_interval"] == 0:
+            self._log_periodic_status()
+
+        # Debug模式下的休眠功能
+        if self.debug_enabled and self.debug_config["sleep_time"] > 0:
+            import time
+            time.sleep(self.debug_config["sleep_time"])
+    
+    def _crossring_network_update(self) -> None:
+        """强制执行CrossRing网络更新"""
         # 所有CrossRing节点更新阶段
-        for node in self.crossring_nodes.values():
+        for node_id, node in self.crossring_nodes.items():
             if hasattr(node, "update_state"):
                 node.update_state(self.cycle)
+            else:
+                print(f"  节点{node_id}没有update_state方法")
+        
+        # 所有CrossRing链路传输阶段
+        for link_id, link in self.crossring_links.items():
+            if hasattr(link, "step_transmission"):
+                link.step_transmission(self.cycle)
+
+    def _step_topology_network_update(self) -> None:
+        """CrossRing网络组件更新阶段"""
+        # 这个方法现在被_crossring_network_update替代
+        pass
 
     def _step_topology_network(self) -> None:
         """兼容性接口：单阶段执行模型"""
@@ -2217,13 +2262,24 @@ class CrossRingModel(BaseNoCModel):
         """获取调试统计信息"""
         return self.request_tracker.get_statistics()
 
+    def set_debug_sleep_time(self, sleep_time: float):
+        """
+        设置debug模式下每个周期的休眠时间
+        
+        Args:
+            sleep_time: 休眠时间（秒），0表示不休眠
+        """
+        self.debug_config["sleep_time"] = sleep_time
+        self.logger.info(f"设置debug休眠时间: {sleep_time}秒/周期")
+
     # ========== 实现BaseNoCModel抽象方法 ==========
 
 
     def _step_topology_network(self) -> None:
         """拓扑网络步进（拓扑特定）"""
-        # 使用现有的advance_cycle逻辑
-        pass
+        # 使用两阶段执行模型
+        self._step_topology_network_compute()
+        self._step_topology_network_update()
 
     def _get_topology_info(self) -> Dict[str, Any]:
         """获取拓扑信息（拓扑特定）"""

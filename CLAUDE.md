@@ -248,3 +248,42 @@ When working with CrossRing:
 4. Model coordinates but doesn't handle inject/eject directly
 5. All logging should be in Chinese
 6. Non-wrap-around topology means edge nodes connect to themselves
+
+## Recent Major Fixes (2025-07-10)
+
+### Ring_Bridge重新注入机制修复
+**问题**: Flit卡在ring_bridge（N1.RB），无法从水平环转换到垂直环进行维度转换。
+
+**根本原因**: Ring_bridge输出的flit没有重新注入机制，导致维度转换后flit无法继续传输。
+
+**解决方案**:
+1. **修改CrossPoint注入逻辑**: 在`process_injection_from_fifos`方法中添加ring_bridge输出检查
+   - 水平CrossPoint处理ring_bridge的TR/TL输出
+   - 垂直CrossPoint处理ring_bridge的TU/TD输出
+   - Ring_bridge输出具有比普通inject_direction_fifos更高的优先级
+
+2. **架构理解澄清**: 
+   - CrossRing有两个独立的CrossPoint（水平和垂直）
+   - 它们的输入源完全不同，不需要复杂的仲裁优先级
+   - Ring_bridge作为维度转换桥梁连接两个CrossPoint
+
+3. **验证的数据流路径**:
+   ```
+   IP → channel_buffer → inject_direction_fifos → CrossPoint → Ring → 
+   CrossPoint → ring_bridge_input → ring_bridge仲裁 → ring_bridge_output → 
+   CrossPoint重新注入 → Ring → 目标节点
+   ```
+
+**修复文件**: `/src/noc/crossring/node.py` - `CrossRingCrossPoint.process_injection_from_fifos`
+
+**测试结果**: Flit成功从节点0(0,0)路由到节点4(1,1)，维度转换正常工作。
+
+### 其他修复
+1. **PipelinedFIFO属性错误**: `fifo.depth` → `fifo.max_depth`
+2. **Flit坐标显示**: 修复`source_ip_type`/`dest_ip_type`属性不一致问题
+3. **位置跟踪**: 改进flit状态显示，简化为`source->dest:slice_index`格式
+
+### 调试建议
+- 使用`examples/noc/crossring_debug_demo.py`进行flit传输跟踪
+- 关注ring_bridge仲裁日志："🎯 节点X: 从RB_XX获取到flit"
+- 验证CrossPoint重新注入："✅ CrossPoint node_X_vertical 从ring_bridge XX方向注入flit到环路"

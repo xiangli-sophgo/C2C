@@ -164,8 +164,13 @@ class CrossRingIPInterface(BaseIPInterface):
 
         return True
 
-    def _inject_to_topology_network(self, flit, channel: str) -> None:
-        """注入到CrossRing网络"""
+    def _inject_to_topology_network(self, flit, channel: str) -> bool:
+        """
+        注入到CrossRing网络
+        
+        Returns:
+            是否成功注入
+        """
         # 获取对应的节点
         if self.node_id in self.model.crossring_nodes:
             node = self.model.crossring_nodes[self.node_id]
@@ -174,26 +179,48 @@ class CrossRingIPInterface(BaseIPInterface):
             ip_key = f"{self.ip_type}_node{self.node_id}"
             if ip_key in node.ip_inject_channel_buffers:
                 channel_buffer = node.ip_inject_channel_buffers[ip_key][channel]
-                if channel_buffer.write_input(flit):
-                    flit.flit_position = "IQ_CH"
-                    self.logger.debug(f"IP {self.ip_type} 成功注入flit到节点{self.node_id}的channel buffer")
+                if channel_buffer.can_accept_input():
+                    if channel_buffer.write_input(flit):
+                        # 更新flit位置信息
+                        flit.flit_position = "Node_channel"
+                        flit.current_node_id = self.node_id
+                        
+                        self.logger.debug(f"IP {self.ip_type} 成功注入flit到节点{self.node_id}的channel buffer")
+                        
+                        # 更新时间戳
+                        if channel == "req" and hasattr(flit, "req_attr") and flit.req_attr == "new":
+                            flit.cmd_entry_noc_from_cake0_cycle = self.current_cycle
+                        elif channel == "rsp":
+                            flit.cmd_entry_noc_from_cake1_cycle = self.current_cycle
+                        elif channel == "data":
+                            if flit.req_type == "read":
+                                flit.data_entry_noc_from_cake1_cycle = self.current_cycle
+                            elif flit.req_type == "write":
+                                flit.data_entry_noc_from_cake0_cycle = self.current_cycle
+                        
+                        # 更新RequestTracker状态：flit成功注入到网络
+                        if hasattr(self.model, 'request_tracker') and hasattr(flit, 'packet_id'):
+                            if channel == "req":
+                                self.model.request_tracker.mark_request_injected(flit.packet_id, self.current_cycle)
+                                self.model.request_tracker.add_request_flit(flit.packet_id, flit)
+                            elif channel == "rsp":
+                                self.model.request_tracker.add_response_flit(flit.packet_id, flit)
+                            elif channel == "data":
+                                self.model.request_tracker.add_data_flit(flit.packet_id, flit)
+                                
+                        return True
+                    else:
+                        self.logger.warning(f"IP {self.ip_type} 无法注入flit到节点{self.node_id}的channel buffer - 写入失败")
+                        return False
                 else:
-                    self.logger.warning(f"IP {self.ip_type} 无法注入flit到节点{self.node_id}的channel buffer - buffer满")
+                    # Channel buffer满，无法注入
+                    return False
             else:
                 self.logger.error(f"节点{self.node_id}没有IP {ip_key}的channel buffer")
+                return False
         else:
             self.logger.error(f"节点{self.node_id}不存在于CrossRing网络中")
-
-        # 更新时间戳
-        if channel == "req" and hasattr(flit, "req_attr") and flit.req_attr == "new":
-            flit.cmd_entry_noc_from_cake0_cycle = self.current_cycle
-        elif channel == "rsp":
-            flit.cmd_entry_noc_from_cake1_cycle = self.current_cycle
-        elif channel == "data":
-            if flit.req_type == "read":
-                flit.data_entry_noc_from_cake1_cycle = self.current_cycle
-            elif flit.req_type == "write":
-                flit.data_entry_noc_from_cake0_cycle = self.current_cycle
+            return False
 
     def _eject_from_topology_network(self, channel: str):
         """从CrossRing网络弹出"""
@@ -250,6 +277,7 @@ class CrossRingIPInterface(BaseIPInterface):
             channel="req",
             flit_type="req",
             cmd_entry_cake0_cycle=self.current_cycle,
+            num_col=self.config.num_col,  # 传递列数用于坐标计算
             **kwargs,
         )
 
@@ -258,6 +286,9 @@ class CrossRingIPInterface(BaseIPInterface):
         flit.destination_type = self._get_destination_ip_type(destination)
         flit.original_source_type = flit.source_type
         flit.original_destination_type = flit.destination_type
+        
+        # 验证坐标设置
+        self.logger.debug(f"IP接口: 验证flit坐标 - destination={destination}, dest_coordinates={flit.dest_coordinates}")
 
         return self.inject_fifos["req"].write_input(flit)
 
@@ -912,7 +943,9 @@ class CrossRingIPInterface(BaseIPInterface):
     def inject_request(self, source: NodeId, destination: NodeId, req_type: str, 
                       burst_length: int = 4, packet_id: str = None, **kwargs) -> bool:
         """
-        注入请求到IP接口，遵循正确的流程: inject_request -> L2H -> inject_fifos
+        注入请求到IP接口，保证请求永不丢失
+        
+        数据流： inject_request -> pending_requests -> L2H -> Node channel_buffer
         
         Args:
             source: 源节点ID
@@ -923,7 +956,7 @@ class CrossRingIPInterface(BaseIPInterface):
             **kwargs: 其他参数
             
         Returns:
-            是否成功注入
+            总是返回True（请求被添加到pending_requests队列）
         """
         if not packet_id:
             packet_id = f"{req_type}_{source}_{destination}_{self.current_cycle}"
@@ -931,13 +964,18 @@ class CrossRingIPInterface(BaseIPInterface):
         try:
             # 创建CrossRing Flit
             flit = create_crossring_flit(
-                packet_id=packet_id,
                 source=source,
                 destination=destination,
+                packet_id=packet_id,
                 req_type=req_type,
-                burst_length=burst_length,
-                current_cycle=self.current_cycle
+                burst_length=burst_length
             )
+            
+            # 设置IP类型信息
+            flit.source_type = self.ip_type
+            flit.destination_type = self._get_destination_ip_type(destination)
+            flit.channel = "req"
+            flit.inject_cycle = kwargs.get("inject_cycle", self.current_cycle)
             
             # 注册到请求追踪器
             if hasattr(self.model, 'request_tracker'):
@@ -950,39 +988,35 @@ class CrossRingIPInterface(BaseIPInterface):
                     cycle=kwargs.get("inject_cycle", self.current_cycle)
                 )
             
-            # 遵循正确流程: 直接注入到L2H FIFO
-            channel = "req"  # 请求类型对应req通道
-            if self.l2h_fifos[channel].can_accept_input():
-                success = self.l2h_fifos[channel].write_input(flit)
-                if success:
-                    # 添加到活跃请求追踪
-                    self.active_requests[packet_id] = {
-                        "flit": flit,
-                        "source": source,
-                        "destination": destination,
-                        "req_type": req_type,
-                        "burst_length": burst_length,
-                        "inject_cycle": kwargs.get("inject_cycle", self.current_cycle),
-                        "created_cycle": self.current_cycle,
-                        "stage": "l2h_fifo"
-                    }
-                    
-                    self.logger.debug(f"成功注入请求到L2H: {packet_id} ({req_type}: {source}->{destination})")
-                    return True
-                else:
-                    self.logger.warning(f"L2H FIFO写入失败: {packet_id}")
-                    return False
-            else:
-                self.logger.warning(f"L2H FIFO已满，无法注入: {packet_id}")
-                return False
+            # 设置flit位置信息
+            flit.flit_position = "IP_pending"
+            flit.current_node_id = self.node_id
+            
+            # 添加到pending_requests队列（无限大，永不失败）
+            self.pending_requests.append(flit)
+            
+            # 添加到活跃请求追踪
+            self.active_requests[packet_id] = {
+                "flit": flit,
+                "source": source,
+                "destination": destination,
+                "req_type": req_type,
+                "burst_length": burst_length,
+                "inject_cycle": kwargs.get("inject_cycle", self.current_cycle),
+                "created_cycle": self.current_cycle,
+                "stage": "pending"
+            }
+            
+            self.logger.debug(f"请求已添加到pending_requests: {packet_id} ({req_type}: {source}->{destination})")
+            return True
             
         except Exception as e:
-            self.logger.error(f"注入请求失败: {e}")
+            self.logger.error(f"添加请求到pending_requests失败: {e}")
             return False
 
     def step(self, current_cycle: int) -> None:
         """
-        IP接口周期步进，处理L2H -> inject_fifos -> Node的数据流
+        IP接口周期步进，处理pending_requests -> L2H -> Node的数据流
         
         Args:
             current_cycle: 当前周期
@@ -1001,33 +1035,72 @@ class CrossRingIPInterface(BaseIPInterface):
         for channel in ["req", "rsp", "data"]:
             self.l2h_fifos[channel].step_compute_phase()
             self.inject_fifos[channel].step_compute_phase()
+            
+        # 处理pending_requests -> L2H的传输
+        self._process_pending_to_l2h()
+    
+    def _process_pending_to_l2h(self) -> None:
+        """处理pending_requests到L2H FIFO的传输"""
+        # 只处理req通道的pending请求
+        channel = "req"
+        
+        # 检查L2H是否有空间
+        while self.pending_requests and self.l2h_fifos[channel].can_accept_input():
+            flit = self.pending_requests[0]  # 查看队首
+            
+            # 尝试写入L2H
+            if self.l2h_fifos[channel].write_input(flit):
+                # 成功写入，从pending队列移除
+                self.pending_requests.popleft()
+                
+                # 更新flit位置信息
+                flit.flit_position = "IP_l2h"
+                
+                # 更新请求状态
+                if hasattr(flit, 'packet_id') and flit.packet_id in self.active_requests:
+                    self.active_requests[flit.packet_id]["stage"] = "l2h_fifo"
+                
+                self.logger.debug(f"成功将请求从pending_requests传输到L2H: {flit.packet_id}")
+            else:
+                # 写入失败，停止尝试
+                break
     
     def step_update_phase(self, current_cycle: int) -> None:
-        """更新阶段：执行数据传输 L2H -> inject_fifos"""
-        # 处理L2H到inject_fifos的传输
-        for channel in ["req", "rsp", "data"]:
-            # 检查是否可以从L2H传输到inject_fifos
-            if (self.l2h_fifos[channel].valid_signal() and 
-                self.inject_fifos[channel].can_accept_input()):
-                
-                # 读取L2H FIFO的输出
-                flit = self.l2h_fifos[channel].read_output()
-                if flit:
-                    # 写入到inject_fifos (相当于channel_buffer)
-                    success = self.inject_fifos[channel].write_input(flit)
-                    if success:
-                        # 更新请求状态
-                        if hasattr(flit, 'packet_id') and flit.packet_id in self.active_requests:
-                            self.active_requests[flit.packet_id]["stage"] = "inject_fifos"
-                        
-                        self.logger.debug(f"周期{current_cycle}: L2H->{channel}_inject_fifos传输成功: {flit.packet_id}")
-                    else:
-                        self.logger.warning(f"inject_fifos[{channel}]写入失败")
+        """更新阶段：执行数据传输"""
+        # 处理L2H到Node的传输
+        # 每个IP对应节点的特定channel_buffer，按优先级顺序传输
+        self._process_l2h_to_node(current_cycle)
         
         # 更新所有FIFO的时序状态
         for channel in ["req", "rsp", "data"]:
             self.l2h_fifos[channel].step_update_phase()
             self.inject_fifos[channel].step_update_phase()
+    
+    def _process_l2h_to_node(self, current_cycle: int) -> None:
+        """处理L2H到Node的传输"""
+        # 按优先级顺序处理：req > rsp > data
+        channels = ["req", "rsp", "data"]
+        
+        for channel in channels:
+            if self.l2h_fifos[channel].valid_signal():
+                flit = self.l2h_fifos[channel].peek_output()
+                if flit:
+                    # 尝试注入到拓扑网络（实际上是注入到对应的channel_buffer）
+                    if self._inject_to_topology_network(flit, channel):
+                        # 成功注入，从L2H移除
+                        self.l2h_fifos[channel].read_output()
+                        
+                        # 更新flit位置信息
+                        flit.flit_position = "Node_channel"
+                        
+                        # 更新请求状态
+                        if hasattr(flit, 'packet_id') and flit.packet_id in self.active_requests:
+                            self.active_requests[flit.packet_id]["stage"] = "in_network"
+                        
+                        self.logger.debug(f"周期{current_cycle}: L2H->Node注入成功: {flit.packet_id} (通道{channel})")
+                        
+                        # 每个IP每个周期只传输一个flit，传输完成后退出
+                        return
 
     # 保持向后兼容
     def enqueue_request(self, source: NodeId, destination: NodeId, req_type: str, 

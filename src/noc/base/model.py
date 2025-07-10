@@ -82,6 +82,7 @@ class BaseNoCModel(ABC):
             "trace_channels": [],
             "log_interval": 1000,
             "detailed_stats": False,
+            "sleep_time": 0.0,  # debug模式下每个周期的休眠时间（秒）
         }
         
         # 调试模式标志
@@ -221,15 +222,18 @@ class BaseNoCModel(ABC):
     def step(self) -> None:
         """执行一个仿真周期（使用两阶段执行模型）"""
         self.cycle += 1
+        print(f"DEBUG: BaseModel.step() 周期 {self.cycle}")
 
         # 阶段0：如果有待注入的文件请求，检查是否需要注入
         if hasattr(self, 'pending_file_requests') and self.pending_file_requests:
             self._inject_pending_file_requests()
 
         # 阶段1：组合逻辑阶段 - 所有组件计算传输决策
+        print(f"DEBUG: 调用 _step_compute_phase")
         self._step_compute_phase()
 
         # 阶段2：时序逻辑阶段 - 所有组件执行传输和状态更新
+        print(f"DEBUG: 调用 _step_update_phase")
         self._step_update_phase()
 
         # 更新全局统计
@@ -242,6 +246,10 @@ class BaseNoCModel(ABC):
         # 定期输出调试信息
         if self.cycle % self.debug_config["log_interval"] == 0:
             self._log_periodic_status()
+
+        # Debug模式下的休眠功能
+        if self.debug_enabled and self.debug_config["sleep_time"] > 0:
+            time.sleep(self.debug_config["sleep_time"])
 
     def _step_compute_phase(self) -> None:
         """阶段1：组合逻辑阶段 - 所有组件计算传输决策，不修改状态"""
@@ -978,7 +986,9 @@ class BaseNoCModel(ABC):
                     injected_count += 1
                     self.logger.debug(f"周期 {self.cycle}: 注入请求 {request['src']} -> {request['dst']}")
                 else:
-                    self.logger.warning(f"周期 {self.cycle}: 请求注入失败 (第{request['line_num']}行)")
+                    # 注入失败，保留请求下次重试
+                    self.logger.warning(f"周期 {self.cycle}: 请求注入失败，将在下个周期重试 (第{request['line_num']}行)")
+                    remaining_requests.append(request)
             else:
                 # 保留未来的请求
                 remaining_requests.append(request)

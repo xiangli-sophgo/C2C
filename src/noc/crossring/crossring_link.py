@@ -291,6 +291,28 @@ class RingSlice:
         self.input_buffer[channel] = slot
 
         if slot is not None:
+            # 更新slot中flit的位置信息
+            if slot.flit is not None:
+                slot.flit.flit_position = "Ring_slice"
+                slot.flit.current_link_id = self.slice_id
+                slot.flit.current_slice_index = self.position
+                slot.flit.current_slot_index = slot.slot_id
+                slot.flit.current_position = self.position
+                
+                # 设置链路源和目标节点信息（从slice_id解析）
+                # slice_id格式：link_0_TR_to_1_data_slice_2
+                try:
+                    parts = self.slice_id.split('_')
+                    if len(parts) >= 5 and 'to' in parts:
+                        to_idx = parts.index('to')
+                        if to_idx > 1 and to_idx + 1 < len(parts):
+                            source = int(parts[to_idx - 2])  # link_0_TR_to_1 中的 0
+                            dest = int(parts[to_idx + 1])    # link_0_TR_to_1 中的 1
+                            slot.flit.link_source_node = source
+                            slot.flit.link_dest_node = dest
+                except (ValueError, IndexError):
+                    pass
+                
             self.stats["slots_received"][channel] += 1
             self.logger.debug(f"RingSlice {self.slice_id} 接收到 {channel} 通道的slot {slot.slot_id}")
         else:
