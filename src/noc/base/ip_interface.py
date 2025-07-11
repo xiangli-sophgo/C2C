@@ -290,10 +290,6 @@ class BaseIPInterface(ABC):
         """设置资源管理器（拓扑特定）"""
         pass
 
-    @abstractmethod
-    def _get_destination_ip_type(self, destination: NodeId) -> str:
-        """获取目标节点的IP类型（拓扑特定）"""
-        pass
 
     def step(self, cycle: int) -> None:
         """
@@ -403,42 +399,6 @@ class BaseIPInterface(ABC):
             if self._transfer_states["network_to_h2l"][channel]:
                 self._execute_network_to_h2l(channel)
 
-    def enqueue_request(self, source: NodeId, destination: NodeId, req_type: str, burst_length: int = 4, packet_id: str = None, **kwargs) -> bool:
-        """
-        将新请求加入inject FIFO
-
-        Args:
-            source: 源节点
-            destination: 目标节点
-            req_type: 请求类型
-            burst_length: 突发长度
-            packet_id: 包ID
-            **kwargs: 其他参数
-
-        Returns:
-            是否成功入队
-        """
-        if packet_id is None:
-            packet_id = f"{self.ip_type}_{self.node_id}_{self.current_cycle}_{len(self.inject_fifos['req'])}"
-
-        # 创建请求flit
-        flit = self.flit_class(
-            source=source, destination=destination, req_type=req_type, burst_length=burst_length, packet_id=packet_id, channel="req", flit_type="req", creation_time=self.current_cycle, **kwargs
-        )
-
-        # 设置IP类型信息
-        flit.source_ip_type = self.ip_type
-        flit.dest_ip_type = self._get_destination_ip_type(destination)
-
-        # 加入inject FIFO
-        if not self.inject_fifos["req"].write_input(flit):
-            return False  # FIFO满，无法入队
-
-        # 跟踪活跃请求
-        self.active_requests[packet_id] = {"flit": flit, "created_time": self.current_cycle, "status": "created"}
-
-        self.stats["requests_sent"][req_type] += 1
-        return True
 
     def _can_inject_to_l2h(self, channel: str) -> bool:
         """检查是否可以从inject FIFO传输到l2h FIFO"""

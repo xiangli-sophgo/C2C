@@ -32,10 +32,12 @@ class BaseFlit(ABC):
     destination: NodeId = 0
 
     # ========== 请求类型和数据 ==========
-    req_type: str = "read"  # "read" | "write" | "control"
+    req_type: str = "R"  # "R: read" | "W: write" | "C: control"
     burst_length: int = 1
     flit_size: int = 128  # 数据大小（bytes）
     priority: Priority = Priority.MEDIUM
+    source_type: str = "gdma"
+    destination_type: str = "ddr"
 
     # ========== STI三通道协议（NoC公有） ==========
     channel: str = "req"  # "req" | "rsp" | "data"
@@ -115,8 +117,6 @@ class BaseFlit(ABC):
     congestion_info: Dict[str, Any] = field(default_factory=dict)
 
     # ========== IP和协议信息 ==========
-    source_ip_type: Optional[str] = None
-    dest_ip_type: Optional[str] = None
     protocol_info: Dict[str, Any] = field(default_factory=dict)
 
     # ========== 调试和统计 ==========

@@ -21,7 +21,7 @@ from .flit import CrossRingFlit
 @dataclass
 class CrossRingSlot:
     """
-    CrossRing Slot实现，完全按照Cross Ring Spec v2.0定义。
+    CrossRing Slot实现
 
     Slot是环路上传输的基本载体，包含四部分：
     1. Valid位: 标记是否载有有效Flit
@@ -262,10 +262,10 @@ class RingSlice:
         self.input_buffer: Dict[str, Optional[CrossRingSlot]] = {"req": None, "rsp": None, "data": None}
 
         self.output_buffer: Dict[str, Optional[CrossRingSlot]] = {"req": None, "rsp": None, "data": None}
-        
+
         # 上下游连接
-        self.upstream_slice: Optional['RingSlice'] = None
-        self.downstream_slice: Optional['RingSlice'] = None
+        self.upstream_slice: Optional["RingSlice"] = None
+        self.downstream_slice: Optional["RingSlice"] = None
 
         # 统计信息
         self.stats = {"slots_received": {"req": 0, "rsp": 0, "data": 0}, "slots_transmitted": {"req": 0, "rsp": 0, "data": 0}, "empty_cycles": {"req": 0, "rsp": 0, "data": 0}, "total_cycles": 0}
@@ -283,7 +283,7 @@ class RingSlice:
         """
         if channel not in self.input_buffer:
             return False
-            
+
         # 检查输入缓存是否已满
         if self.input_buffer[channel] is not None:
             return False  # 输入缓存已满，无法接收
@@ -293,24 +293,29 @@ class RingSlice:
         if slot is not None:
             # 更新slot中flit的位置信息
             if slot.flit is not None:
-                slot.flit.flit_position = "Ring_slice"
                 slot.flit.current_link_id = self.slice_id
                 slot.flit.current_slice_index = self.position
                 slot.flit.current_slot_index = slot.slot_id
                 slot.flit.current_position = self.position
-                
-                # 设置链路源和目标节点信息（从slice_id解析）
+
+                # 设置链路源和目标节点信息并格式化位置（从slice_id解析）
                 # slice_id格式：link_0_TR_1_data_slice_2
                 try:
-                    parts = self.slice_id.split('_')
+                    parts = self.slice_id.split("_")
                     if len(parts) >= 5:
                         source = int(parts[1])  # link_0_TR_1 中的 0
-                        dest = int(parts[3])    # link_0_TR_1 中的 1
+                        dest = int(parts[3])  # link_0_TR_1 中的 1
                         slot.flit.link_source_node = source
                         slot.flit.link_dest_node = dest
+                        # 使用位置特定格式：source->dest:slice_index
+                        slot.flit.flit_position = f"{source}->{dest}:{self.position}"
+                    else:
+                        # 如果解析失败，尝试从slice_id中提取节点信息
+                        slot.flit.flit_position = f"UNKNOWN_LINK:{self.position}"
                 except (ValueError, IndexError):
-                    pass
-                
+                    # 解析失败时也尝试提供有意义的位置信息
+                    slot.flit.flit_position = f"PARSE_ERROR:{self.position}"
+
             self.stats["slots_received"][channel] += 1
             self.logger.debug(f"RingSlice {self.slice_id} 接收到 {channel} 通道的slot {slot.slot_id}")
         else:
@@ -368,7 +373,7 @@ class RingSlice:
             if self.current_slots[channel] is not None:
                 self.current_slots[channel].increment_wait()
                 self.current_slots[channel].cycle = cycle
-                
+
             # Step 4: 向下游传输slot
             if self.downstream_slice and self.output_buffer[channel] is not None:
                 transmitted_slot = self.output_buffer[channel]

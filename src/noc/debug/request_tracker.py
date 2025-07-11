@@ -332,6 +332,95 @@ class RequestTracker:
             return self.completed_requests[packet_id]
         return None
 
+    def is_flit_actively_moving(self, flit: Any) -> bool:
+        """检测flit是否在活跃传输状态（非延迟状态）"""
+        if not hasattr(flit, 'flit_position'):
+            return False
+            
+        position = flit.flit_position
+        
+        # 活跃传输状态：flit在网络中移动
+        active_positions = [
+            "Ring_slice",           # 在环路slice中传输
+            "CP_arrival",           # 在CrossPoint到达slice
+            "CP_departure",         # 在CrossPoint出发slice  
+            "channel",              # 在节点channel_buffer中
+            "TR_FIFO", "TL_FIFO", "TU_FIFO", "TD_FIFO",  # 在注入方向FIFO中
+            "RB"                    # 在Ring Buffer中进行维度转换
+        ]
+        
+        # 检查eject FIFO（活跃传输）
+        if "eject_" in position and "_FIFO" in position:
+            return True
+            
+        # 延迟状态：flit在等待或延迟期间
+        latency_positions = [
+            "pending",              # 在IP接口pending队列中等待
+            "l2h_fifo",            # 在时钟域转换FIFO中等待
+            "h2l_fifo"             # 在时钟域转换FIFO中等待
+        ]
+        
+        if position in active_positions:
+            return True
+        elif position in latency_positions:
+            return False
+        else:
+            # 未知位置，保守地认为是活跃的
+            return True
+
+    def is_packet_actively_moving(self, packet_id: str) -> bool:
+        """检测指定packet_id的任何flit是否在活跃传输"""
+        if packet_id not in self.active_requests:
+            return False
+            
+        lifecycle = self.active_requests[packet_id]
+        
+        # 检查所有类型的flit
+        all_flits = []
+        if lifecycle.request_flits:
+            all_flits.extend(lifecycle.request_flits)
+        if lifecycle.response_flits:
+            all_flits.extend(lifecycle.response_flits)
+        if lifecycle.data_flits:
+            all_flits.extend(lifecycle.data_flits)
+            
+        # 如果任何一个flit在活跃传输，则认为packet在活跃传输
+        return any(self.is_flit_actively_moving(flit) for flit in all_flits)
+
+    def get_active_tracked_requests(self) -> Dict[str, RequestLifecycle]:
+        """获取当前追踪的活跃请求"""
+        if not self.trace_specific_packets:
+            # 如果没有指定追踪特定包，返回所有活跃请求
+            return self.active_requests.copy()
+        else:
+            # 只返回被追踪的活跃请求
+            return {
+                packet_id: lifecycle 
+                for packet_id, lifecycle in self.active_requests.items()
+                if packet_id in self.trace_specific_packets
+            }
+
+    def should_show_debug_for_packet(self, packet_id: str) -> bool:
+        """判断是否应该为特定packet显示debug信息"""
+        # 如果没有指定追踪特定包，显示所有包的debug信息
+        if not self.trace_specific_packets:
+            return True
+        # 只为被追踪的包显示debug信息
+        return packet_id in self.trace_specific_packets
+
+    def has_actively_moving_tracked_packets(self) -> bool:
+        """检查是否有被追踪的包在活跃传输"""
+        tracked_requests = self.get_active_tracked_requests()
+        
+        if not tracked_requests:
+            return False
+            
+        # 检查任何被追踪的包是否在活跃传输
+        return any(
+            self.is_packet_actively_moving(packet_id) 
+            for packet_id in tracked_requests.keys()
+        )
+
     def print_final_report(self):
         """打印最终报告"""
         print("\n" + "=" * 60)

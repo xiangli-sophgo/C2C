@@ -48,7 +48,7 @@ class CrossRingFlit(BaseFlit):
     dest_xid: int = 0  # 目标X坐标
     dest_yid: int = 0  # 目标Y坐标
     dest_coordinates: tuple = field(default_factory=lambda: (0, 0))  # 目标坐标元组
-    
+
     @property
     def dest_coords_tuple(self) -> tuple:
         """返回目标坐标元组，用于路由计算"""
@@ -59,7 +59,7 @@ class CrossRingFlit(BaseFlit):
     current_seat_index: int = -1
     current_link: Optional[tuple] = None
     is_on_station: bool = False
-    
+
     # 详细位置追踪
     current_node_id: int = -1  # 当前所在节点ID
     current_link_id: str = ""  # 当前所在链路ID
@@ -77,6 +77,9 @@ class CrossRingFlit(BaseFlit):
     remaining_directions: List[Any] = field(default_factory=list)  # 剩余路由方向
     dimension_turn_cycle: int = -1  # 维度转换周期
     current_direction: str = ""  # 当前传输方向（"horizontal"或"vertical"）
+    
+    # 延迟发送支持
+    departure_cycle: float = 0.0  # 允许发送的周期
 
     def __post_init__(self):
         """初始化后处理"""
@@ -135,7 +138,7 @@ class CrossRingFlit(BaseFlit):
         self._num_col = num_col
         self.dest_xid = self.destination % num_col
         self.dest_yid = self.destination // num_col
-        
+
         # 设置dest_coordinates属性（用于路由计算）
         self.dest_coordinates = (self.dest_xid, self.dest_yid)
 
@@ -242,51 +245,46 @@ class CrossRingFlit(BaseFlit):
         status_str = "".join(status) if status else ""
 
         # IP类型显示 - 简化格式：节点ID:IP类型首字母+索引
-        src_type = self._get_simplified_ip_type(getattr(self, 'source_type', None), self.source) if hasattr(self, 'source_type') and self.source_type else "??"
-        dst_type = self._get_simplified_ip_type(getattr(self, 'destination_type', None), self.destination) if hasattr(self, 'destination_type') and self.destination_type else "??"
+        src_type = self._get_simplified_ip_type(getattr(self, "source_type", None), self.source) if hasattr(self, "source_type") and self.source_type else "??"
+        dst_type = self._get_simplified_ip_type(getattr(self, "destination_type", None), self.destination) if hasattr(self, "destination_type") and self.destination_type else "??"
 
         # Tag信息
         tag_info = ""
         if self.current_tag_info:
             tag_info = f"[{self.current_tag_info}]"
 
-        return (
-            f"{self.packet_id}.{self.flit_id} {src_type}->{dst_type}: "
-            f"{position_str}{tag_info} "
-            f"{req_attr},{self.flit_type},{type_display} "
-            f"{status_str},{self.etag_priority}"
-        )
-    
+        return f"{self.packet_id}.{self.flit_id},{src_type}->{dst_type}:{position_str}{tag_info},{req_attr},{self.flit_type},{type_display},{status_str},{self.etag_priority}"
+
     def _get_simplified_ip_type(self, ip_type_str: str, node_id: int) -> str:
         """
         获取简化的IP类型显示格式
-        
+
         Args:
             ip_type_str: IP类型字符串，如 "gdma_0_node_0"
             node_id: 节点ID
-            
+
         Returns:
             简化格式字符串，如 "0:g0"
         """
         if not ip_type_str:
             return "??"
-        
+
         # 解析IP类型字符串
         # 格式：gdma_0_node_0 -> 0:g0
         # 格式：ddr_4_node_4 -> 4:d4
-        parts = ip_type_str.split('_')
+        parts = ip_type_str.split("_")
         if len(parts) >= 2:
             ip_type = parts[0]  # gdma, ddr, sdma, cdma, l2m
             ip_index = parts[1]  # 0, 1, 2, ...
-            
+
             # 获取IP类型简写
             if ip_type == "ddr":
                 ip_char = "D"
             elif ip_type == "l2m":
                 ip_char = "L"
             else:
-                ip_char = ip_type[0].upper() if ip_type else '?'
-            
+                ip_char = ip_type[0].upper() if ip_type else "?"
+
             # 返回格式：节点ID:IP类型首字母+索引
             return f"{node_id}:{ip_char}{ip_index}"
         else:
@@ -296,10 +294,10 @@ class CrossRingFlit(BaseFlit):
         """获取简化的位置字符串"""
         if self.flit_position == "Ring_slice":
             # 在环路slice中：显示source->dest:slice格式
-            slice_pos = getattr(self, 'current_slice_index', -1)
-            source_node = getattr(self, 'link_source_node', -1)
-            dest_node = getattr(self, 'link_dest_node', -1)
-            
+            slice_pos = getattr(self, "current_slice_index", -1)
+            source_node = getattr(self, "link_source_node", -1)
+            dest_node = getattr(self, "link_dest_node", -1)
+
             if source_node >= 0 and dest_node >= 0 and slice_pos >= 0:
                 return f"{source_node}->{dest_node}:{slice_pos}"
             elif slice_pos >= 0:
@@ -327,7 +325,7 @@ class CrossRingFlit(BaseFlit):
             return f"N{self.current_node_id}.pending"
         elif self.flit_position == "RB":
             # 在Ring Buffer中 - 使用具体的FIFO名称
-            rb_fifo = getattr(self, 'rb_fifo_name', None)
+            rb_fifo = getattr(self, "rb_fifo_name", None)
             if rb_fifo:
                 return f"N{self.current_node_id}.{rb_fifo}"
             else:
@@ -379,7 +377,7 @@ def _reset_crossring_for_reuse(self):
     # 重置tracker信息
     self.rn_tracker_type = None
     self.sn_tracker_type = None
-    
+
     # 重置详细位置追踪字段
     self.current_node_id = -1
     self.current_link_id = ""
@@ -387,6 +385,9 @@ def _reset_crossring_for_reuse(self):
     self.current_slot_index = -1
     self.current_tag_info = ""
     self.crosspoint_direction = ""
+    
+    # 重置延迟发送
+    self.departure_cycle = 0.0
 
 
 CrossRingFlit._reset_for_reuse = _reset_crossring_for_reuse
@@ -516,12 +517,12 @@ def create_crossring_flit(source: NodeId, destination: NodeId, path: Optional[Li
         path = [source, destination]
 
     flit = _global_flit_pool.get_flit(source, destination, path=path, **kwargs)
-    
+
     # 设置CrossRing坐标信息
     # 尝试从kwargs获取num_col，如果没有则使用默认值3
-    num_col = kwargs.get('num_col', 3)
+    num_col = kwargs.get("num_col", 3)
     flit.set_crossring_coordinates(num_col)
-    
+
     return flit
 
 

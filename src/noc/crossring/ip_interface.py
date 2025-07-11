@@ -100,29 +100,15 @@ class CrossRingIPInterface(BaseIPInterface):
         self.data_cir_h_num = 0
         self.data_cir_v_num = 0
 
+        # 创建分通道的pending队列，替代inject_fifos和父类pending_requests
+        self.pending_by_channel = {"req": deque(), "rsp": deque(), "data": deque()}  # 请求  # 响应  # 数据
+
         # 注册到模型已在父类中完成
 
     def _setup_resource_managers(self) -> None:
         """设置CrossRing特有的资源管理器"""
         # 资源管理已在__init__中完成
         pass
-
-    def _get_destination_ip_type(self, destination: NodeId) -> str:
-        """根据目标节点ID推断目标IP类型"""
-        # 根据配置的IP位置列表来推断目标IP类型
-        if destination in self.config.ddr_send_position_list:
-            return "ddr"
-        elif destination in self.config.l2m_send_position_list:
-            return "l2m"
-        elif destination in self.config.gdma_send_position_list:
-            return "gdma"
-        elif destination in getattr(self.config, 'sdma_send_position_list', []):
-            return "sdma"
-        elif destination in getattr(self.config, 'cdma_send_position_list', []):
-            return "cdma"
-        else:
-            # 默认假设是ddr
-            return "ddr"
 
     def _check_and_reserve_resources(self, flit) -> bool:
         """检查并预占RN端资源"""
@@ -175,14 +161,14 @@ class CrossRingIPInterface(BaseIPInterface):
     def _inject_to_topology_network(self, flit, channel: str) -> bool:
         """
         注入到CrossRing网络
-        
+
         Returns:
             是否成功注入
         """
         # 获取对应的节点
         if self.node_id in self.model.crossring_nodes:
             node = self.model.crossring_nodes[self.node_id]
-            
+
             # 注入到节点的对应IP的channel buffer
             ip_key = f"{self.ip_type}_node{self.node_id}"
             if ip_key in node.ip_inject_channel_buffers:
@@ -190,11 +176,11 @@ class CrossRingIPInterface(BaseIPInterface):
                 if channel_buffer.can_accept_input():
                     if channel_buffer.write_input(flit):
                         # 更新flit位置信息
-                        flit.flit_position = "Node_channel"
+                        flit.flit_position = "IQ_CH"
                         flit.current_node_id = self.node_id
-                        
+
                         self.logger.debug(f"IP {self.ip_type} 成功注入flit到节点{self.node_id}的channel buffer")
-                        
+
                         # 更新时间戳
                         if channel == "req" and hasattr(flit, "req_attr") and flit.req_attr == "new":
                             flit.cmd_entry_noc_from_cake0_cycle = self.current_cycle
@@ -205,9 +191,9 @@ class CrossRingIPInterface(BaseIPInterface):
                                 flit.data_entry_noc_from_cake1_cycle = self.current_cycle
                             elif flit.req_type == "write":
                                 flit.data_entry_noc_from_cake0_cycle = self.current_cycle
-                        
+
                         # 更新RequestTracker状态：flit成功注入到网络
-                        if hasattr(self.model, 'request_tracker') and hasattr(flit, 'packet_id'):
+                        if hasattr(self.model, "request_tracker") and hasattr(flit, "packet_id"):
                             if channel == "req":
                                 self.model.request_tracker.mark_request_injected(flit.packet_id, self.current_cycle)
                                 self.model.request_tracker.add_request_flit(flit.packet_id, flit)
@@ -215,7 +201,7 @@ class CrossRingIPInterface(BaseIPInterface):
                                 self.model.request_tracker.add_response_flit(flit.packet_id, flit)
                             elif channel == "data":
                                 self.model.request_tracker.add_data_flit(flit.packet_id, flit)
-                                
+
                         return True
                     else:
                         self.logger.warning(f"IP {self.ip_type} 无法注入flit到节点{self.node_id}的channel buffer - 写入失败")
@@ -235,70 +221,30 @@ class CrossRingIPInterface(BaseIPInterface):
         # 获取对应的节点
         if self.node_id in self.model.crossring_nodes:
             node = self.model.crossring_nodes[self.node_id]
-            
+
             # 从节点的对应IP的eject channel buffer获取flit
             ip_key = f"{self.ip_type}_node{self.node_id}"
+
             if ip_key in node.ip_eject_channel_buffers:
                 eject_buffer = node.ip_eject_channel_buffers[ip_key][channel]
                 if eject_buffer.valid_signal():
                     flit = eject_buffer.read_output()
                     if flit:
+                        # 更新flit状态，从EQ_CH转移到H2L处理
+                        flit.flit_position = "H2L"
                         self.logger.debug(f"IP {self.ip_type} 成功从节点{self.node_id}的eject buffer获取flit")
                     return flit
             else:
-                self.logger.error(f"节点{self.node_id}没有IP {ip_key}的eject buffer")
+                print(f"❌ IP接口 {self.ip_type} 在节点{self.node_id}找不到eject buffer key: {ip_key}")
         else:
             self.logger.error(f"节点{self.node_id}不存在于CrossRing网络中")
-        
+
         return None
 
     def _process_delayed_resource_release(self) -> None:
         """处理延迟释放的资源（重写父类方法）"""
         # 处理SN tracker延迟释放
         self._process_sn_tracker_release()
-
-    def enqueue_request(self, source: NodeId, destination: NodeId, req_type: str, burst_length: int = 4, packet_id: str = None, **kwargs) -> bool:
-        """
-        将新请求加入inject FIFO
-
-        Args:
-            source: 源节点
-            destination: 目标节点
-            req_type: 请求类型 ("read" | "write")
-            burst_length: 突发长度
-            packet_id: 包ID
-            **kwargs: 其他参数
-
-        Returns:
-            是否成功入队
-        """
-        if packet_id is None:
-            packet_id = f"{self.ip_type}_{self.node_id}_{self.current_cycle}_{len(self.inject_fifos['req'])}"
-
-        # 创建请求flit
-        flit = create_crossring_flit(
-            source=source,
-            destination=destination,
-            req_type=req_type,
-            burst_length=burst_length,
-            packet_id=packet_id,
-            channel="req",
-            flit_type="req",
-            cmd_entry_cake0_cycle=self.current_cycle,
-            num_col=self.config.num_col,  # 传递列数用于坐标计算
-            **kwargs,
-        )
-
-        # 设置IP类型信息
-        flit.source_type = self.ip_type
-        flit.destination_type = self._get_destination_ip_type(destination)
-        flit.original_source_type = flit.source_type
-        flit.original_destination_type = flit.destination_type
-        
-        # 验证坐标设置
-        self.logger.debug(f"IP接口: 验证flit坐标 - destination={destination}, dest_coordinates={flit.dest_coordinates}")
-
-        return self.inject_fifos["req"].write_input(flit)
 
     def _check_and_reserve_rn_resources(self, req: CrossRingFlit) -> bool:
         """
@@ -353,6 +299,8 @@ class CrossRingIPInterface(BaseIPInterface):
         Args:
             req: 收到的请求flit
         """
+        # 首先打印调试信息
+
         # 只有SN端IP类型才能处理请求
         if not (self.ip_type.startswith("ddr") or self.ip_type.startswith("l2m")):
             return
@@ -372,22 +320,26 @@ class CrossRingIPInterface(BaseIPInterface):
                     req.sn_tracker_type = "ro"
                     self.sn_tracker.append(req)
                     self.sn_tracker_count["ro"] -= 1
+
+                    # **修复：读请求成功直接生成数据，不生成positive响应**
+                    self.logger.info(f"🎯 SN端开始处理读请求 {req.packet_id}: 直接生成数据")
+
                     self._create_read_packet(req)
                     self._release_completed_sn_tracker(req)
-                    
-                    # **重要修复：通知RequestTracker请求已完成**
-                    self._notify_request_completion(req)
+
+                    self._notify_request_arrived(req)
                 else:
                     # 资源不足，发送negative响应
+                    print(f"❌ SN端 {self.ip_type} 资源不足，发送negative响应给 {req.packet_id}")
                     self._create_negative_response(req)
                     self.sn_req_wait["read"].append(req)
             else:
-                # 重试读请求：直接处理
+                # 重试读请求：直接生成数据
                 self._create_read_packet(req)
                 self._release_completed_sn_tracker(req)
-                
-                # **重要修复：通知RequestTracker请求已完成**
-                self._notify_request_completion(req)
+
+                # **重要修复：通知RequestTracker请求已到达**
+                self._notify_request_arrived(req)
 
         elif req.req_type == "write":
             if req.req_attr == "new":
@@ -486,6 +438,9 @@ class CrossRingIPInterface(BaseIPInterface):
                         f.data_latency = f.data_received_complete_cycle - first_flit.data_entry_noc_from_cake1_cycle
                         f.transaction_latency = f.data_received_complete_cycle - f.cmd_entry_cake0_cycle
 
+                    # **关键修复：通知RequestTracker读请求已完成（RN收到全部数据）**
+                    self._notify_request_completion(req)
+
                     # 清理数据缓冲
                     del self.rn_rdb[flit.packet_id]
 
@@ -509,6 +464,9 @@ class CrossRingIPInterface(BaseIPInterface):
                         f.cmd_latency = f.cmd_received_by_cake0_cycle - f.cmd_entry_noc_from_cake0_cycle
                         f.data_latency = f.data_received_complete_cycle - first_flit.data_entry_noc_from_cake0_cycle
                         f.transaction_latency = f.data_received_complete_cycle + self.config.tracker_config.sn_tracker_release_latency - f.cmd_entry_cake0_cycle
+
+                    # **关键修复：通知RequestTracker写请求已完成（SN收到全部数据）**
+                    self._notify_request_completion(req)
 
                     # 清理数据缓冲
                     del self.sn_wdb[flit.packet_id]
@@ -538,7 +496,7 @@ class CrossRingIPInterface(BaseIPInterface):
         return None
 
     def _handle_read_response(self, rsp: CrossRingFlit, req: CrossRingFlit) -> None:
-        """处理读响应"""
+        """处理读响应（只处理negative响应，读请求成功时不发送响应）"""
         if rsp.rsp_type == "negative":
             # 读重试逻辑
             if req.req_attr == "old":
@@ -550,14 +508,7 @@ class CrossRingIPInterface(BaseIPInterface):
                 del self.rn_rdb[req.packet_id]
             self.rn_rdb_reserve += 1
 
-        elif rsp.rsp_type == "positive":
-            # 处理positive响应：准备重试
-            if req.req_attr == "new":
-                self.rn_rdb_count += req.burst_length
-                if req.packet_id in self.rn_rdb:
-                    del self.rn_rdb[req.packet_id]
-                self.rn_rdb_reserve += 1
-
+            # 重新放入请求队列
             req.req_state = "valid"
             req.req_attr = "old"
             req.is_injected = False
@@ -565,10 +516,12 @@ class CrossRingIPInterface(BaseIPInterface):
             req.is_new_on_network = True
             req.is_arrive = False
 
-            # 重新放入请求队列
             # 重新入队到队首（高优先级重试）
-            self.inject_fifos["req"].appendleft(req)
+            self.pending_by_channel["req"].appendleft(req)
             self.rn_rdb_reserve -= 1
+        else:
+            # 读请求不应该收到positive或其他类型的响应
+            self.logger.warning(f"读请求 {req.packet_id} 收到了意外的响应类型: {rsp.rsp_type}")
 
     def _handle_write_response(self, rsp: CrossRingFlit, req: CrossRingFlit) -> None:
         """处理写响应"""
@@ -587,12 +540,12 @@ class CrossRingIPInterface(BaseIPInterface):
             req.is_new_on_network = True
             req.is_arrive = False
             # 重新入队到队首（高优先级重试）
-            self.inject_fifos["req"].appendleft(req)
+            self.pending_by_channel["req"].appendleft(req)
 
         elif rsp.rsp_type == "datasend":
             # 发送写数据
             for flit in self.rn_wdb[rsp.packet_id]:
-                self.inject_fifos["data"].write_input(flit)
+                self.pending_by_channel["data"].append(flit)
 
             # 释放RN write tracker
             if req in self.rn_tracker["write"]:
@@ -629,14 +582,12 @@ class CrossRingIPInterface(BaseIPInterface):
             data_flit.sync_latency_record(req)
             data_flit.source_type = req.source_type
             data_flit.destination_type = req.destination_type
-            data_flit.original_source_type = req.original_source_type
-            data_flit.original_destination_type = req.original_destination_type
             data_flit.is_last_flit = i == req.burst_length - 1
 
             self.rn_wdb[req.packet_id].append(data_flit)
 
     def _create_read_packet(self, req: CrossRingFlit) -> None:
-        """创建读数据包"""
+        """创建读数据包，使用现有的pending_by_channel机制"""
         for i in range(req.burst_length):
             # 计算发送延迟
             if req.destination_type and req.destination_type.startswith("ddr"):
@@ -660,11 +611,14 @@ class CrossRingIPInterface(BaseIPInterface):
             data_flit.sync_latency_record(req)
             data_flit.source_type = req.destination_type
             data_flit.destination_type = req.source_type
-            data_flit.original_source_type = getattr(req, 'original_destination_type', req.destination_type)
-            data_flit.original_destination_type = getattr(req, 'original_source_type', req.source_type)
             data_flit.is_last_flit = i == req.burst_length - 1
+            data_flit.flit_position = "L2H"
+            data_flit.current_node_id = self.node_id
 
-            self.inject_fifos["data"].write_input(data_flit)
+            # 使用分通道的pending队列
+            self.pending_by_channel["data"].append(data_flit)
+
+            self.logger.info(f"🔶 SN端生成数据flit: {data_flit.packet_id}.{i} -> {data_flit.destination}, departure={data_flit.departure_cycle}")
 
     def _create_negative_response(self, req: CrossRingFlit) -> None:
         """创建negative响应"""
@@ -684,7 +638,7 @@ class CrossRingIPInterface(BaseIPInterface):
         rsp.destination_type = req.source_type
         rsp.sn_rsp_generate_cycle = self.current_cycle
 
-        self.inject_fifos["rsp"].write_input(rsp)
+        self.pending_by_channel["rsp"].append(rsp)
 
     def _create_datasend_response(self, req: CrossRingFlit) -> None:
         """创建datasend响应"""
@@ -704,7 +658,7 @@ class CrossRingIPInterface(BaseIPInterface):
         rsp.destination_type = req.source_type
         rsp.sn_rsp_generate_cycle = self.current_cycle
 
-        self.inject_fifos["rsp"].write_input(rsp)
+        self.pending_by_channel["rsp"].append(rsp)
 
     def _release_completed_sn_tracker(self, req: CrossRingFlit) -> None:
         """释放完成的SN tracker"""
@@ -736,8 +690,8 @@ class CrossRingIPInterface(BaseIPInterface):
                 self.sn_tracker_count[tracker_type] -= 1
                 self.sn_wdb_count -= new_req.burst_length
 
-                # 发送positive响应
-                self._create_positive_response(new_req)
+                # 发送datasend响应
+                self._create_datasend_response(new_req)
 
         elif req_type == "read":
             # 检查tracker资源
@@ -751,26 +705,6 @@ class CrossRingIPInterface(BaseIPInterface):
 
                 # 直接生成读数据包
                 self._create_read_packet(new_req)
-
-    def _create_positive_response(self, req: CrossRingFlit) -> None:
-        """创建positive响应"""
-        rsp = create_crossring_flit(
-            source=req.destination,
-            destination=req.source,
-            req_type=req.req_type,
-            packet_id=req.packet_id,
-            channel="rsp",
-            flit_type="rsp",
-            rsp_type="positive",
-            departure_cycle=self.current_cycle + self.clock_ratio,
-        )
-
-        rsp.sync_latency_record(req)
-        rsp.source_type = req.destination_type
-        rsp.destination_type = req.source_type
-        rsp.sn_rsp_generate_cycle = self.current_cycle
-
-        self.inject_fifos["rsp"].write_input(rsp)
 
     def _process_sn_tracker_release(self) -> None:
         """处理SN tracker的延迟释放"""
@@ -812,9 +746,7 @@ class CrossRingIPInterface(BaseIPInterface):
             },
             "fifo_status": {
                 channel: {
-                    "inject": len(self.inject_fifos[channel]),
-                    "inject_valid": self.inject_fifos[channel].valid_signal(),
-                    "inject_ready": self.inject_fifos[channel].ready_signal(),
+                    "pending": len(self.pending_by_channel[channel]),
                     "l2h": len(self.l2h_fifos[channel]),
                     "l2h_valid": self.l2h_fifos[channel].valid_signal(),
                     "l2h_ready": self.l2h_fifos[channel].ready_signal(),
@@ -954,61 +886,55 @@ class CrossRingIPInterface(BaseIPInterface):
             self.logger.error(f"注入网络失败: {e}")
             return False
 
-    def inject_request(self, source: NodeId, destination: NodeId, req_type: str, 
-                      burst_length: int = 4, packet_id: str = None, **kwargs) -> bool:
+    def inject_request(self, source: NodeId, destination: NodeId, req_type: str, burst_length: int = 4, packet_id: str = None, source_type: str = None, destination_type: str = None, **kwargs) -> bool:
         """
         注入请求到IP接口，保证请求永不丢失
-        
-        数据流： inject_request -> pending_requests -> L2H -> Node channel_buffer
-        
+
+        数据流： inject_request -> pending_by_channel -> L2H -> Node channel_buffer
+
         Args:
             source: 源节点ID
-            destination: 目标节点ID  
+            destination: 目标节点ID
             req_type: 请求类型 ("read" | "write")
             burst_length: 突发长度
             packet_id: 包ID
+            source_type: 源IP类型（从traffic文件获取）
+            destination_type: 目标IP类型（从traffic文件获取）
             **kwargs: 其他参数
-            
+
         Returns:
-            总是返回True（请求被添加到pending_requests队列）
+            总是返回True（请求被添加到pending_by_channel队列）
         """
         if not packet_id:
             packet_id = f"{req_type}_{source}_{destination}_{self.current_cycle}"
-            
+
         try:
             # 创建CrossRing Flit
-            flit = create_crossring_flit(
-                source=source,
-                destination=destination,
-                packet_id=packet_id,
-                req_type=req_type,
-                burst_length=burst_length
-            )
-            
+            flit = create_crossring_flit(source=source, destination=destination, packet_id=packet_id, req_type=req_type, burst_length=burst_length, num_col=self.config.num_col)
+
             # 设置IP类型信息
-            flit.source_type = self.ip_type
-            flit.destination_type = self._get_destination_ip_type(destination)
+            flit.source_type = source_type if source_type else self.ip_type
+            flit.destination_type = destination_type if destination_type else "unknown"
+
+            # 如果没有提供destination_type，记录警告
+            if not destination_type:
+                self.logger.warning(f"⚠️ 没有提供destination_type参数，使用'unknown'作为默认值。建议从traffic文件传入正确的destination_type。")
             flit.channel = "req"
             flit.inject_cycle = kwargs.get("inject_cycle", self.current_cycle)
-            
+
             # 注册到请求追踪器
-            if hasattr(self.model, 'request_tracker'):
+            if hasattr(self.model, "request_tracker"):
                 self.model.request_tracker.start_request(
-                    packet_id=packet_id,
-                    source=source,
-                    destination=destination,
-                    op_type=req_type,
-                    burst_size=burst_length,
-                    cycle=kwargs.get("inject_cycle", self.current_cycle)
+                    packet_id=packet_id, source=source, destination=destination, op_type=req_type, burst_size=burst_length, cycle=kwargs.get("inject_cycle", self.current_cycle)
                 )
-            
+
             # 设置flit位置信息
-            flit.flit_position = "IP_pending"
+            flit.flit_position = "L2H"
             flit.current_node_id = self.node_id
-            
-            # 添加到pending_requests队列（无限大，永不失败）
-            self.pending_requests.append(flit)
-            
+
+            # 添加到pending_by_channel队列（无限大，永不失败）
+            self.pending_by_channel["req"].append(flit)
+
             # 添加到活跃请求追踪
             self.active_requests[packet_id] = {
                 "flit": flit,
@@ -1018,103 +944,105 @@ class CrossRingIPInterface(BaseIPInterface):
                 "burst_length": burst_length,
                 "inject_cycle": kwargs.get("inject_cycle", self.current_cycle),
                 "created_cycle": self.current_cycle,
-                "stage": "pending"
+                "stage": "pending",
             }
-            
-            self.logger.debug(f"请求已添加到pending_requests: {packet_id} ({req_type}: {source}->{destination})")
+
+            self.logger.debug(f"请求已添加到pending_by_channel: {packet_id} ({req_type}: {source}->{destination})")
             return True
-            
+
         except Exception as e:
-            self.logger.error(f"添加请求到pending_requests失败: {e}")
+            self.logger.error(f"添加请求到pending_by_channel失败: {e}")
             return False
 
     def step(self, current_cycle: int) -> None:
         """
-        IP接口周期步进，处理pending_requests -> L2H -> Node的数据流
-        
+        IP接口周期步进，处理pending_by_channel -> L2H -> Node的数据流
+
         Args:
             current_cycle: 当前周期
         """
         self.current_cycle = current_cycle
-        
+
         # 执行计算阶段
         self.step_compute_phase(current_cycle)
-        
-        # 执行更新阶段  
+
+        # 执行更新阶段
         self.step_update_phase(current_cycle)
-    
+
     def step_compute_phase(self, current_cycle: int) -> None:
         """计算阶段：准备传输"""
         # 更新所有FIFO的计算阶段
         for channel in ["req", "rsp", "data"]:
             self.l2h_fifos[channel].step_compute_phase()
-            self.inject_fifos[channel].step_compute_phase()
             self.h2l_fifos[channel].step_compute_phase()
-    
-    def _process_pending_to_l2h(self, current_cycle: int) -> None:
-        """处理pending_requests到L2H FIFO的传输"""
-        # 只处理req通道的pending请求
-        channel = "req"
-        
-        # 检查L2H是否有空间（每周期最多传输一个flit）
-        if self.pending_requests and self.l2h_fifos[channel].can_accept_input():
-            flit = self.pending_requests[0]  # 查看队首
-            
-            # 尝试写入L2H
-            if self.l2h_fifos[channel].write_input(flit):
-                # 成功写入，从pending队列移除
-                self.pending_requests.popleft()
-                
-                # 更新flit位置信息
-                flit.flit_position = "l2h_fifo"
-                
-                # 更新请求状态
-                if hasattr(flit, 'packet_id') and flit.packet_id in self.active_requests:
-                    self.active_requests[flit.packet_id]["stage"] = "l2h_fifo"
-                
-                self.logger.info(f"🔄 周期{current_cycle}: pending->L2H传输: {flit.packet_id}")
-                print(f"🔄 周期{current_cycle}: pending->L2H传输: {flit.packet_id}")
-                return True
+
+    def _process_pending_to_l2h(self, current_cycle: int) -> bool:
+        """处理所有pending队列到L2H FIFO的传输"""
+        # 按优先级顺序处理：req > rsp > data
+        channels = ["req", "rsp", "data"]
+
+        for channel in channels:
+            # 统一使用pending_by_channel处理所有通道
+            if self.pending_by_channel[channel] and self.l2h_fifos[channel].can_accept_input():
+                flit = self.pending_by_channel[channel][0]  # 查看队首
+
+                # 检查departure_cycle延迟
+                if hasattr(flit, "departure_cycle") and current_cycle < flit.departure_cycle:
+                    continue  # 还没到发送时间
+
+                # 尝试写入L2H
+                if self.l2h_fifos[channel].write_input(flit):
+                    # 成功写入，从pending队列移除
+                    self.pending_by_channel[channel].popleft()
+
+                    # 更新flit位置信息
+                    flit.flit_position = "L2H"
+
+                    # 更新请求状态（仅对req通道）
+                    if channel == "req" and hasattr(flit, "packet_id") and flit.packet_id in self.active_requests:
+                        self.active_requests[flit.packet_id]["stage"] = "l2h_fifo"
+
+                    return True
+
         return False
-    
+
     def step_update_phase(self, current_cycle: int) -> None:
         """更新阶段：执行数据传输"""
         # 在更新阶段，我们需要决定执行哪个传输操作：
         # 1. pending -> l2h
         # 2. l2h -> node (inject)
-        # 3. network -> h2l (eject)  
+        # 3. network -> h2l (eject)
         # 4. h2l -> completion
         # 为了确保每周期只前进一个阶段，我们需要优先处理较早阶段的传输
-        
-        # 首先检查是否有pending请求需要传输到l2h
+
+        # 首先检查是否有pending请求需要传输到l2h（包括所有通道）
         pending_transfer_done = self._process_pending_to_l2h(current_cycle)
-        
+
         # 如果没有pending传输，则处理l2h到node的传输
         if not pending_transfer_done:
             l2h_to_node_done = self._process_l2h_to_node(current_cycle)
-            
+
             # 如果没有l2h到node的传输，则处理网络到h2l的传输
             if not l2h_to_node_done:
                 self._process_network_to_h2l(current_cycle)
-        
+
         # 处理h2l到completion的传输（这个可以并行进行）
         self._process_h2l_to_completion(current_cycle)
-        
+
         # 更新所有FIFO的时序状态
         for channel in ["req", "rsp", "data"]:
             self.l2h_fifos[channel].step_update_phase()
             self.h2l_fifos[channel].step_update_phase()  # 添加h2l_fifos的更新
-            self.inject_fifos[channel].step_update_phase()
-    
+
     def _process_l2h_to_node(self, current_cycle: int) -> bool:
         """处理L2H到Node的传输
-        
+
         Returns:
             bool: 是否执行了传输
         """
         # 按优先级顺序处理：req > rsp > data
         channels = ["req", "rsp", "data"]
-        
+
         for channel in channels:
             if self.l2h_fifos[channel].valid_signal():
                 flit = self.l2h_fifos[channel].peek_output()
@@ -1123,69 +1051,63 @@ class CrossRingIPInterface(BaseIPInterface):
                     if self._inject_to_topology_network(flit, channel):
                         # 成功注入，从L2H移除
                         self.l2h_fifos[channel].read_output()
-                        
+
                         # 更新flit位置信息
-                        flit.flit_position = "channel"
+                        flit.flit_position = "IQ_CH"
                         flit.current_node_id = self.node_id
-                        
+
                         # 更新请求状态
-                        if hasattr(flit, 'packet_id') and flit.packet_id in self.active_requests:
+                        if hasattr(flit, "packet_id") and flit.packet_id in self.active_requests:
                             self.active_requests[flit.packet_id]["stage"] = "in_network"
-                        
-                        self.logger.info(f"🔄 周期{current_cycle}: L2H->channel_buffer注入成功: {flit.packet_id} (通道{channel})")
-                        print(f"🔄 周期{current_cycle}: L2H->channel_buffer注入成功: {flit.packet_id} (通道{channel})")
-                        
+
                         # 每个IP每个周期只传输一个flit，传输完成后退出
                         return True
-        
+
         return False
 
     def _process_network_to_h2l(self, current_cycle: int) -> bool:
         """处理网络到H2L的传输（eject）
-        
+
         Returns:
             bool: 是否执行了传输
         """
         # 按优先级顺序处理：req > rsp > data
         channels = ["req", "rsp", "data"]
-        
+
         for channel in channels:
             # 尝试从网络中eject flit
             flit = self._eject_from_topology_network(channel)
             if flit:
                 # 成功获取到flit，写入h2l FIFO
                 if self.h2l_fifos[channel].ready_signal():
-                    flit.flit_position = "h2l_fifo"
+                    flit.flit_position = "H2L"
                     self.h2l_fifos[channel].write_input(flit)
-                    
-                    self.logger.info(f"🔄 周期{current_cycle}: network->h2l eject成功: {flit.packet_id} (通道{channel})")
-                    print(f"🔄 周期{current_cycle}: network->h2l eject成功: {flit.packet_id} (通道{channel})")
-                    
+
                     # 每个IP每个周期只传输一个flit
                     return True
                 else:
                     # h2l FIFO满了，需要等待
                     self.logger.warning(f"⚠️ 周期{current_cycle}: h2l FIFO[{channel}]满，无法eject flit {flit.packet_id}")
                     return False
-        
+
         return False
 
     def _process_h2l_to_completion(self, current_cycle: int) -> bool:
         """处理H2L到IP完成的传输
-        
+
         Returns:
             bool: 是否执行了传输
         """
         # 按优先级顺序处理：req > rsp > data
         channels = ["req", "rsp", "data"]
-        
+
         for channel in channels:
             if self.h2l_fifos[channel].valid_signal():
                 flit = self.h2l_fifos[channel].read_output()
                 if flit:
                     # 设置ejection时间
                     flit.set_ejection_time(current_cycle)
-                    
+
                     # 根据通道类型处理
                     if channel == "req":
                         self._handle_received_request(flit)
@@ -1193,35 +1115,38 @@ class CrossRingIPInterface(BaseIPInterface):
                         self._handle_received_response(flit)
                     elif channel == "data":
                         self._handle_received_data(flit)
-                    
-                    self.logger.info(f"🔄 周期{current_cycle}: h2l->completion完成: {flit.packet_id} (通道{channel})")
-                    print(f"🔄 周期{current_cycle}: h2l->completion完成: {flit.packet_id} (通道{channel})")
-                    
+
                     # 每个IP每个周期只完成一个flit
                     return True
-        
+
         return False
 
-    def _notify_request_completion(self, req: CrossRingFlit) -> None:
-        """通知RequestTracker请求已完成
-        
+    def _notify_request_arrived(self, req: CrossRingFlit) -> None:
+        """通知RequestTracker请求已到达目标
+
         Args:
-            req: 完成的请求flit
+            req: 到达的请求flit
         """
-        if hasattr(self.model, 'request_tracker') and hasattr(req, 'packet_id'):
+        if hasattr(self.model, "request_tracker") and hasattr(req, "packet_id"):
             from src.noc.debug import RequestState
+
             try:
-                self.model.request_tracker.update_request_state(
-                    req.packet_id, 
-                    RequestState.COMPLETED, 
-                    self.current_cycle
-                )
-                self.logger.debug(f"✅ 通知RequestTracker: 请求{req.packet_id}已完成")
+                self.model.request_tracker.update_request_state(req.packet_id, RequestState.ARRIVED, self.current_cycle)
+                self.logger.debug(f"✅ 通知RequestTracker: 请求{req.packet_id}已到达")
             except Exception as e:
                 self.logger.warning(f"⚠️ 通知RequestTracker失败: {e}")
 
-    # 保持向后兼容
-    def enqueue_request(self, source: NodeId, destination: NodeId, req_type: str, 
-                       burst_length: int = 4, packet_id: str = None, **kwargs) -> bool:
-        """向后兼容的别名"""
-        return self.inject_request(source, destination, req_type, burst_length, packet_id, **kwargs)
+    def _notify_request_completion(self, req: CrossRingFlit) -> None:
+        """通知RequestTracker请求已完成
+
+        Args:
+            req: 完成的请求flit
+        """
+        if hasattr(self.model, "request_tracker") and hasattr(req, "packet_id"):
+            from src.noc.debug import RequestState
+
+            try:
+                self.model.request_tracker.update_request_state(req.packet_id, RequestState.COMPLETED, self.current_cycle)
+                self.logger.debug(f"✅ 通知RequestTracker: 请求{req.packet_id}已完成")
+            except Exception as e:
+                self.logger.warning(f"⚠️ 通知RequestTracker失败: {e}")

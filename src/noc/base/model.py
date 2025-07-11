@@ -91,6 +91,10 @@ class BaseNoCModel(ABC):
         
         # 请求追踪器 - 包含完整的flit追踪功能
         self.request_tracker = RequestTracker(network_frequency=getattr(config, 'network_frequency', 1))
+        
+        # packet_id生成器 - 使用简单数字确保唯一性
+        self.next_packet_id = 1
+        self.packet_id_map = {}  # {packet_id: {source, destination, req_type, burst_length}}
 
         self.logger.info(f"NoC模型初始化: {model_name}")
 
@@ -222,18 +226,15 @@ class BaseNoCModel(ABC):
     def step(self) -> None:
         """执行一个仿真周期（使用两阶段执行模型）"""
         self.cycle += 1
-        print(f"DEBUG: BaseModel.step() 周期 {self.cycle}")
 
         # 阶段0：如果有待注入的文件请求，检查是否需要注入
         if hasattr(self, 'pending_file_requests') and self.pending_file_requests:
             self._inject_pending_file_requests()
 
         # 阶段1：组合逻辑阶段 - 所有组件计算传输决策
-        print(f"DEBUG: 调用 _step_compute_phase")
         self._step_compute_phase()
 
         # 阶段2：时序逻辑阶段 - 所有组件执行传输和状态更新
-        print(f"DEBUG: 调用 _step_update_phase")
         self._step_update_phase()
 
         # 更新全局统计
@@ -513,7 +514,7 @@ class BaseNoCModel(ABC):
         return total
 
     def inject_request(self, source: NodeId, destination: NodeId, req_type: str, count: int = 1, 
-                      burst_length: int = 4, ip_type: str = None, **kwargs) -> List[str]:
+                      burst_length: int = 4, ip_type: str = None, source_type: str = None, destination_type: str = None, **kwargs) -> List[str]:
         """
         注入请求
 
@@ -524,6 +525,8 @@ class BaseNoCModel(ABC):
             count: 请求数量
             burst_length: 突发长度
             ip_type: IP类型（可选）
+            source_type: 源IP类型（从traffic文件获取）
+            destination_type: 目标IP类型（从traffic文件获取）
             **kwargs: 其他参数
 
         Returns:
@@ -542,8 +545,22 @@ class BaseNoCModel(ABC):
             return packet_ids
 
         for i in range(count):
-            packet_id = f"test_{source}_{destination}_{req_type}_{self.cycle}_{i}"
-            success = ip_interface.inject_request(source=source, destination=destination, req_type=req_type, burst_length=burst_length, packet_id=packet_id, **kwargs)
+            # 生成简单的数字packet_id
+            packet_id = self.next_packet_id
+            self.next_packet_id += 1
+            
+            # 保存packet_id映射信息
+            self.packet_id_map[packet_id] = {
+                'source': source,
+                'destination': destination,
+                'req_type': req_type,
+                'burst_length': burst_length,
+                'cycle': self.cycle,
+                'source_type': source_type,
+                'destination_type': destination_type
+            }
+            
+            success = ip_interface.inject_request(source=source, destination=destination, req_type=req_type, burst_length=burst_length, packet_id=packet_id, source_type=source_type, destination_type=destination_type, **kwargs)
 
             if success:
                 packet_ids.append(packet_id)
@@ -551,6 +568,25 @@ class BaseNoCModel(ABC):
                 self.logger.warning(f"测试请求注入失败: {packet_id}")
 
         return packet_ids
+    
+    def get_packet_info(self, packet_id) -> Optional[Dict[str, Any]]:
+        """获取packet_id的详细信息"""
+        return self.packet_id_map.get(packet_id)
+        
+    def print_packet_id_map(self) -> None:
+        """打印packet_id映射表"""
+        if not self.packet_id_map:
+            print("📦 尚未生成任何packet")
+            return
+            
+        print(f"\n📦 生成的Packet列表 (共{len(self.packet_id_map)}个):")
+        print("=" * 60)
+        for packet_id, info in self.packet_id_map.items():
+            src_type = info['source_type'] if info['source_type'] else '??'
+            dst_type = info['destination_type'] if info['destination_type'] else '??'
+            print(f"  {packet_id}: {info['source']}:{src_type} -> {info['destination']}:{dst_type} "
+                  f"({info['req_type']}, burst={info['burst_length']})")
+        print("=" * 60)
 
     def _find_ip_interface_for_request(self, node_id: NodeId, req_type: str, ip_type: str = None) -> Optional[BaseIPInterface]:
         """
