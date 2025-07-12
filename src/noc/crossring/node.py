@@ -266,7 +266,7 @@ class CrossRingCrossPoint:
                                 if not self.itag_reservations[channel]["active"]:
                                     # 计算等待时间（简化：从FIFO深度估算）
                                     wait_cycles = len(direction_fifo.internal_queue) * 2  # 简化估算
-                                    if wait_cycles >= self._get_itag_threshold():
+                                    if wait_cycles >= self.ITAG_THRESHOLD:
                                         # 触发I-Tag预约
                                         if self._trigger_itag_reservation(direction, channel, cycle):
                                             self.logger.debug(f"CrossPoint {self.crosspoint_id} 为{direction}方向{channel}通道触发I-Tag预约")
@@ -299,157 +299,58 @@ class CrossRingCrossPoint:
 
         return can_eject
 
-    def should_eject_to_ip(self, flit: CrossRingFlit) -> bool:
+    def should_eject_flit(self, flit: CrossRingFlit, current_direction: str = None) -> Tuple[bool, str]:
         """
-        判断flit是否应该最终下环到IP
-
+        判断flit的下环决策：下环到IP、ring_bridge或继续在环上
+        整合了原来的should_eject_to_ip, should_eject_to_ring_bridge等多个函数
+        
         Args:
             flit: 要判断的flit
-
+            current_direction: 当前到达的方向（可选）
+            
         Returns:
-            是否应该下环到IP
+            (是否下环, 下环目标: "IP" 或 "RB" 或 "")
         """
-        # 必须是目标节点
-        is_local = self.parent_node._is_local_destination(flit) if self.parent_node else False
-
-        # 必须完成所有维度的路由
-        is_routing_complete = self._is_routing_complete(flit)
-
-        should_eject = is_local and is_routing_complete
-
-        # 调试信息
-        if hasattr(flit, "destination") and flit.destination == 0:
-            node_id = self.parent_node.node_id if self.parent_node else -1
-            self.logger.debug(f"节点{node_id}检查flit {flit.packet_id}下环: is_local={is_local}, is_routing_complete={is_routing_complete}, should_eject={should_eject}")
-            if hasattr(flit, "dest_coordinates"):
-                current_coords = self.parent_node.coordinates if self.parent_node else (0, 0)
-                self.logger.debug(f"  flit目标坐标: {flit.dest_coordinates}, 当前节点坐标: {current_coords}")
-
-        return should_eject
-
-    def should_eject_to_ring_bridge(self, flit: CrossRingFlit, current_direction: str) -> bool:
-        """
-        判断flit是否应该下环到ring_bridge进行维度转换
-
-        Args:
-            flit: 要判断的flit
-            current_direction: 当前到达的方向
-
-        Returns:
-            是否应该下环到ring_bridge
-        """
-        if not hasattr(flit, "dest_coordinates"):
-            return False
-
-        dest_x, dest_y = flit.dest_coordinates
-        curr_x, curr_y = self.parent_node.coordinates if self.parent_node else (0, 0)
-
-        # 根据CrossPoint方向和路由策略判断
-        if self.direction == CrossPointDirection.HORIZONTAL:
-            # 水平CrossPoint：检查X维度路由完成，但Y维度未完成
-            return self._should_horizontal_cp_transfer_to_rb(flit, dest_x, dest_y, curr_x, curr_y, current_direction)
-        elif self.direction == CrossPointDirection.VERTICAL:
-            # 垂直CrossPoint：检查Y维度路由完成，但X维度未完成
-            return self._should_vertical_cp_transfer_to_rb(flit, dest_x, dest_y, curr_x, curr_y, current_direction)
-
-        return False
-
-    def should_eject_flit(self, flit: CrossRingFlit) -> bool:
-        """
-        判断flit是否应该在本节点下环（兼容性方法）
-
-        Args:
-            flit: 要判断的flit
-
-        Returns:
-            是否应该下环
-        """
-        should_eject_ip = self.should_eject_to_ip(flit)
-        if hasattr(flit, "destination") and not hasattr(flit, "_eject_debug_shown"):
-            flit._eject_debug_shown = True
-
-        return should_eject_ip
-
-    def _is_routing_complete(self, flit: CrossRingFlit) -> bool:
-        """
-        检查flit是否已完成所有维度的路由
-
-        Args:
-            flit: 要检查的flit
-
-        Returns:
-            是否完成所有路由
-        """
-        if not hasattr(flit, "dest_coordinates"):
-            return True  # 没有坐标信息，假设完成
-
-        dest_x, dest_y = flit.dest_coordinates
-        curr_x, curr_y = self.parent_node.coordinates if self.parent_node else (0, 0)
-
-        # 必须同时满足X和Y坐标到达目标
-        return dest_x == curr_x and dest_y == curr_y
-
-    def _should_horizontal_cp_transfer_to_rb(self, flit: CrossRingFlit, dest_x: int, dest_y: int, curr_x: int, curr_y: int, current_direction: str) -> bool:
-        """
-        水平CrossPoint判断是否需要转移到ring_bridge
-
-        Args:
-            flit: flit对象
-            dest_x, dest_y: 目标坐标
-            curr_x, curr_y: 当前坐标
-            current_direction: 当前到达方向
-
-        Returns:
-            是否需要转移到ring_bridge
-        """
-        # 根据CrossRing架构：XY路由中，水平环的所有下环都必须通过Ring Bridge
-        # X维度已到达目标就应该下环，不管Y维度是否完成
-        x_complete = dest_x == curr_x
-
-        # 只有当flit从水平方向到达时才考虑转换
-        if current_direction in ["TR", "TL"]:
-            should_transfer = x_complete  # XY路由：X维度完成就必须通过RB下环
-            return should_transfer
-
-        return False
-
-    def _should_vertical_cp_transfer_to_rb(self, flit: CrossRingFlit, dest_x: int, dest_y: int, curr_x: int, curr_y: int, current_direction: str) -> bool:
-        """
-        垂直CrossPoint判断是否需要转移到ring_bridge
-
-        Args:
-            flit: flit对象
-            dest_x, dest_y: 目标坐标
-            curr_x, curr_y: 当前坐标
-            current_direction: 当前到达方向
-
-        Returns:
-            是否需要转移到ring_bridge
-        """
-        # 垂直CrossPoint在YX路由中负责Y维度移动
-        # 检查：Y维度已到达目标，但X维度未到达
-        y_complete = dest_y == curr_y
-        x_incomplete = dest_x != curr_x
-
-        # 只有当flit从垂直方向到达时才考虑转换
-        if current_direction in ["TU", "TD"]:
-            return y_complete and x_incomplete
-
-        return False
-
-    def _should_transfer_to_ring_bridge(self, flit: CrossRingFlit, current_direction: str) -> bool:
-        """
-        判断flit是否需要转移到ring_bridge进行维度转换（兼容性方法）
-
-        Args:
-            flit: 要判断的flit
-            current_direction: 当前到达的方向
-
-        Returns:
-            是否需要转移到ring_bridge
-        """
-        # 使用新的维度感知逻辑
-        return self.should_eject_to_ring_bridge(flit, current_direction)
+        if not self.parent_node:
+            return False, ""
+            
+        # 获取坐标信息
+        if hasattr(flit, "dest_coordinates"):
+            dest_x, dest_y = flit.dest_coordinates
+        else:
+            # 没有坐标信息，使用节点ID判断
+            is_local = (hasattr(flit, "destination") and flit.destination == self.parent_node.node_id) or \
+                       (hasattr(flit, "dest_node_id") and flit.dest_node_id == self.parent_node.node_id)
+            return (is_local, "IP") if is_local else (False, "")
+            
+        curr_x, curr_y = self.parent_node.coordinates
+        
+        # 获取路由策略
+        routing_strategy = getattr(self.parent_node.config, "routing_strategy", "XY")
+        if hasattr(routing_strategy, "value"):
+            routing_strategy = routing_strategy.value
+            
+        # 根据CrossPoint方向、路由策略和维度匹配判断下环策略
+        if current_direction:
+            if self.direction == CrossPointDirection.HORIZONTAL and current_direction in ["TR", "TL"]:
+                # 水平CrossPoint: X维度到达时判断下环目标
+                if dest_x == curr_x:
+                    # XY路由：水平环必须通过RB下环
+                    if routing_strategy == "XY":
+                        return True, "RB"  # XY路由水平环必须走RB
+                    else:  # YX路由：水平环可以直接下环到EQ
+                        return True, "EQ" if dest_y == curr_y else "RB"
+                        
+            elif self.direction == CrossPointDirection.VERTICAL and current_direction in ["TU", "TD"]:
+                # 垂直CrossPoint: Y维度到达时判断下环目标
+                if dest_y == curr_y:
+                    # XY路由：垂直环可以通过EQ下环，YX路由：垂直环只能通过RB下环
+                    if routing_strategy == "YX":
+                        return True, "RB"  # YX路由垂直环必须走RB
+                    else:  # XY或其他路由
+                        return True, "EQ" if dest_x == curr_x else "RB"
+                    
+        return False, ""
 
     def _try_transfer_to_ring_bridge(self, flit: CrossRingFlit, slot: Any, from_direction: str, channel: str) -> bool:
         """
@@ -582,13 +483,14 @@ class CrossRingCrossPoint:
                 if current_slot and current_slot.is_occupied:
                     flit = current_slot.flit
 
-                    # 首先检查是否需要维度转换（下环到ring_bridge）- 优先级更高
-                    if self.should_eject_to_ring_bridge(flit, direction):
-                        # 尝试将flit转移到ring_bridge
+                    # 判断flit的下环决策
+                    should_eject, eject_target = self.should_eject_flit(flit, direction)
+                    
+                    if should_eject and eject_target == "RB":
+                        # 需要维度转换（下环到ring_bridge）- 优先级更高
                         if not self._try_transfer_to_ring_bridge(flit, current_slot, direction, channel):
                             self.logger.debug(f"CrossPoint {self.crosspoint_id} 维度转换失败，flit继续在{direction}环路中传输")
-                    # 然后检查是否应该最终下环到IP
-                    elif self.should_eject_to_ip(flit):
+                    elif should_eject and eject_target == "IP":
                         # 检查目标eject_input_fifo是否有空间
                         if direction in node_fifos[channel]:
                             eject_fifo = node_fifos[channel][direction]
@@ -622,7 +524,7 @@ class CrossRingCrossPoint:
         Returns:
             是否成功发起预约
         """
-        threshold = self._get_itag_threshold()
+        threshold = self.ITAG_THRESHOLD
 
         if wait_cycles < threshold:
             return False
@@ -701,7 +603,7 @@ class CrossRingCrossPoint:
             self.injection_queues[channel][i] = (flit, wait_cycles + 1)
 
             # 检查是否需要I-Tag预约
-            if wait_cycles + 1 >= self._get_itag_threshold() and not self.itag_reservations[channel]["active"]:
+            if wait_cycles + 1 >= self.ITAG_THRESHOLD and not self.itag_reservations[channel]["active"]:
                 self.process_itag_request(flit, channel, wait_cycles + 1)
 
         # 尝试注入队首flit
@@ -721,25 +623,17 @@ class CrossRingCrossPoint:
                     self.itag_reservations[channel]["active"] = False
                     self.itag_reservations[channel]["wait_cycles"] = 0
 
-    def _get_etag_limits(self, sub_direction: str) -> Dict[str, int]:
-        """获取E-Tag限制配置"""
-        if sub_direction == "TL":
-            return {"t2_max": 8, "t1_max": 15, "t0_max": float("inf")}
-        elif sub_direction == "TR":
-            return {"t2_max": 12, "t1_max": float("inf"), "t0_max": float("inf")}
-        elif sub_direction == "TU":
-            return {"t2_max": 8, "t1_max": 15, "t0_max": float("inf")}
-        elif sub_direction == "TD":
-            return {"t2_max": 12, "t1_max": float("inf"), "t0_max": float("inf")}
-        else:
-            return {"t2_max": 8, "t1_max": 15, "t0_max": float("inf")}
-
-    def _get_itag_threshold(self) -> int:
-        """获取I-Tag触发阈值"""
-        if self.direction == CrossPointDirection.HORIZONTAL:
-            return 80  # 简化配置
-        else:
-            return 80
+    # E-Tag限制配置常量
+    ETAG_LIMITS = {
+        "TL": {"t2_max": 8, "t1_max": 15, "t0_max": float("inf")},
+        "TR": {"t2_max": 12, "t1_max": float("inf"), "t0_max": float("inf")},
+        "TU": {"t2_max": 8, "t1_max": 15, "t0_max": float("inf")},
+        "TD": {"t2_max": 12, "t1_max": float("inf"), "t0_max": float("inf")},
+        "default": {"t2_max": 8, "t1_max": 15, "t0_max": float("inf")}
+    }
+    
+    # I-Tag触发阈值常量
+    ITAG_THRESHOLD = 80
 
     def _trigger_itag_reservation(self, direction: str, channel: str, cycle: int) -> bool:
         """触发I-Tag预约"""
@@ -764,10 +658,7 @@ class CrossRingCrossPoint:
     def _get_sub_direction_from_channel(self, channel: str) -> str:
         """从通道获取子方向"""
         # 简化实现，实际需要根据具体路由策略确定
-        if self.direction == CrossPointDirection.HORIZONTAL:
-            return "TL"  # 或根据具体情况返回TR
-        else:
-            return "TU"  # 或根据具体情况返回TD
+        return "TL" if self.direction == CrossPointDirection.HORIZONTAL else "TU"
 
     def _check_t0_round_robin_grant(self, flit: CrossRingFlit, channel: str) -> bool:
         """检查T0级轮询仲裁授权"""
@@ -1197,49 +1088,35 @@ class CrossRingNode:
         if self.vertical_crosspoint:
             self.vertical_crosspoint.step(cycle, self.inject_direction_fifos, self.eject_input_fifos)
 
-    def _get_ring_bridge_input_sources(self) -> List[str]:
+    def _get_ring_bridge_config(self) -> Tuple[List[str], List[str]]:
         """
-        根据路由策略获取ring_bridge的输入源
-
+        根据路由策略获取ring_bridge的输入源和输出方向配置
+        
         Returns:
-            输入源列表
+            (输入源列表, 输出方向列表)
         """
         # 获取路由策略
         routing_strategy = getattr(self.config, "routing_strategy", "XY")
         if hasattr(routing_strategy, "value"):
             routing_strategy = routing_strategy.value
-
+            
+        # 根据路由策略配置输入源和输出方向
         if routing_strategy == "XY":
-            return ["IQ_TU", "IQ_TD", "RB_TR", "RB_TL"]
+            # XY路由：主要是水平环flit进入ring_bridge，但也要处理可能的垂直环输入
+            input_sources = ["IQ_TU", "IQ_TD", "RB_TR", "RB_TL", "RB_TU", "RB_TD"]  # 支持所有输入
+            output_directions = ["EQ", "TU", "TD"]  # 垂直环输出
         elif routing_strategy == "YX":
-            return ["IQ_TR", "IQ_TL", "RB_TU", "RB_TD"]
+            input_sources = ["IQ_TR", "IQ_TL", "RB_TU", "RB_TD"]
+            output_directions = ["EQ", "TR", "TL"]
         else:  # ADAPTIVE 或其他
-            return ["IQ_TU", "IQ_TD", "IQ_TR", "IQ_TL", "RB_TR", "RB_TL", "RB_TU", "RB_TD"]
-
-    def _get_ring_bridge_output_directions(self) -> List[str]:
-        """
-        根据路由策略获取ring_bridge的输出方向
-
-        Returns:
-            输出方向列表
-        """
-        # 获取路由策略
-        routing_strategy = getattr(self.config, "routing_strategy", "XY")
-        if hasattr(routing_strategy, "value"):
-            routing_strategy = routing_strategy.value
-
-        base = ["EQ"]  # 总是包含EQ
-        if routing_strategy == "XY":
-            return base + ["TU", "TD"]
-        elif routing_strategy == "YX":
-            return base + ["TR", "TL"]
-        else:  # ADAPTIVE 或其他
-            return base + ["TU", "TD", "TR", "TL"]
+            input_sources = ["IQ_TU", "IQ_TD", "IQ_TR", "IQ_TL", "RB_TR", "RB_TL", "RB_TU", "RB_TD"]
+            output_directions = ["EQ", "TU", "TD", "TR", "TL"]
+            
+        return input_sources, output_directions
 
     def _initialize_ring_bridge_arbitration(self) -> None:
         """初始化ring_bridge仲裁的源和方向列表"""
-        input_sources = self._get_ring_bridge_input_sources()
-        output_directions = self._get_ring_bridge_output_directions()
+        input_sources, output_directions = self._get_ring_bridge_config()
 
         for channel in ["req", "rsp", "data"]:
             arb_state = self.ring_bridge_arbitration_state[channel]
@@ -1324,8 +1201,14 @@ class CrossRingNode:
             # 从ring_bridge_input_fifos获取
             direction = input_source[3:]  # 去掉"RB_"前缀
             rb_fifo = self.ring_bridge_input_fifos[channel][direction]
-            if rb_fifo.valid_signal():
-                return rb_fifo.read_output()
+            # 修复：检查实际队列内容而不仅仅依赖valid_signal
+            if rb_fifo.valid_signal() or len(rb_fifo.internal_queue) > 0:
+                if rb_fifo.valid_signal():
+                    return rb_fifo.read_output()
+                else:
+                    # 直接从内部队列获取（修复FIFO状态不一致问题）
+                    if len(rb_fifo.internal_queue) > 0:
+                        return rb_fifo.internal_queue.popleft()
 
         return None
 
@@ -2014,6 +1897,7 @@ class CrossRingNode:
     def _calculate_routing_direction(self, flit: CrossRingFlit) -> str:
         """
         根据配置的路由策略计算flit的路由方向
+        整合了原来的_apply_routing_strategy和_adaptive_routing_decision函数
 
         Args:
             flit: 要路由的flit
@@ -2043,94 +1927,55 @@ class CrossRingNode:
         if hasattr(routing_strategy, "value"):
             routing_strategy = routing_strategy.value
 
-        return self._apply_routing_strategy(curr_x, curr_y, dest_x, dest_y, routing_strategy)
-
-    def _apply_routing_strategy(self, curr_x: int, curr_y: int, dest_x: int, dest_y: int, strategy: str) -> str:
-        """
-        应用具体的路由策略
-
-        Args:
-            curr_x, curr_y: 当前坐标
-            dest_x, dest_y: 目标坐标
-            strategy: 路由策略 ("XY", "YX", "ADAPTIVE")
-
-        Returns:
-            路由方向
-        """
-        if strategy == "XY":
-            # XY路由：先水平后垂直
-            if dest_x > curr_x:
-                return "TR"  # 向右
-            elif dest_x < curr_x:
-                return "TL"  # 向左
-            elif dest_y > curr_y:
-                return "TD"  # 向下（y坐标增加）
-            elif dest_y < curr_y:
-                return "TU"  # 向上（y坐标减少）
-            else:
-                return "EQ"  # 本地
-
-        elif strategy == "YX":
-            # YX路由：先垂直后水平
-            if dest_y > curr_y:
-                return "TD"  # 向下（y坐标增加）
-            elif dest_y < curr_y:
-                return "TU"  # 向上（y坐标减少）
-            elif dest_x > curr_x:
-                return "TR"  # 向右
-            elif dest_x < curr_x:
-                return "TL"  # 向左
-            else:
-                return "EQ"  # 本地
-
-        elif strategy == "ADAPTIVE":
-            # 自适应路由：可以选择较少拥塞的维度
-            # 这里可以实现更复杂的逻辑，比如检查拥塞状态
-            return self._adaptive_routing_decision(curr_x, curr_y, dest_x, dest_y)
-
-        else:
-            # 未知策略，默认使用XY
-            self.logger.warning(f"未知路由策略 {strategy}，使用XY路由")
-            return self._apply_routing_strategy(curr_x, curr_y, dest_x, dest_y, "XY")
-
-    def _adaptive_routing_decision(self, curr_x: int, curr_y: int, dest_x: int, dest_y: int) -> str:
-        """
-        自适应路由决策（可以根据拥塞状态选择路径）
-
-        Args:
-            curr_x, curr_y: 当前坐标
-            dest_x, dest_y: 目标坐标
-
-        Returns:
-            路由方向
-        """
-        # 检查是否需要水平或垂直移动
+        # 计算移动需求
         need_horizontal = dest_x != curr_x
         need_vertical = dest_y != curr_y
-
-        if need_horizontal and need_vertical:
-            # 需要两个维度的移动，选择拥塞较少的维度
-            # 检查水平环和垂直环的拥塞状态
-            horizontal_congested = self._is_direction_congested("horizontal")
-            vertical_congested = self._is_direction_congested("vertical")
-
-            if horizontal_congested and not vertical_congested:
-                # 水平拥塞，优先垂直
-                return self._apply_routing_strategy(curr_x, curr_y, dest_x, dest_y, "YX")
-            elif vertical_congested and not horizontal_congested:
-                # 垂直拥塞，优先水平
-                return self._apply_routing_strategy(curr_x, curr_y, dest_x, dest_y, "XY")
-            else:
-                # 都不拥塞或都拥塞，使用默认XY路由
-                return self._apply_routing_strategy(curr_x, curr_y, dest_x, dest_y, "XY")
-        elif need_horizontal:
-            # 只需要水平移动
-            return self._apply_routing_strategy(curr_x, curr_y, dest_x, dest_y, "XY")
-        elif need_vertical:
-            # 只需要垂直移动
-            return self._apply_routing_strategy(curr_x, curr_y, dest_x, dest_y, "YX")
+        
+        # 应用路由策略
+        if routing_strategy == "XY":
+            # XY路由：先水平后垂直
+            if need_horizontal:
+                return "TR" if dest_x > curr_x else "TL"
+            elif need_vertical:
+                return "TD" if dest_y > curr_y else "TU"
+                
+        elif routing_strategy == "YX":
+            # YX路由：先垂直后水平
+            if need_vertical:
+                return "TD" if dest_y > curr_y else "TU"
+            elif need_horizontal:
+                return "TR" if dest_x > curr_x else "TL"
+                
+        elif routing_strategy == "ADAPTIVE":
+            # 自适应路由：根据拥塞状态选择路径
+            if need_horizontal and need_vertical:
+                # 需要两个维度的移动，选择拥塞较少的维度
+                horizontal_congested = self._is_direction_congested("horizontal")
+                vertical_congested = self._is_direction_congested("vertical")
+                
+                # 根据拥塞情况选择优先维度
+                if horizontal_congested and not vertical_congested:
+                    # 水平拥塞，优先垂直
+                    return "TD" if dest_y > curr_y else "TU"
+                elif vertical_congested and not horizontal_congested:
+                    # 垂直拥塞，优先水平
+                    return "TR" if dest_x > curr_x else "TL"
+                else:
+                    # 都不拥塞或都拥塞，默认XY路由
+                    return "TR" if dest_x > curr_x else "TL"
+            elif need_horizontal:
+                return "TR" if dest_x > curr_x else "TL"
+            elif need_vertical:
+                return "TD" if dest_y > curr_y else "TU"
         else:
-            return "EQ"  # 本地
+            # 未知策略，默认使用XY
+            self.logger.warning(f"未知路由策略 {routing_strategy}，使用XY路由")
+            if need_horizontal:
+                return "TR" if dest_x > curr_x else "TL"
+            elif need_vertical:
+                return "TD" if dest_y > curr_y else "TU"
+                
+        return "EQ"  # 本地
 
     def _is_direction_congested(self, direction: str) -> bool:
         """

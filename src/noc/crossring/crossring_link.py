@@ -299,12 +299,24 @@ class RingSlice:
                 slot.flit.current_position = self.position
 
                 # 设置链路源和目标节点信息并格式化位置（从slice_id解析）
-                # slice_id格式：link_0_TR_1_data_slice_2
+                # slice_id格式：
+                # 普通链路：link_0_TR_1_req_slice_2 (7个部分)
+                # 自环链路：link_0_TR_TL_0_req_slice_2 (8个部分)
                 try:
                     parts = self.slice_id.split("_")
-                    if len(parts) >= 5:
-                        source = int(parts[1])  # link_0_TR_1 中的 0
-                        dest = int(parts[3])  # link_0_TR_1 中的 1
+                    if len(parts) >= 7:
+                        source = int(parts[1])  # 源节点总是在第2个位置
+                        
+                        # 根据parts数量判断链路类型
+                        if len(parts) == 8:  # 自环链路：link_0_TR_TL_0_req_slice_2
+                            dest = int(parts[4])  # 目标节点在第5个位置
+                        elif len(parts) == 7:  # 普通链路：link_0_TR_1_req_slice_2
+                            dest = int(parts[3])  # 目标节点在第4个位置
+                        else:
+                            # 未知格式，尝试从link_id中提取
+                            link_parts = parts[:4]  # 取link_id部分
+                            dest = int(link_parts[-1])  # 最后一个数字部分作为目标
+                        
                         slot.flit.link_source_node = source
                         slot.flit.link_dest_node = dest
                         # 使用位置特定格式：source->dest:slice_index
@@ -312,8 +324,10 @@ class RingSlice:
                     else:
                         # 如果解析失败，尝试从slice_id中提取节点信息
                         slot.flit.flit_position = f"UNKNOWN_LINK:{self.position}"
-                except (ValueError, IndexError):
+                except (ValueError, IndexError) as e:
                     # 解析失败时也尝试提供有意义的位置信息
+                    # 调试：显示解析失败的详细信息
+                    self.logger.debug(f"slice_id解析失败: {self.slice_id}, 错误: {e}")
                     slot.flit.flit_position = f"PARSE_ERROR:{self.position}"
 
             self.stats["slots_received"][channel] += 1

@@ -17,8 +17,6 @@ import json
 import tempfile
 from pathlib import Path
 
-# 添加src路径以便导入模块
-# sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from src.noc.crossring.config import CrossRingConfig
 from src.noc.crossring.config_factory import CrossRingConfigFactory

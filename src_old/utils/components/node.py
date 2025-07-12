@@ -2,9 +2,10 @@
 Node class for NoC simulation.
 Handles network node functionality including RN/SN trackers and databases.
 """
+
 from __future__ import annotations
 from collections import defaultdict
-from config.config import CrossRingConfig
+from src.noc.crossring.config import CrossRingConfig
 
 
 class Node:

@@ -79,6 +79,11 @@ class CrossRingModel(BaseNoCModel):
             "track_tag_mechanisms": False,
         }
 
+        # 全局调试配置
+        self.debug_enabled = False
+        self.debug_packet_ids = set()  # 要跟踪的packet_id集合
+        self.debug_sleep_time = 0.0  # 每步的睡眠时间
+
         # 初始化模型（包括IP接口创建）
         self.initialize_model()
 
@@ -89,6 +94,82 @@ class CrossRingModel(BaseNoCModel):
             raise RuntimeError("CrossRing网络初始化失败")
 
         self.logger.info(f"CrossRing模型初始化完成: {config.num_row}x{config.num_col}")
+
+    def enable_debug(self, packet_ids=None, sleep_time=0.0):
+        """启用全局调试模式
+
+        Args:
+            packet_ids: 要跟踪的packet_id列表，None表示跟踪所有
+            sleep_time: 每步的睡眠时间(秒)
+        """
+        self.debug_enabled = True
+        if packet_ids is not None:
+            if isinstance(packet_ids, (list, tuple)):
+                # 保持原始类型，不转换为字符串
+                self.debug_packet_ids = set(packet_ids)
+            else:
+                self.debug_packet_ids = {packet_ids}
+        else:
+            self.debug_packet_ids = set()  # 空集合表示跟踪所有
+        self.debug_sleep_time = sleep_time
+        print(f"🔧 调试模式已启用: packet_ids={self.debug_packet_ids or '全部'}, sleep_time={sleep_time}s")
+
+    def disable_debug(self):
+        """禁用全局调试模式"""
+        self.debug_enabled = False
+        self.debug_packet_ids.clear()
+        self.debug_sleep_time = 0.0
+        print("🔧 调试模式已禁用")
+
+    def add_debug_packet(self, packet_id):
+        """添加要跟踪的packet_id"""
+        self.debug_packet_ids.add(packet_id)
+        print(f"🔧 添加调试跟踪: {packet_id}")
+
+    def remove_debug_packet(self, packet_id):
+        """移除跟踪的packet_id"""
+        self.debug_packet_ids.discard(packet_id)
+        print(f"🔧 移除调试跟踪: {packet_id}")
+
+    def _should_debug_packet(self, packet_id):
+        """检查是否应该调试此packet_id"""
+        if not self.debug_enabled:
+            return False
+        # 空集合表示跟踪所有
+        if not self.debug_packet_ids:
+            return True
+        return packet_id in self.debug_packet_ids
+
+    def _print_debug_info(self):
+        """打印调试信息"""
+        if not self.debug_enabled or not hasattr(self, "request_tracker"):
+            return
+
+        # 检查所有要跟踪的packet_ids
+        for packet_id in list(self.debug_packet_ids):
+            if self._should_debug_packet(packet_id):
+                # 获取lifecycle
+                lifecycle = self.request_tracker.active_requests.get(packet_id)
+                if not lifecycle:
+                    lifecycle = self.request_tracker.completed_requests.get(packet_id)
+
+                if lifecycle:
+                    # 简化条件：只要有flit就打印，或者状态变化就打印
+                    total_flits = len(lifecycle.request_flits) + len(lifecycle.response_flits) + len(lifecycle.data_flits)
+                    should_print = total_flits > 0 or lifecycle.current_state != RequestState.CREATED or self.request_tracker.should_print_debug(packet_id)
+
+                    if should_print:
+                        print(f"周期{self.cycle}:")
+
+                        # 打印所有flit的位置
+                        all_flits = lifecycle.request_flits + lifecycle.response_flits + lifecycle.data_flits
+                        for flit in all_flits:
+                            print(f"    {flit}")
+
+                    # 如果完成，从跟踪列表中移除
+                    if lifecycle.current_state.value == "completed":
+                        print(f"✅ 请求{packet_id}已完成，停止跟踪")
+                        self.debug_packet_ids.discard(packet_id)
 
     def _setup_all_ip_interfaces(self) -> None:
         """创建所有IP接口（传统模式）"""
@@ -220,11 +301,19 @@ class CrossRingModel(BaseNoCModel):
                     link_type = "normal"
 
                 # 创建链接ID
-                link_id = f"link_{node_id}_{direction_str}_{neighbor_id}"
+                if neighbor_id == node_id:
+                    # 自环链路：表示它同时服务于两个相反方向
+                    reverse_direction = self.REVERSE_DIRECTION_MAP.get(direction_str, direction_str)
+                    link_id = f"link_{node_id}_{direction_str}_{reverse_direction}_{neighbor_id}"
+                else:
+                    # 普通链路
+                    link_id = f"link_{node_id}_{direction_str}_{neighbor_id}"
 
                 # 创建链接
                 try:
-                    link = CrossRingLink(link_id=link_id, source_node=node_id, dest_node=neighbor_id, direction=direction, config=self.config, num_slices=num_slices, logger=self.logger)
+                    link = CrossRingLink(
+                        link_id=link_id, source_node=node_id, dest_node=neighbor_id, direction=direction, config=self.config, num_slices=num_slices, logger=self.logger
+                    )
                     self.crossring_links[link_id] = link
                     link_count += 1
                 except Exception as e:
@@ -295,42 +384,128 @@ class CrossRingModel(BaseNoCModel):
 
     def _connect_slices_to_crosspoints(self) -> None:
         """连接RingSlice到CrossPoint"""
+        print(f"\n🔧 开始连接CrossPoint slices...")
 
         for node_id, node in self.crossring_nodes.items():
+            print(f"\n处理节点{node_id}:")
             # 处理每个方向
             for direction_str in ["TR", "TL", "TU", "TD"]:
+                print(f"  处理方向 {direction_str}:")
                 # 确定CrossPoint方向
                 crosspoint_direction = "horizontal" if direction_str in ["TR", "TL"] else "vertical"
                 crosspoint = node.get_crosspoint(crosspoint_direction)
 
                 if not crosspoint:
+                    print(f"    ❌ 没有找到 {crosspoint_direction} CrossPoint")
                     continue
 
                 # 获取该方向的出链路（departure）
                 out_link = None
-                for link_id, link in self.crossring_links.items():
-                    if link.source_node == node_id and direction_str in link_id:
-                        out_link = link
-                        break
+                # 获取该方向的邻居节点
+                connections = self._get_ring_connections(node_id)
+                neighbor_id = connections.get(direction_str)
 
-                # 获取该方向的入链路（arrival）
-                reverse_direction = self._get_reverse_direction(direction_str)
-                in_link = None
-                for link_id, link in self.crossring_links.items():
-                    if link.dest_node == node_id and reverse_direction in link_id:
-                        in_link = link
-                        break
+                if neighbor_id is not None:
+                    if neighbor_id == node_id:
+                        # 自环链路
+                        reverse_direction = self.REVERSE_DIRECTION_MAP.get(direction_str, direction_str)
+                        out_link_id = f"link_{node_id}_{direction_str}_{reverse_direction}_{neighbor_id}"
+                    else:
+                        # 普通链路
+                        out_link_id = f"link_{node_id}_{direction_str}_{neighbor_id}"
+
+                    out_link = self.crossring_links.get(out_link_id)
+                    if out_link:
+                        print(f"    ✅ 找到出链路: {out_link_id}")
+                    else:
+                        print(f"    ❌ 未找到出链路: {out_link_id}")
+
+                if not out_link:
+                    print(f"    ❌ 没有找到出链路 node{node_id}_{direction_str}_*")
 
                 # 连接slice
-                for channel in ["req", "rsp", "data"]:
+                for channel in ["req"]:  # 只处理req通道进行调试
+                    print(f"    处理通道 {channel}:")
                     # 连接departure slice（出链路的第一个slice）
                     if out_link and out_link.ring_slices[channel]:
                         departure_slice = out_link.ring_slices[channel][0]
                         crosspoint.connect_slice(direction_str, "departure", departure_slice)
+                        print(f"      ✅ 连接departure slice: {direction_str} <- {out_link.link_id}:0")
+                    else:
+                        print(f"      ❌ 无法连接departure slice: out_link={out_link is not None}")
 
-                    # 连接arrival slice（入链路的最后一个slice）
-                    if in_link and in_link.ring_slices[channel]:
-                        arrival_slice = in_link.ring_slices[channel][-1]
+                    # 连接arrival slice - 需要根据CrossPoint连接规则
+                    arrival_slice = None
+
+                    if direction_str == "TR":
+                        # TR arrival slice来自其他节点的TR链路，如果没有则来自本节点TL自环
+                        found = False
+                        for link_id, link in self.crossring_links.items():
+                            if link.dest_node == node_id and "TR" in link_id and link.source_node != node_id:
+                                if link.ring_slices[channel]:
+                                    arrival_slice = link.ring_slices[channel][-1]  # 其他节点TR链路的最后slice
+                                    found = True
+                                break
+
+                        # 如果没有找到其他节点的TR链路，使用本节点TL_TR自环
+                        if not found:
+                            self_tl_link_id = f"link_{node_id}_TL_TR_{node_id}"
+                            self_tl_link = self.crossring_links.get(self_tl_link_id)
+                            if self_tl_link and self_tl_link.ring_slices[channel] and len(self_tl_link.ring_slices[channel]) > 1:
+                                arrival_slice = self_tl_link.ring_slices[channel][1]  # 自环的第1个slice
+
+                    elif direction_str == "TL":
+                        # TL arrival slice来自其他节点的TL链路，如果没有则来自本节点TR自环
+                        found = False
+                        for link_id, link in self.crossring_links.items():
+                            if link.dest_node == node_id and "TL" in link_id and link.source_node != node_id:
+                                if link.ring_slices[channel]:
+                                    arrival_slice = link.ring_slices[channel][-1]  # 其他节点TL链路的最后slice
+                                    found = True
+                                break
+
+                        # 如果没有找到其他节点的TL链路，使用本节点TR_TL自环
+                        if not found:
+                            self_tr_link_id = f"link_{node_id}_TR_TL_{node_id}"
+                            self_tr_link = self.crossring_links.get(self_tr_link_id)
+                            if self_tr_link and self_tr_link.ring_slices[channel] and len(self_tr_link.ring_slices[channel]) > 1:
+                                arrival_slice = self_tr_link.ring_slices[channel][1]  # 自环的第1个slice
+
+                    elif direction_str == "TU":
+                        # TU arrival slice来自其他节点的TU链路，如果没有则来自本节点TD自环
+                        found = False
+                        for link_id, link in self.crossring_links.items():
+                            if link.dest_node == node_id and "TU" in link_id and link.source_node != node_id:
+                                if link.ring_slices[channel]:
+                                    arrival_slice = link.ring_slices[channel][-1]  # 其他节点TU链路的最后slice
+                                    found = True
+                                break
+
+                        # 如果没有找到其他节点的TU链路，使用本节点TD_TU自环
+                        if not found:
+                            self_td_link_id = f"link_{node_id}_TD_TU_{node_id}"
+                            self_td_link = self.crossring_links.get(self_td_link_id)
+                            if self_td_link and self_td_link.ring_slices[channel] and len(self_td_link.ring_slices[channel]) > 1:
+                                arrival_slice = self_td_link.ring_slices[channel][1]  # 自环的第1个slice
+
+                    elif direction_str == "TD":
+                        # TD arrival slice来自其他节点的TD链路，如果没有则来自本节点TU自环
+                        found = False
+                        for link_id, link in self.crossring_links.items():
+                            if link.dest_node == node_id and "TD" in link_id and link.source_node != node_id:
+                                if link.ring_slices[channel]:
+                                    arrival_slice = link.ring_slices[channel][-1]  # 其他节点TD链路的最后slice
+                                    found = True
+                                break
+
+                        # 如果没有找到其他节点的TD链路，使用本节点TU_TD自环
+                        if not found:
+                            self_tu_link_id = f"link_{node_id}_TU_TD_{node_id}"
+                            self_tu_link = self.crossring_links.get(self_tu_link_id)
+                            if self_tu_link and self_tu_link.ring_slices[channel] and len(self_tu_link.ring_slices[channel]) > 1:
+                                arrival_slice = self_tu_link.ring_slices[channel][1]  # 自环的第1个slice
+
+                    if arrival_slice:
                         crosspoint.connect_slice(direction_str, "arrival", arrival_slice)
 
     def _get_node_links(self, node_id: int) -> Dict[str, Any]:
@@ -372,50 +547,160 @@ class CrossRingModel(BaseNoCModel):
         # 连接不同链路之间的slice（形成环路）
         self._connect_inter_link_slices()
 
+        # 调试：打印所有连接信息
+        self._print_all_connections()
+
     def _connect_inter_link_slices(self) -> None:
         """连接不同链路之间的slice形成环路"""
-        # 开始连接不同链路之间的slice
+        # 按照CrossRing规范，形成正确的单向环路连接
 
         for node_id in range(self.config.num_nodes):
             connections = self._get_ring_connections(node_id)
 
             for direction_str, neighbor_id in connections.items():
                 # 获取当前节点的出链路
-                out_link_id = f"link_{node_id}_{direction_str}_{neighbor_id}"
+                if neighbor_id == node_id:
+                    # 自环链路
+                    reverse_direction = self.REVERSE_DIRECTION_MAP.get(direction_str, direction_str)
+                    out_link_id = f"link_{node_id}_{direction_str}_{reverse_direction}_{neighbor_id}"
+                else:
+                    # 普通链路
+                    out_link_id = f"link_{node_id}_{direction_str}_{neighbor_id}"
                 out_link = self.crossring_links.get(out_link_id)
 
                 if not out_link:
                     continue
 
-                # 获取邻居节点的入链路（反向）
-                reverse_direction = self._get_reverse_direction(direction_str)
-                in_link_id = f"link_{neighbor_id}_{reverse_direction}_{node_id}"
-                in_link = self.crossring_links.get(in_link_id)
+                # 获取下一个链路
+                next_link = None
+                next_link_id = None
 
-                if not in_link:
+                if neighbor_id == node_id:
+                    # 自环情况：连接到反方向的链路
+                    reverse_direction = self.REVERSE_DIRECTION_MAP.get(direction_str, direction_str)
+                    next_neighbor_connections = self._get_ring_connections(node_id)
+                    next_neighbor_id = next_neighbor_connections.get(reverse_direction)
+                    if next_neighbor_id is not None:
+                        if next_neighbor_id == node_id:
+                            # 下一个也是自环
+                            next_reverse = self.REVERSE_DIRECTION_MAP.get(reverse_direction, reverse_direction)
+                            next_link_id = f"link_{node_id}_{reverse_direction}_{next_reverse}_{next_neighbor_id}"
+                        else:
+                            # 下一个是普通链路
+                            next_link_id = f"link_{node_id}_{reverse_direction}_{next_neighbor_id}"
+                        next_link = self.crossring_links.get(next_link_id)
+                else:
+                    # 非自环情况：继续同方向
+                    next_neighbor_connections = self._get_ring_connections(neighbor_id)
+                    next_neighbor_id = next_neighbor_connections.get(direction_str)
+                    if next_neighbor_id is not None:
+                        if next_neighbor_id == neighbor_id:
+                            # 下一个是自环
+                            reverse_direction = self.REVERSE_DIRECTION_MAP.get(direction_str, direction_str)
+                            next_link_id = f"link_{neighbor_id}_{direction_str}_{reverse_direction}_{next_neighbor_id}"
+                        else:
+                            # 下一个是普通链路
+                            next_link_id = f"link_{neighbor_id}_{direction_str}_{next_neighbor_id}"
+                        next_link = self.crossring_links.get(next_link_id)
+
+                if not next_link:
                     continue
 
-                # 连接两个链路的slice
+                # 连接两个同方向链路的slice
                 for channel in ["req", "rsp", "data"]:
                     out_slices = out_link.ring_slices[channel]
-                    in_slices = in_link.ring_slices[channel]
+                    next_slices = next_link.ring_slices[channel]
 
-                    if out_slices and in_slices:
-                        # 出链路的最后一个slice连接到入链路的第一个slice
+                    if out_slices and next_slices:
+                        # 当前链路的最后slice连接到下一个链路的第一个slice
                         last_out_slice = out_slices[-1]
-                        first_in_slice = in_slices[0]
+                        first_next_slice = next_slices[0]
 
-                        last_out_slice.downstream_slice = first_in_slice
-                        first_in_slice.upstream_slice = last_out_slice
-
-                        # 连接链路slice
+                        last_out_slice.downstream_slice = first_next_slice
+                        first_next_slice.upstream_slice = last_out_slice
 
         # 链路间slice连接完成
 
-    def _get_reverse_direction(self, direction: str) -> str:
-        """获取相反方向"""
-        reverse_map = {"TR": "TL", "TL": "TR", "TU": "TD", "TD": "TU"}
-        return reverse_map.get(direction, direction)
+    def _print_all_connections(self) -> None:
+        """打印所有链路连接和CrossPoint连接信息"""
+        print("\n" + "=" * 80)
+        print("🔗 CrossRing 连接信息调试")
+        print("=" * 80)
+
+        # 1. 打印所有链路信息
+        print("\n📋 链路列表:")
+        for link_id, link in sorted(self.crossring_links.items()):
+            slice_count = len(link.ring_slices.get("req", []))
+            print(f"  {link_id}: {link.source_node}->{link.dest_node}, {slice_count} slices")
+
+        # 2. 打印链路间slice连接
+        print("\n🔗 链路间slice连接:")
+        for link_id, link in sorted(self.crossring_links.items()):
+            for channel in ["req"]:  # 只显示req通道
+                slices = link.ring_slices.get(channel, [])
+                if slices:
+                    last_slice = slices[-1]
+                    if hasattr(last_slice, "downstream_slice") and last_slice.downstream_slice:
+                        downstream_info = f"slice_0"  # 简化显示
+                        # 找到downstream slice属于哪个链路
+                        for dst_link_id, dst_link in self.crossring_links.items():
+                            dst_slices = dst_link.ring_slices.get(channel, [])
+                            if dst_slices and dst_slices[0] == last_slice.downstream_slice:
+                                downstream_info = f"{dst_link_id}:0"
+                                break
+                        print(f"  {link_id}:{len(slices)-1} -> {downstream_info}")
+
+        # 3. 打印CrossPoint slice连接
+        print("\n🎯 CrossPoint slice连接:")
+        for node_id, node in sorted(self.crossring_nodes.items()):
+            print(f"\n  节点{node_id} (坐标{node.coordinates}):")
+
+            # 水平CrossPoint
+            h_cp = node.get_crosspoint("horizontal")
+            if h_cp:
+                print(f"    水平CrossPoint:")
+                for direction in ["TR", "TL"]:
+                    for slice_type in ["arrival", "departure"]:
+                        slice_obj = h_cp.slices.get(direction, {}).get(slice_type)
+                        if slice_obj:
+                            # 找到这个slice属于哪个链路
+                            slice_info = "unknown"
+                            for link_id, link in self.crossring_links.items():
+                                for ch in ["req"]:
+                                    slices = link.ring_slices.get(ch, [])
+                                    for i, s in enumerate(slices):
+                                        if s == slice_obj:
+                                            slice_info = f"{link_id}:{i}"
+                                            break
+                            print(f"      {direction} {slice_type}: {slice_info}")
+                        else:
+                            print(f"      {direction} {slice_type}: None")
+
+            # 垂直CrossPoint
+            v_cp = node.get_crosspoint("vertical")
+            if v_cp:
+                print(f"    垂直CrossPoint:")
+                for direction in ["TU", "TD"]:
+                    for slice_type in ["arrival", "departure"]:
+                        slice_obj = v_cp.slices.get(direction, {}).get(slice_type)
+                        if slice_obj:
+                            # 找到这个slice属于哪个链路
+                            slice_info = "unknown"
+                            for link_id, link in self.crossring_links.items():
+                                for ch in ["req"]:
+                                    slices = link.ring_slices.get(ch, [])
+                                    for i, s in enumerate(slices):
+                                        if s == slice_obj:
+                                            slice_info = f"{link_id}:{i}"
+                                            break
+                            print(f"      {direction} {slice_type}: {slice_info}")
+                        else:
+                            print(f"      {direction} {slice_type}: None")
+
+        print("\n" + "=" * 80)
+
+    # 方向反转映射常量
+    REVERSE_DIRECTION_MAP = {"TR": "TL", "TL": "TR", "TU": "TD", "TD": "TU"}
 
     def _get_node_coordinates(self, node_id: NodeId) -> Tuple[int, int]:
         """
@@ -534,19 +819,36 @@ class CrossRingModel(BaseNoCModel):
         # 更新全局统计
         self._update_global_statistics()
 
-        # 调试功能
+        # 全局调试功能
         if self.debug_enabled:
+            self._print_debug_info()
+            # 调试休眠
+            if self.debug_sleep_time > 0:
+                import time
+
+                time.sleep(self.debug_sleep_time)
+
+        # 原有调试功能
+        if hasattr(self, "debug_func") and self.debug_enabled:
             self.debug_func()
 
         # 定期输出调试信息
-        if self.cycle % self.debug_config["log_interval"] == 0:
+        if hasattr(self, "debug_config") and self.cycle % self.debug_config["log_interval"] == 0:
             self._log_periodic_status()
 
-        # Debug模式下的休眠功能
-        if self.debug_enabled and self.debug_config["sleep_time"] > 0:
-            import time
+    def _step_update_phase(self) -> None:
+        """重写更新阶段：恢复标准的两阶段执行模型"""
+        # 标准两阶段模型：所有组件同时更新，无执行顺序依赖
+        # 1. 所有IP接口更新阶段
+        for ip_interface in self.ip_interfaces.values():
+            if hasattr(ip_interface, "step_update_phase"):
+                ip_interface.step_update_phase(self.cycle)
+            else:
+                # 兼容性：如果没有两阶段方法，调用原始step
+                ip_interface.step(self.cycle)
 
-            time.sleep(self.debug_config["sleep_time"])
+        # 2. 拓扑网络组件更新阶段
+        self._step_topology_network_update()
 
     def _step_topology_network_update(self) -> None:
         """CrossRing网络组件更新阶段"""
@@ -599,7 +901,7 @@ class CrossRingModel(BaseNoCModel):
             "num_row": self.config.num_row,
             "num_col": self.config.num_col,
             "num_nodes": self.config.num_nodes,
-            "ring_buffer_depth": self.config.ring_buffer_depth,
+            "ring_buffer_depth": getattr(self.config, "ring_buffer_depth", 4),
             "routing_strategy": self.config.routing_strategy.value if hasattr(self.config.routing_strategy, "value") else str(self.config.routing_strategy),
             "ip_interface_count": len(self.ip_interfaces),
             "crossring_stats": self.crossring_stats.copy(),
@@ -1355,7 +1657,12 @@ class CrossRingModel(BaseNoCModel):
 
     def __repr__(self) -> str:
         """字符串表示"""
-        return f"CrossRingModel({self.config.config_name}, " f"{self.config.num_row}x{self.config.num_col}, " f"cycle={self.cycle}, " f"active_requests={self.get_active_request_count()})"
+        return (
+            f"CrossRingModel({self.config.config_name}, "
+            f"{self.config.num_row}x{self.config.num_col}, "
+            f"cycle={self.cycle}, "
+            f"active_requests={self.get_active_request_count()})"
+        )
 
     # ========== 统一接口方法（用于兼容性） ==========
 
@@ -1457,28 +1764,6 @@ class CrossRingModel(BaseNoCModel):
         return self.config.num_nodes
 
     # ========== 调试功能接口 ==========
-
-    def enable_debug(self, level: int = 1, trace_packets: List[str] = None):
-        """启用调试模式
-
-        Args:
-            level: 调试级别 (1-3)
-            trace_packets: 要追踪的特定包ID列表
-        """
-        self.debug_enabled = True
-        self.request_tracker.enable_debug(level, trace_packets)
-
-        if trace_packets:
-            self.trace_packets.update(trace_packets)
-
-        self.logger.info(f"调试模式已启用，级别: {level}")
-        if trace_packets:
-            self.logger.info(f"追踪包: {trace_packets}")
-
-    def track_packet(self, packet_id: str):
-        """添加要追踪的包"""
-        self.trace_packets.add(packet_id)
-        self.request_tracker.track_packet(packet_id)
 
     def debug_func(self):
         """主调试函数，每个周期调用"""

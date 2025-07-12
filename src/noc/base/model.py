@@ -229,7 +229,9 @@ class BaseNoCModel(ABC):
 
         # 阶段0：如果有待注入的文件请求，检查是否需要注入
         if hasattr(self, 'pending_file_requests') and self.pending_file_requests:
-            self._inject_pending_file_requests()
+            injected = self._inject_pending_file_requests()
+            if injected > 0:
+                print(f"🎯 周期{self.cycle}: 从文件注入了{injected}个请求")
 
         # 阶段1：组合逻辑阶段 - 所有组件计算传输决策
         self._step_compute_phase()
@@ -1008,6 +1010,8 @@ class BaseNoCModel(ABC):
         
         for request in self.pending_file_requests:
             if request['cycle'] <= self.cycle:
+                print(f"🎯 尝试注入: 周期{self.cycle}, 请求周期{request['cycle']}, {request['src']}:{request.get('src_type')} -> {request['dst']}:{request.get('dst_type')}")
+                
                 # 注入这个请求
                 packet_ids = self.inject_request(
                     source=request['src'],
@@ -1015,14 +1019,18 @@ class BaseNoCModel(ABC):
                     req_type=request['op_type'],
                     count=1,
                     burst_length=request['burst'],
-                    ip_type=request.get('src_type')
+                    ip_type=request.get('src_type'),
+                    source_type=request.get('src_type'),
+                    destination_type=request.get('dst_type')
                 )
                 
                 if packet_ids:
                     injected_count += 1
+                    print(f"✅ 注入成功: packet_ids={packet_ids}")
                     self.logger.debug(f"周期 {self.cycle}: 注入请求 {request['src']} -> {request['dst']}")
                 else:
                     # 注入失败，保留请求下次重试
+                    print(f"❌ 注入失败: {request['src']} -> {request['dst']}")
                     self.logger.warning(f"周期 {self.cycle}: 请求注入失败，将在下个周期重试 (第{request['line_num']}行)")
                     remaining_requests.append(request)
             else:

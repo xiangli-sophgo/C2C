@@ -238,9 +238,6 @@ class BaseIPInterface(ABC):
         # ========== STI三通道FIFO ==========
         self.inject_fifos = {"req": PipelinedFIFO("inject_req", depth=16), "rsp": PipelinedFIFO("inject_rsp", depth=16), "data": PipelinedFIFO("inject_data", depth=16)}
 
-        # ========== 资源管理器 ==========
-        self._setup_resource_managers()
-
         # ========== 统计信息 ==========
         self.stats = {
             "requests_sent": {"read": 0, "write": 0},
@@ -285,16 +282,11 @@ class BaseIPInterface(ABC):
             "h2l_to_completion": {"req": False, "rsp": False, "data": False},
         }
 
-    @abstractmethod
-    def _setup_resource_managers(self) -> None:
-        """设置资源管理器（拓扑特定）"""
-        pass
-
 
     def step(self, cycle: int) -> None:
         """
         执行一个周期，使用三阶段执行模型确保正确的时序行为
-        
+
         数据流路径：
         1. pending_requests → L2H FIFO (时钟域转换)
         2. L2H FIFO → 拓扑网络
@@ -398,7 +390,6 @@ class BaseIPInterface(ABC):
             # network → h2l 传输
             if self._transfer_states["network_to_h2l"][channel]:
                 self._execute_network_to_h2l(channel)
-
 
     def _can_inject_to_l2h(self, channel: str) -> bool:
         """检查是否可以从inject FIFO传输到l2h FIFO"""
