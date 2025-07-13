@@ -36,8 +36,7 @@ from .model import (
 
 # 导入现有的组件
 from .crossring_link import CrossRingSlot, RingSlice
-from .node import CrossRingCrossPoint
-from .tag_mechanism import CrossRingTagManager
+from .cross_point import CrossRingTagManager, CrossRingCrossPoint, CrossPointDirection
 
 # 版本信息
 __version__ = "1.0.0"

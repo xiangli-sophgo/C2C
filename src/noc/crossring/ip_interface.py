@@ -225,7 +225,7 @@ class CrossRingIPInterface(BaseIPInterface):
                         self.logger.debug(f"IP {self.ip_type} 成功从节点{self.node_id}的eject buffer获取flit")
                     return flit
             else:
-                print(f"❌ IP接口 {self.ip_type} 在节点{self.node_id}找不到eject buffer key: {ip_key}")
+                self.logger.warning(f"IP接口 {self.ip_type} 在节点{self.node_id}找不到eject buffer key: {ip_key}")
         else:
             self.logger.error(f"节点{self.node_id}不存在于CrossRing网络中")
 
@@ -273,7 +273,7 @@ class CrossRingIPInterface(BaseIPInterface):
                     self._notify_request_arrived(req)
                 else:
                     # 资源不足，发送negative响应
-                    print(f"❌ SN端 {self.ip_type} 资源不足，发送negative响应给 {req.packet_id}")
+                    self.logger.info(f"SN端 {self.ip_type} 资源不足，发送negative响应给 {req.packet_id}")
                     self._create_negative_response(req)
                     self.sn_req_wait["read"].append(req)
             else:
@@ -329,7 +329,7 @@ class CrossRingIPInterface(BaseIPInterface):
         if not req:
             # 对于datasend类型的响应，即使找不到匹配的请求也要处理，因为这是正常的write流程
             if hasattr(rsp, "rsp_type") and rsp.rsp_type == "datasend":
-                print(f"🎯 处理datasend响应: packet_id={rsp.packet_id}, req_type={rsp.req_type}")
+                self.logger.debug(f"处理datasend响应: packet_id={rsp.packet_id}, req_type={rsp.req_type}")
                 self.logger.debug(f"收到datasend响应 {rsp.packet_id}，请求可能已移出tracker，继续处理")
                 # 直接处理datasend响应，req可以为None
                 if rsp.req_type == "write":
@@ -365,6 +365,11 @@ class CrossRingIPInterface(BaseIPInterface):
 
         if flit.req_type == "read":
             # 读数据到达RN端
+            # 确保RDB条目存在（防止KeyError）
+            if flit.packet_id not in self.rn_rdb:
+                self.logger.warning(f"⚠️ 收到数据时RDB中没有packet_id {flit.packet_id}，正在创建条目")
+                self.rn_rdb[flit.packet_id] = []
+            
             self.rn_rdb[flit.packet_id].append(flit)
 
             # 检查是否收集完整个burst
@@ -398,6 +403,9 @@ class CrossRingIPInterface(BaseIPInterface):
 
         elif flit.req_type == "write":
             # 写数据到达SN端
+            # 确保sn_wdb中有对应的列表
+            if flit.packet_id not in self.sn_wdb:
+                self.sn_wdb[flit.packet_id] = []
             self.sn_wdb[flit.packet_id].append(flit)
 
             # 检查是否收集完整个burst
@@ -496,32 +504,52 @@ class CrossRingIPInterface(BaseIPInterface):
 
         elif rsp.rsp_type == "datasend":
             # ✅ 修复：收到datasend响应后才创建并发送写数据
-            print(f"🎯 处理datasend响应: packet_id={rsp.packet_id}")
+            self.logger.debug(f"处理datasend响应: packet_id={rsp.packet_id}")
+
+            # 检查是否已经处理过这个datasend响应（避免重复处理）
+            if hasattr(rsp, 'datasend_processed') and rsp.datasend_processed:
+                self.logger.debug(f"datasend响应{rsp.packet_id}已经处理过，跳过")
+                return
+            
+            # 标记为已处理
+            rsp.datasend_processed = True
 
             # 确保WDB条目存在
             if rsp.packet_id not in self.rn_wdb:
                 self.logger.error(f"⚠️ 没有{rsp.packet_id}对应的请求")
 
-            # 创建写数据flits
-            self._create_write_data_flits(req)
-
-            # 发送写数据
+            # 检查请求对象是否有效
+            if req is None:
+                self.logger.error(f"❌ datasend响应{rsp.packet_id}找不到对应的请求对象")
+                self.logger.error(f"当前RN tracker中的写请求: {[r.packet_id for r in self.rn_tracker['write']]}")
+                self.logger.error(f"当前WDB中的条目: {list(self.rn_wdb.keys())}")
+                return
+                
+            # 获取已存在的写数据flits（它们应该在发送写请求时已经创建）
             data_flits = self.rn_wdb.get(rsp.packet_id, [])
+            
+            # 如果WDB中没有数据flit，则创建它们
+            if not data_flits:
+                self.logger.debug(f"WDB中没有数据flit，创建新的: packet_id={rsp.packet_id}")
+                self._create_write_data_flits(req)
+                data_flits = self.rn_wdb.get(rsp.packet_id, [])
+                
             self.logger.info(f"🔶 准备发送 {len(data_flits)} 个DATA flit for packet {rsp.packet_id}")
 
             for flit in data_flits:
-                self.pending_by_channel["data"].append(flit)
-                # 添加到RequestTracker
-                if hasattr(self.model, "request_tracker"):
-                    self.model.request_tracker.add_data_flit(flit.packet_id, flit)
+                # 检查是否已经在pending队列中，避免重复添加
+                if flit not in self.pending_by_channel["data"]:
+                    self.pending_by_channel["data"].append(flit)
+                    # 注意：不在这里添加到RequestTracker，避免重复
+                    # RequestTracker会在flit实际发送时统一管理
+            
+            # 标记写数据已经开始发送（用于后续tracker释放）
+            self.logger.debug(f"写请求{rsp.packet_id}的数据flit已加入发送队列，共{len(data_flits)}个")
 
-            # 释放RN write tracker（如果存在）
-            for tracker_req in self.rn_tracker["write"][:]:  # 使用副本避免修改迭代列表
-                if tracker_req.packet_id == rsp.packet_id:
-                    self.rn_tracker["write"].remove(tracker_req)
-                    self.rn_wdb_count += tracker_req.burst_length
-                    self.rn_tracker_count["write"] += 1
-                    self.rn_tracker_pointer["write"] -= 1
+            # 注意：对于写请求，此时不释放RN write tracker
+            # tracker只有在所有数据flit发送完成后才释放
+            # 这里只是发送数据到pending队列，还没有真正完成传输
+            self.logger.debug(f"保留写请求{rsp.packet_id}的tracker，等待数据传输完成")
 
     def _create_write_data_flits(self, req: CrossRingFlit) -> None:
         """创建写数据flits"""
@@ -532,6 +560,7 @@ class CrossRingIPInterface(BaseIPInterface):
                 latency = self.config.latency_config.ddr_w_latency
             else:
                 latency = self.config.latency_config.l2m_w_latency
+            
 
             data_flit = create_crossring_flit(
                 source=req.source,
@@ -583,8 +612,11 @@ class CrossRingIPInterface(BaseIPInterface):
 
             # 使用分通道的pending队列
             self.pending_by_channel["data"].append(data_flit)
+            
+            # 注意：不在这里添加到RequestTracker，避免重复
+            # RequestTracker会在数据flit实际发送时统一管理
 
-            self.logger.info(f"🔶 SN端生成数据flit: {data_flit.packet_id}.{i} -> {data_flit.destination}, departure={data_flit.departure_cycle}")
+            self.logger.debug(f"SN端生成数据flit: {data_flit.packet_id}.{i} -> {data_flit.destination}, departure={data_flit.departure_cycle}")
 
     def _create_negative_response(self, req: CrossRingFlit) -> None:
         """创建negative响应"""
@@ -794,8 +826,9 @@ class CrossRingIPInterface(BaseIPInterface):
             # 添加到RN tracker
             self.rn_tracker["write"].append(req_flit)
 
-            # 创建写数据flits
-            self._create_write_data_flits(req_flit)
+            # 注意：写数据flit在收到datasend响应后才创建
+            # 这里先预留WDB空间
+            self.rn_wdb[packet_id] = []  # 预留空的数据缓冲区
 
             # 注入到网络
             return self._inject_to_network(req_flit)
@@ -835,19 +868,6 @@ class CrossRingIPInterface(BaseIPInterface):
 
         return True
 
-    def _create_write_data_flits(self, req_flit: CrossRingFlit) -> None:
-        """创建写数据flits"""
-        for i in range(req_flit.burst_length):
-            data_flit = create_crossring_flit(req_flit.source, req_flit.destination, req_flit.path)
-            data_flit.packet_id = f"{req_flit.packet_id}_data_{i}"
-            data_flit.channel = "data"
-            data_flit.flit_id = i
-            data_flit.is_last_flit = i == req_flit.burst_length - 1
-
-            # 添加到写数据库
-            if req_flit.packet_id not in self.rn_wdb:
-                self.rn_wdb[req_flit.packet_id] = []
-            self.rn_wdb[req_flit.packet_id].append(data_flit)
 
     def _inject_to_network(self, flit: CrossRingFlit) -> bool:
         """将flit注入到网络"""
@@ -926,7 +946,6 @@ class CrossRingIPInterface(BaseIPInterface):
                 # 确保创建rn_wdb条目，避免KeyError
                 if flit.packet_id not in self.rn_wdb:
                     self.rn_wdb[flit.packet_id] = []
-                print(f"📝 Write请求{packet_id}创建WDB条目: {self.rn_wdb[flit.packet_id]}")
 
             # 添加到pending_by_channel队列（无限大，永不失败）
             self.pending_by_channel["req"].append(flit)

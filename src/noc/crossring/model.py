@@ -22,6 +22,7 @@ from .crossring_link import CrossRingLink
 from src.noc.utils.types import NodeId
 from src.noc.debug import RequestTracker, RequestState, FlitType
 from src.noc.base.model import BaseNoCModel
+from src.noc.analysis.crossring_analyzer import CrossRingAnalyzer
 
 
 class RingDirection(Enum):
@@ -548,7 +549,7 @@ class CrossRingModel(BaseNoCModel):
         self._connect_inter_link_slices()
 
         # 调试：打印所有连接信息
-        self._print_all_connections()
+        # self._print_all_connections()
 
     def _connect_inter_link_slices(self) -> None:
         """连接不同链路之间的slice形成环路"""
@@ -651,14 +652,14 @@ class CrossRingModel(BaseNoCModel):
                         print(f"  {link_id}:{len(slices)-1} -> {downstream_info}")
 
         # 3. 打印CrossPoint slice连接
-        print("\n🎯 CrossPoint slice连接:")
+        # print("\n🎯 CrossPoint slice连接:")
         for node_id, node in sorted(self.crossring_nodes.items()):
-            print(f"\n  节点{node_id} (坐标{node.coordinates}):")
+            # print(f"\n  节点{node_id} (坐标{node.coordinates}):")
 
             # 水平CrossPoint
             h_cp = node.get_crosspoint("horizontal")
             if h_cp:
-                print(f"    水平CrossPoint:")
+                # print(f"    水平CrossPoint:")
                 for direction in ["TR", "TL"]:
                     for slice_type in ["arrival", "departure"]:
                         slice_obj = h_cp.slices.get(direction, {}).get(slice_type)
@@ -672,14 +673,14 @@ class CrossRingModel(BaseNoCModel):
                                         if s == slice_obj:
                                             slice_info = f"{link_id}:{i}"
                                             break
-                            print(f"      {direction} {slice_type}: {slice_info}")
-                        else:
-                            print(f"      {direction} {slice_type}: None")
+                            # print(f"      {direction} {slice_type}: {slice_info}")
+                        # else:
+                        # print(f"      {direction} {slice_type}: None")
 
             # 垂直CrossPoint
             v_cp = node.get_crosspoint("vertical")
             if v_cp:
-                print(f"    垂直CrossPoint:")
+                # print(f"    垂直CrossPoint:")
                 for direction in ["TU", "TD"]:
                     for slice_type in ["arrival", "departure"]:
                         slice_obj = v_cp.slices.get(direction, {}).get(slice_type)
@@ -693,9 +694,9 @@ class CrossRingModel(BaseNoCModel):
                                         if s == slice_obj:
                                             slice_info = f"{link_id}:{i}"
                                             break
-                            print(f"      {direction} {slice_type}: {slice_info}")
-                        else:
-                            print(f"      {direction} {slice_type}: None")
+                            # print(f"      {direction} {slice_type}: {slice_info}")
+                        # else:
+                        # print(f"      {direction} {slice_type}: None")
 
         print("\n" + "=" * 80)
 
@@ -795,6 +796,29 @@ class CrossRingModel(BaseNoCModel):
 
         self.logger.debug(f"注册IP接口到全局registry: {key}")
 
+    def _step_pre_update_phase(self) -> None:
+        """预更新阶段：更新所有FIFO状态，使compute阶段能看到最新的valid/ready信号"""
+        # 1. 所有IP接口的FIFO预更新
+        for ip_interface in self.ip_interfaces.values():
+            if hasattr(ip_interface, "_step_fifo_pre_update"):
+                ip_interface._step_fifo_pre_update()
+
+        # 2. 所有CrossRing节点的FIFO预更新
+        for node in self.crossring_nodes.values():
+            if hasattr(node, "_step_update_phase"):
+                node._step_update_phase()
+
+    def _sync_global_clock(self) -> None:
+        """时钟同步阶段：确保所有组件使用统一的时钟值"""
+        # 1. 同步所有IP接口的时钟
+        for ip_interface in self.ip_interfaces.values():
+            ip_interface.current_cycle = self.cycle
+
+        # 2. 同步所有CrossRing节点的时钟
+        for node in self.crossring_nodes.values():
+            if hasattr(node, "current_cycle"):
+                node.current_cycle = self.cycle
+
     def _step_topology_network_compute(self) -> None:
         """CrossRing网络组件计算阶段"""
         # 所有CrossRing节点计算阶段
@@ -803,14 +827,20 @@ class CrossRingModel(BaseNoCModel):
                 node.step_compute_phase(self.cycle)
 
     def step(self) -> None:
-        """重写step方法以确保正确的调用顺序"""
+        """重写step方法以确保正确的调用顺序 - 优化版本减少1拍延迟"""
         self.cycle += 1
 
-        # 阶段0：如果有待注入的文件请求，检查是否需要注入
+        # 阶段0：时钟同步阶段 - 确保所有组件使用统一的时钟值
+        self._sync_global_clock()
+
+        # 阶段0.1：如果有待注入的文件请求，检查是否需要注入
         if hasattr(self, "pending_file_requests") and self.pending_file_requests:
             self._inject_pending_file_requests()
 
-        # 阶段1：组合逻辑阶段 - 所有组件计算传输决策
+        # 阶段0.5：预更新阶段 - 更新所有FIFO状态，使新写入的数据立即反映在valid/ready信号中
+        self._step_pre_update_phase()
+
+        # 阶段1：组合逻辑阶段 - 所有组件计算传输决策（现在能看到最新的valid/ready状态）
         self._step_compute_phase()
 
         # 阶段2：时序逻辑阶段 - 所有组件执行传输和状态更新
@@ -1365,113 +1395,30 @@ class CrossRingModel(BaseNoCModel):
         self.logger.info(f"Cycle_accurate仿真完成: 总周期={self.cycle}, 总注入={total_injected}")
         return total_injected
 
-    def analyze_simulation_results(self, results: Dict[str, Any]) -> Dict[str, Any]:
+
+    def analyze_simulation_results(self, results: Dict[str, Any], 
+                                 enable_visualization: bool = True,
+                                 save_results: bool = True) -> Dict[str, Any]:
         """
-        分析仿真结果
+        分析仿真结果 - 调用CrossRing专用分析器
 
         Args:
             results: 仿真结果
+            enable_visualization: 是否生成可视化图表
+            save_results: 是否保存结果文件
 
         Returns:
-            分析结果
+            详细的分析结果
         """
-        analysis = {}
-
-        # 基础指标
-        sim_info = results.get("simulation_info", {})
-
-        # **改进：从RequestTracker获取准确的请求统计**
-        total_requests = len(self.request_tracker.completed_requests) + len(self.request_tracker.active_requests)
-        completed_requests = len(self.request_tracker.completed_requests)
-        active_requests = len(self.request_tracker.active_requests)
-
-        analysis["basic_metrics"] = {
-            "total_cycles": sim_info.get("total_cycles", self.cycle),
-            "effective_cycles": sim_info.get("effective_cycles", self.cycle),
-            "total_requests": total_requests,
-            "completed_requests": completed_requests,
-            "active_requests": active_requests,
-            "completion_rate": (completed_requests / total_requests * 100) if total_requests > 0 else 0.0,
-        }
-
-        # **改进：计算真实的延迟统计**
-        latencies = []
-        read_latencies = []
-        write_latencies = []
-        total_bytes = 0
-
-        for lifecycle in self.request_tracker.completed_requests.values():
-            if lifecycle.completed_cycle > 0:
-                total_latency = lifecycle.get_total_latency()
-                latencies.append(total_latency)
-
-                # 按类型分类
-                if lifecycle.op_type == "read":
-                    read_latencies.append(total_latency)
-                elif lifecycle.op_type == "write":
-                    write_latencies.append(total_latency)
-
-                # 计算传输的字节数
-                total_bytes += lifecycle.burst_size * 64  # 假设64字节/burst
-
-        # 延迟统计
-        if latencies:
-            analysis["latency_metrics"] = {
-                "avg_latency": np.mean(latencies),
-                "min_latency": np.min(latencies),
-                "max_latency": np.max(latencies),
-                "p50_latency": np.percentile(latencies, 50),
-                "p95_latency": np.percentile(latencies, 95),
-                "p99_latency": np.percentile(latencies, 99),
-            }
-
-            if read_latencies:
-                analysis["read_latency_metrics"] = {
-                    "avg_latency": np.mean(read_latencies),
-                    "min_latency": np.min(read_latencies),
-                    "max_latency": np.max(read_latencies),
-                }
-
-            if write_latencies:
-                analysis["write_latency_metrics"] = {
-                    "avg_latency": np.mean(write_latencies),
-                    "min_latency": np.min(write_latencies),
-                    "max_latency": np.max(write_latencies),
-                }
-        else:
-            analysis["latency_metrics"] = {"avg_latency": 0, "min_latency": 0, "max_latency": 0}
-
-        # **改进：计算真实的带宽和吞吐量**
-        effective_cycles = analysis["basic_metrics"]["effective_cycles"]
-
-        if effective_cycles > 0 and completed_requests > 0:
-            # 吞吐量 (请求/周期)
-            analysis["throughput_metrics"] = {
-                "requests_per_cycle": completed_requests / effective_cycles,
-                "requests_per_second": (completed_requests / effective_cycles) * 1e9,  # 假设1GHz
-            }
-
-            # 带宽 (bytes/cycle)
-            if total_bytes > 0:
-                analysis["bandwidth_metrics"] = {
-                    "bytes_per_cycle": total_bytes / effective_cycles,
-                    "gbps": (total_bytes * 8 / effective_cycles) / 1e9,  # 转换为Gbps
-                    "total_bytes": total_bytes,
-                }
-            else:
-                analysis["bandwidth_metrics"] = {"bytes_per_cycle": 0, "gbps": 0, "total_bytes": 0}
-        else:
-            analysis["throughput_metrics"] = {"requests_per_cycle": 0, "requests_per_second": 0}
-            analysis["bandwidth_metrics"] = {"bytes_per_cycle": 0, "gbps": 0, "total_bytes": 0}
-
-        # IP接口分析
-        ip_stats = results.get("ip_interface_stats", {})
-        analysis["ip_summary"] = self._analyze_ip_interfaces(ip_stats)
-
-        # 拥塞分析
-        analysis["congestion_summary"] = self._analyze_congestion()
-
-        return analysis
+        analyzer = CrossRingAnalyzer()
+        return analyzer.analyze_crossring_results(
+            self.request_tracker, 
+            self.config, 
+            self,  # 传入模型实例用于Tag数据分析
+            results,
+            enable_visualization,
+            save_results
+        )
 
     def _analyze_ip_interfaces(self, ip_stats: Dict[str, Any]) -> Dict[str, Any]:
         """分析IP接口统计"""

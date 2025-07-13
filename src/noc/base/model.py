@@ -258,11 +258,8 @@ class BaseNoCModel(ABC):
         """阶段1：组合逻辑阶段 - 所有组件计算传输决策，不修改状态"""
         # 1. 所有IP接口计算阶段
         for ip_interface in self.ip_interfaces.values():
-            if hasattr(ip_interface, "step_compute_phase"):
-                ip_interface.step_compute_phase(self.cycle)
-            else:
-                # 兼容性：如果没有两阶段方法，调用原始step
-                pass
+            ip_interface.step_compute_phase(self.cycle)
+
 
         # 2. 拓扑网络组件计算阶段
         self._step_topology_network_compute()
