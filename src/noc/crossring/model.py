@@ -89,12 +89,12 @@ class CrossRingModel(BaseNoCModel):
         self.initialize_model()
 
         # 验证CrossRing网络初始化
-        if len(self.crossring_nodes) != self.config.num_nodes:
-            self.logger.error(f"CrossRing节点初始化不完整: 期望{self.config.num_nodes}，实际{len(self.crossring_nodes)}")
+        if len(self.crossring_nodes) != self.config.NUM_NODES:
+            self.logger.error(f"CrossRing节点初始化不完整: 期望{self.config.NUM_NODES}，实际{len(self.crossring_nodes)}")
             self.logger.error("debug: 当前crossring_nodes内容: {}".format(list(self.crossring_nodes.keys())))
             raise RuntimeError("CrossRing网络初始化失败")
 
-        self.logger.info(f"CrossRing模型初始化完成: {config.num_row}x{config.num_col}")
+        self.logger.info(f"CrossRing模型初始化完成: {config.NUM_ROW}x{config.NUM_COL}")
 
     def enable_debug(self, packet_ids=None, sleep_time=0.0):
         """启用全局调试模式
@@ -251,7 +251,7 @@ class CrossRingModel(BaseNoCModel):
         # 导入CrossRingNode类
         from .node import CrossRingNode
 
-        for node_id in range(self.config.num_nodes):
+        for node_id in range(self.config.NUM_NODES):
             coordinates = self._get_node_coordinates(node_id)
 
             try:
@@ -279,11 +279,11 @@ class CrossRingModel(BaseNoCModel):
         from ..base.link import Direction
 
         # 获取slice配置
-        normal_slices = getattr(self.config.basic_config, "normal_link_slices", 8)
-        self_slices = getattr(self.config.basic_config, "self_link_slices", 2)
+        normal_slices = getattr(self.config.basic_config, "NORMAL_LINK_SLICES", 8)
+        self_slices = getattr(self.config.basic_config, "SELF_LINK_SLICES", 2)
 
         link_count = 0
-        for node_id in range(self.config.num_nodes):
+        for node_id in range(self.config.NUM_NODES):
             # 获取节点的四个方向连接
             connections = self._get_ring_connections(node_id)
 
@@ -343,9 +343,9 @@ class CrossRingModel(BaseNoCModel):
         """获取拓扑信息（BaseNoCModel抽象方法的实现）"""
         return {
             "topology_type": "CrossRing",
-            "num_rows": self.config.num_row,
-            "num_cols": self.config.num_col,
-            "num_nodes": self.config.num_nodes,
+            "num_rows": self.config.NUM_ROW,
+            "num_cols": self.config.NUM_COL,
+            "num_nodes": self.config.NUM_NODES,
             "total_links": len(self.crossring_links),
             "crossring_stats": self.crossring_stats.copy(),
         }
@@ -369,7 +369,7 @@ class CrossRingModel(BaseNoCModel):
                 src_x += 1
             else:
                 src_x -= 1
-            current = src_y * self.config.num_col + src_x
+            current = src_y * self.config.NUM_COL + src_x
             path.append(current)
 
         # 垂直移动
@@ -378,7 +378,7 @@ class CrossRingModel(BaseNoCModel):
                 src_y += 1
             else:
                 src_y -= 1
-            current = src_y * self.config.num_col + src_x
+            current = src_y * self.config.NUM_COL + src_x
             path.append(current)
 
         return path
@@ -555,7 +555,7 @@ class CrossRingModel(BaseNoCModel):
         """连接不同链路之间的slice形成环路"""
         # 按照CrossRing规范，形成正确的单向环路连接
 
-        for node_id in range(self.config.num_nodes):
+        for node_id in range(self.config.NUM_NODES):
             connections = self._get_ring_connections(node_id)
 
             for direction_str, neighbor_id in connections.items():
@@ -713,8 +713,8 @@ class CrossRingModel(BaseNoCModel):
         Returns:
             (x, y)坐标
         """
-        x = node_id % self.config.num_col
-        y = node_id // self.config.num_col
+        x = node_id % self.config.NUM_COL
+        y = node_id // self.config.NUM_COL
         return x, y
 
     def _get_next_node_in_direction(self, node_id: NodeId, direction: RingDirection) -> NodeId:
@@ -741,7 +741,7 @@ class CrossRingModel(BaseNoCModel):
             next_y = y
         elif direction == RingDirection.TR:
             # 向右：如果已经在最右边，连接到自己
-            if x == self.config.num_col - 1:
+            if x == self.config.NUM_COL - 1:
                 next_x = x  # 连接到自己
             else:
                 next_x = x + 1
@@ -755,7 +755,7 @@ class CrossRingModel(BaseNoCModel):
             next_x = x
         elif direction == RingDirection.TD:
             # 向下：如果已经在最下边，连接到自己
-            if y == self.config.num_row - 1:
+            if y == self.config.NUM_ROW - 1:
                 next_y = y  # 连接到自己
             else:
                 next_y = y + 1
@@ -763,7 +763,7 @@ class CrossRingModel(BaseNoCModel):
         else:
             raise ValueError(f"不支持的方向: {direction}")
 
-        return next_y * self.config.num_col + next_x
+        return next_y * self.config.NUM_COL + next_x
 
     def _get_ring_connections(self, node_id: NodeId) -> Dict[str, NodeId]:
         """
@@ -928,10 +928,10 @@ class CrossRingModel(BaseNoCModel):
         return {
             "model_type": self.__class__.__name__,
             "topology_type": "CrossRing",
-            "num_row": self.config.num_row,
-            "num_col": self.config.num_col,
-            "num_nodes": self.config.num_nodes,
-            "ring_buffer_depth": getattr(self.config, "ring_buffer_depth", 4),
+            "num_row": self.config.NUM_ROW,
+            "num_col": self.config.NUM_COL,
+            "num_nodes": self.config.NUM_NODES,
+            "ring_buffer_depth": getattr(self.config, "RING_BUFFER_DEPTH", 4),
             "routing_strategy": self.config.routing_strategy.value if hasattr(self.config.routing_strategy, "value") else str(self.config.routing_strategy),
             "ip_interface_count": len(self.ip_interfaces),
             "crossring_stats": self.crossring_stats.copy(),
@@ -1155,7 +1155,7 @@ class CrossRingModel(BaseNoCModel):
                         burst = int(burst)
 
                         # 验证节点范围
-                        if src >= self.config.num_nodes or dst >= self.config.num_nodes:
+                        if src >= self.config.NUM_NODES or dst >= self.config.NUM_NODES:
                             self.logger.warning(f"第{line_num}行节点范围无效（src={src}, dst={dst}），跳过")
                             failed_count += 1
                             continue
@@ -1476,8 +1476,8 @@ class CrossRingModel(BaseNoCModel):
         report.append("=" * 60)
 
         # 拓扑信息
-        report.append(f"拓扑配置: {self.config.num_row}x{self.config.num_col}")
-        report.append(f"总节点数: {self.config.num_nodes}")
+        report.append(f"拓扑配置: {self.config.NUM_ROW}x{self.config.NUM_COL}")
+        report.append(f"总节点数: {self.config.NUM_NODES}")
         report.append("")
 
         # 基础指标
@@ -1538,9 +1538,9 @@ class CrossRingModel(BaseNoCModel):
         """获取拓扑信息（拓扑特定）"""
         return {
             "topology_type": "CrossRing",
-            "num_row": self.config.num_row,
-            "num_col": self.config.num_col,
-            "total_nodes": self.config.num_nodes,
+            "num_row": self.config.NUM_ROW,
+            "num_col": self.config.NUM_COL,
+            "total_nodes": self.config.NUM_NODES,
             "ring_directions": ["TL", "TR", "TU", "TD"],
             "channels": ["req", "rsp", "data"],
             "routing_strategy": self.config.routing_strategy.value if hasattr(self.config.routing_strategy, "value") else str(self.config.routing_strategy),
@@ -1568,7 +1568,7 @@ class CrossRingModel(BaseNoCModel):
                     current_x += 1
                 else:
                     current_x -= 1
-                node_id = current_y * self.config.num_col + current_x
+                node_id = current_y * self.config.NUM_COL + current_x
                 path.append(node_id)
 
             # 垂直移动
@@ -1577,7 +1577,7 @@ class CrossRingModel(BaseNoCModel):
                     current_y += 1
                 else:
                     current_y -= 1
-                node_id = current_y * self.config.num_col + current_x
+                node_id = current_y * self.config.NUM_COL + current_x
                 path.append(node_id)
 
         elif self.config.routing_strategy == RoutingStrategy.YX:
@@ -1588,7 +1588,7 @@ class CrossRingModel(BaseNoCModel):
                     current_y += 1
                 else:
                     current_y -= 1
-                node_id = current_y * self.config.num_col + current_x
+                node_id = current_y * self.config.NUM_COL + current_x
                 path.append(node_id)
 
             # 水平移动
@@ -1597,7 +1597,7 @@ class CrossRingModel(BaseNoCModel):
                     current_x += 1
                 else:
                     current_x -= 1
-                node_id = current_y * self.config.num_col + current_x
+                node_id = current_y * self.config.NUM_COL + current_x
                 path.append(node_id)
 
         return path
@@ -1606,7 +1606,7 @@ class CrossRingModel(BaseNoCModel):
         """字符串表示"""
         return (
             f"CrossRingModel({self.config.config_name}, "
-            f"{self.config.num_row}x{self.config.num_col}, "
+            f"{self.config.NUM_ROW}x{self.config.NUM_COL}, "
             f"cycle={self.cycle}, "
             f"active_requests={self.get_active_request_count()})"
         )
@@ -1617,7 +1617,7 @@ class CrossRingModel(BaseNoCModel):
         """初始化网络（统一接口）"""
         self._setup_ip_interfaces()
         self._setup_crossring_networks()
-        print(f"CrossRing网络初始化完成: {self.config.num_row}x{self.config.num_col}")
+        print(f"CrossRing网络初始化完成: {self.config.NUM_ROW}x{self.config.NUM_COL}")
 
     def advance_cycle(self) -> None:
         """推进一个周期（统一接口）"""
@@ -1708,7 +1708,7 @@ class CrossRingModel(BaseNoCModel):
 
     def get_node_count(self) -> int:
         """获取节点数量（统一接口）"""
-        return self.config.num_nodes
+        return self.config.NUM_NODES
 
     # ========== 调试功能接口 ==========
 
@@ -1777,9 +1777,9 @@ class CrossRingModel(BaseNoCModel):
         """获取拓扑信息（拓扑特定）"""
         return {
             "topology_type": "CrossRing",
-            "num_row": self.config.num_row,
-            "num_col": self.config.num_col,
-            "total_nodes": self.config.num_nodes,
+            "num_row": self.config.NUM_ROW,
+            "num_col": self.config.NUM_COL,
+            "total_nodes": self.config.NUM_NODES,
             "ring_directions": ["TL", "TR", "TU", "TD"],
             "channels": ["req", "rsp", "data"],
         }

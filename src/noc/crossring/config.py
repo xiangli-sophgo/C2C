@@ -26,62 +26,62 @@ class RoutingStrategy(Enum):
 class BasicConfiguration:
     """拓扑基础配置"""
 
-    burst: int = 4
-    network_frequency: int = 2.0
-    slice_per_link: int = 8
+    BURST: int = 4
+    NETWORK_FREQUENCY: int = 2.0
+    SLICE_PER_LINK: int = 8
 
     # 路由策略配置
-    routing_strategy: str = "XY"  # 默认使用XY路由
+    ROUTING_STRATEGY: str = "XY"  # 默认使用XY路由
 
     # IP接口FIFO深度配置
-    ip_l2h_fifo_depth: int = 4
-    ip_h2l_fifo_depth: int = 4
+    IP_L2H_FIFO_DEPTH: int = 4
+    IP_H2L_FIFO_DEPTH: int = 4
 
     # 环形拓扑专用配置
-    inject_buffer_depth: int = 8
-    eject_buffer_depth: int = 8
-    crosspoint_buffer_depth: int = 4
+    INJECT_BUFFER_DEPTH: int = 8
+    EJECT_BUFFER_DEPTH: int = 8
+    CROSSPOINT_BUFFER_DEPTH: int = 4
 
     # Link Slice配置 - CrossRing非环绕设计专用
-    normal_link_slices: int = 8    # 正常节点间连接的slice数量
-    self_link_slices: int = 2      # 自连接（边界节点到自己）的slice数量
+    NORMAL_LINK_SLICES: int = 8    # 正常节点间连接的slice数量
+    SELF_LINK_SLICES: int = 2      # 自连接（边界节点到自己）的slice数量
 
     # 仲裁配置（用于支持不同路由策略）
-    arbitration_timeout: int = 10  # 仲裁超时周期
+    ARBITRATION_TIMEOUT: int = 10  # 仲裁超时周期
 
 
 @dataclass
 class IPConfiguration:
     """IP配置数据类。"""
 
-    gdma_count: int = 16
-    sdma_count: int = 16
-    cdma_count: int = 16
-    ddr_count: int = 16
-    l2m_count: int = 16
+    GDMA_COUNT: int = 16
+    SDMA_COUNT: int = 16
+    CDMA_COUNT: int = 16
+    DDR_COUNT: int = 16
+    L2M_COUNT: int = 16
 
     # 带宽限制 (GB/s)
-    gdma_bw_limit: float = 128.0
-    sdma_bw_limit: float = 128.0
-    cdma_bw_limit: float = 32.0
-    ddr_bw_limit: float = 128.0
-    l2m_bw_limit: float = 128.0
+    GDMA_BW_LIMIT: float = 128.0
+    SDMA_BW_LIMIT: float = 128.0
+    CDMA_BW_LIMIT: float = 32.0
+    DDR_BW_LIMIT: float = 128.0
+    L2M_BW_LIMIT: float = 128.0
 
     # 读写间隔配置
-    gdma_rw_gap: int = 1e9
-    sdma_rw_gap: int = 1e9
+    GDMA_RW_GAP: int = 1e9
+    SDMA_RW_GAP: int = 1e9
 
 
 @dataclass
 class FIFOConfiguration:
     """FIFO缓冲区配置数据类。"""
 
-    rb_in_depth: int = 16
-    rb_out_depth: int = 8
-    iq_out_depth: int = 8
-    eq_in_depth: int = 16
-    iq_ch_depth: int = 10
-    eq_ch_depth: int = 10
+    RB_IN_DEPTH: int = 16
+    RB_OUT_DEPTH: int = 8
+    IQ_OUT_DEPTH: int = 8
+    EQ_IN_DEPTH: int = 16
+    IQ_CH_DEPTH: int = 10
+    EQ_CH_DEPTH: int = 10
 
 
 @dataclass
@@ -89,46 +89,46 @@ class TagConfiguration:
     """Tag配置数据类。"""
 
     # ITag 配置
-    itag_trigger_th_h: int = 80
-    itag_trigger_th_v: int = 80
-    itag_max_num_h: int = 1
-    itag_max_num_v: int = 1
+    ITAG_TRIGGER_TH_H: int = 80
+    ITAG_TRIGGER_TH_V: int = 80
+    ITAG_MAX_NUM_H: int = 1
+    ITAG_MAX_NUM_V: int = 1
 
     # ETag 配置
-    etag_bothside_upgrade: int = 0
-    tl_etag_t1_ue_max: int = 15
-    tl_etag_t2_ue_max: int = 8
-    tr_etag_t2_ue_max: int = 12
-    tu_etag_t1_ue_max: int = 15
-    tu_etag_t2_ue_max: int = 8
-    td_etag_t2_ue_max: int = 12
+    ETAG_BOTHSIDE_UPGRADE: int = 0
+    TL_ETAG_T1_UE_MAX: int = 15
+    TL_ETAG_T2_UE_MAX: int = 8
+    TR_ETAG_T2_UE_MAX: int = 12
+    TU_ETAG_T1_UE_MAX: int = 15
+    TU_ETAG_T2_UE_MAX: int = 8
+    TD_ETAG_T2_UE_MAX: int = 12
 
 
 @dataclass
 class TrackerConfiguration:
     """Tracker 配置数据类。"""
 
-    rn_r_tracker_ostd: int = 64
-    rn_w_tracker_ostd: int = 32
-    sn_ddr_r_tracker_ostd: int = 96
-    sn_ddr_w_tracker_ostd: int = 48
-    sn_l2m_r_tracker_ostd: int = 96
-    sn_l2m_w_tracker_ostd: int = 48
-    sn_tracker_release_latency: int = 40
+    RN_R_TRACKER_OSTD: int = 64
+    RN_W_TRACKER_OSTD: int = 32
+    SN_DDR_R_TRACKER_OSTD: int = 96
+    SN_DDR_W_TRACKER_OSTD: int = 48
+    SN_L2M_R_TRACKER_OSTD: int = 96
+    SN_L2M_W_TRACKER_OSTD: int = 48
+    SN_TRACKER_RELEASE_LATENCY: int = 40
 
 
 @dataclass
 class LatencyConfiguration:
     """延迟配置数据类。"""
 
-    ddr_r_latency: int = 5  # 从100降到5，方便观察读数据返回
-    ddr_r_latency_var: int = 0
-    ddr_w_latency: int = 0
-    ddr_w_latency_var: int = 0
-    l2m_r_latency: int = 3  # 从12降到3，方便观察读数据返回
-    l2m_r_latency_var: int = 0
-    l2m_w_latency: int = 16
-    l2m_w_latency_var: int = 0
+    DDR_R_LATENCY: int = 5  # 从100降到5，方便观察读数据返回
+    DDR_R_LATENCY_VAR: int = 0
+    DDR_W_LATENCY: int = 0
+    DDR_W_LATENCY_VAR: int = 0
+    L2M_R_LATENCY: int = 3  # 从12降到3，方便观察读数据返回
+    L2M_R_LATENCY_VAR: int = 0
+    L2M_W_LATENCY: int = 16
+    L2M_W_LATENCY_VAR: int = 0
 
 
 class CrossRingConfig(BaseNoCConfig):
@@ -152,12 +152,12 @@ class CrossRingConfig(BaseNoCConfig):
 
         # 基本拓扑参数
         self.config_name = config_name
-        self.num_col = num_col
-        self.num_row = num_row
-        self.num_nodes = num_col * num_row
-        self.num_ip = num_col * num_row
-        self.num_rn = self.num_ip
-        self.num_sn = self.num_ip
+        self.NUM_COL = num_col
+        self.NUM_ROW = num_row
+        self.NUM_NODES = num_col * num_row
+        self.NUM_IP = num_col * num_row
+        self.NUM_RN = self.NUM_IP
+        self.NUM_SN = self.NUM_IP
 
         # 使用组合配置
         self.basic_config = BasicConfiguration()
@@ -168,8 +168,8 @@ class CrossRingConfig(BaseNoCConfig):
         self.latency_config = LatencyConfiguration()
 
         # 路由策略属性
-        self.routing_strategy = RoutingStrategy(self.basic_config.routing_strategy)
-        self.arbitration_timeout = getattr(self.basic_config, "arbitration_timeout", 10)
+        self.routing_strategy = RoutingStrategy(self.basic_config.ROUTING_STRATEGY)
+        self.arbitration_timeout = getattr(self.basic_config, "ARBITRATION_TIMEOUT", 10)
 
         # 通道规格
         self.channel_spec = {
@@ -181,10 +181,10 @@ class CrossRingConfig(BaseNoCConfig):
         }
 
         # Ring网络缓冲区深度配置
-        self.inject_buffer_depth = self.basic_config.inject_buffer_depth
-        self.eject_buffer_depth = self.basic_config.eject_buffer_depth
-        self.crosspoint_buffer_depth = self.basic_config.crosspoint_buffer_depth
-        self.slice_per_link = self.basic_config.slice_per_link
+        self.inject_buffer_depth = self.basic_config.INJECT_BUFFER_DEPTH
+        self.eject_buffer_depth = self.basic_config.EJECT_BUFFER_DEPTH
+        self.crosspoint_buffer_depth = self.basic_config.CROSSPOINT_BUFFER_DEPTH
+        self.slice_per_link = self.basic_config.SLICE_PER_LINK
 
         # 自动生成相关配置
         self._generate_derived_config()
@@ -192,26 +192,26 @@ class CrossRingConfig(BaseNoCConfig):
 
     def _generate_derived_config(self) -> None:
         """生成派生配置参数。"""
-        if not hasattr(self.basic_config, "burst"):
+        if not hasattr(self.basic_config, "BURST"):
             self.basic_config = BasicConfiguration()
         # 安全地获取tracker配置
-        if hasattr(self.tracker_config, "rn_r_tracker_ostd"):
+        if hasattr(self.tracker_config, "RN_R_TRACKER_OSTD"):
             # 计算缓冲区大小
-            self.rn_rdb_size = self.tracker_config.rn_r_tracker_ostd * self.basic_config.burst
-            self.rn_wdb_size = self.tracker_config.rn_w_tracker_ostd * self.basic_config.burst
-            self.sn_ddr_rdb_size = self.tracker_config.sn_ddr_r_tracker_ostd * self.basic_config.burst
-            self.sn_ddr_wdb_size = self.tracker_config.sn_ddr_w_tracker_ostd * self.basic_config.burst
-            self.sn_l2m_rdb_size = self.tracker_config.sn_l2m_r_tracker_ostd * self.basic_config.burst
-            self.sn_l2m_wdb_size = self.tracker_config.sn_l2m_w_tracker_ostd * self.basic_config.burst
+            self.rn_rdb_size = self.tracker_config.RN_R_TRACKER_OSTD * self.basic_config.BURST
+            self.rn_wdb_size = self.tracker_config.RN_W_TRACKER_OSTD * self.basic_config.BURST
+            self.sn_ddr_rdb_size = self.tracker_config.SN_DDR_R_TRACKER_OSTD * self.basic_config.BURST
+            self.sn_ddr_wdb_size = self.tracker_config.SN_DDR_W_TRACKER_OSTD * self.basic_config.BURST
+            self.sn_l2m_rdb_size = self.tracker_config.SN_L2M_R_TRACKER_OSTD * self.basic_config.BURST
+            self.sn_l2m_wdb_size = self.tracker_config.SN_L2M_W_TRACKER_OSTD * self.basic_config.BURST
         else:
             # 如果tracker_config是字典或未初始化，使用默认值
             tracker = TrackerConfiguration()
-            self.rn_rdb_size = tracker.rn_r_tracker_ostd * self.basic_config.burst
-            self.rn_wdb_size = tracker.rn_w_tracker_ostd * self.basic_config.burst
-            self.sn_ddr_rdb_size = tracker.sn_ddr_r_tracker_ostd * self.basic_config.burst
-            self.sn_ddr_wdb_size = tracker.sn_ddr_w_tracker_ostd * self.basic_config.burst
-            self.sn_l2m_rdb_size = tracker.sn_l2m_r_tracker_ostd * self.basic_config.burst
-            self.sn_l2m_wdb_size = tracker.sn_l2m_w_tracker_ostd * self.basic_config.burst
+            self.rn_rdb_size = tracker.RN_R_TRACKER_OSTD * self.basic_config.BURST
+            self.rn_wdb_size = tracker.RN_W_TRACKER_OSTD * self.basic_config.BURST
+            self.sn_ddr_rdb_size = tracker.SN_DDR_R_TRACKER_OSTD * self.basic_config.BURST
+            self.sn_ddr_wdb_size = tracker.SN_DDR_W_TRACKER_OSTD * self.basic_config.BURST
+            self.sn_l2m_rdb_size = tracker.SN_L2M_R_TRACKER_OSTD * self.basic_config.BURST
+            self.sn_l2m_wdb_size = tracker.SN_L2M_W_TRACKER_OSTD * self.basic_config.BURST
 
         # 生成通道名称列表
         self.ch_name_list = []
@@ -222,7 +222,7 @@ class CrossRingConfig(BaseNoCConfig):
     def _generate_ip_positions(self) -> None:
         """生成IP位置列表。"""
         # 默认IP分布策略：每个节点都会挂所有的IP
-        ip_positions = [i for i in range(self.num_nodes)]
+        ip_positions = [i for i in range(self.NUM_NODES)]
 
         # 各类IP使用相同的位置列表
         self.ddr_send_position_list = ip_positions.copy()
@@ -246,120 +246,120 @@ class CrossRingConfig(BaseNoCConfig):
         errors = []
 
         # 拓扑参数验证
-        if self.num_nodes != self.num_row * self.num_col:
-            errors.append(f"节点数必须等于行数×列数 (num_nodes={self.num_nodes}, num_row={self.num_row}, num_col={self.num_col})")
+        if self.NUM_NODES != self.NUM_ROW * self.NUM_COL:
+            errors.append(f"节点数必须等于行数×列数 (NUM_NODES={self.NUM_NODES}, NUM_ROW={self.NUM_ROW}, NUM_COL={self.NUM_COL})")
 
-        if self.num_col < 2 or self.num_row < 2:
-            errors.append(f"CrossRing拓扑至少需要2×2节点 (num_row={self.num_row}, num_col={self.num_col})")
+        if self.NUM_COL < 2 or self.NUM_ROW < 2:
+            errors.append(f"CrossRing拓扑至少需要2×2节点 (num_row={self.NUM_ROW}, num_col={self.NUM_COL})")
 
         # 路由策略验证
         try:
-            RoutingStrategy(self.basic_config.routing_strategy)
+            RoutingStrategy(self.basic_config.ROUTING_STRATEGY)
         except ValueError:
-            errors.append(f"无效的路由策略: {self.basic_config.routing_strategy}，支持的策略: {[s.value for s in RoutingStrategy]}")
+            errors.append(f"无效的路由策略: {self.basic_config.ROUTING_STRATEGY}，支持的策略: {[s.value for s in RoutingStrategy]}")
 
         # FIFO深度验证 - 安全地访问属性
         fifo_cfg = self.fifo_config
-        if hasattr(fifo_cfg, "rb_in_depth"):
-            if fifo_cfg.rb_in_depth <= 0:
-                errors.append(f"RB输入FIFO深度必须为正数 (rb_in_depth={fifo_cfg.rb_in_depth})")
-            if fifo_cfg.eq_in_depth <= 0:
-                errors.append(f"EQ输入FIFO深度必须为正数 (eq_in_depth={fifo_cfg.eq_in_depth})")
+        if hasattr(fifo_cfg, "RB_IN_DEPTH"):
+            if fifo_cfg.RB_IN_DEPTH <= 0:
+                errors.append(f"RB输入FIFO深度必须为正数 (RB_IN_DEPTH={fifo_cfg.RB_IN_DEPTH})")
+            if fifo_cfg.EQ_IN_DEPTH <= 0:
+                errors.append(f"EQ输入FIFO深度必须为正数 (EQ_IN_DEPTH={fifo_cfg.EQ_IN_DEPTH})")
         elif isinstance(fifo_cfg, dict):
-            if fifo_cfg.get("rb_in_depth", 0) <= 0:
-                errors.append(f"RB输入FIFO深度必须为正数 (rb_in_depth={fifo_cfg.get('rb_in_depth', 0)})")
-            if fifo_cfg.get("eq_in_depth", 0) <= 0:
-                errors.append(f"EQ输入FIFO深度必须为正数 (eq_in_depth={fifo_cfg.get('eq_in_depth', 0)})")
+            if fifo_cfg.get("RB_IN_DEPTH", 0) <= 0:
+                errors.append(f"RB输入FIFO深度必须为正数 (RB_IN_DEPTH={fifo_cfg.get('RB_IN_DEPTH', 0)})")
+            if fifo_cfg.get("EQ_IN_DEPTH", 0) <= 0:
+                errors.append(f"EQ输入FIFO深度必须为正数 (EQ_IN_DEPTH={fifo_cfg.get('EQ_IN_DEPTH', 0)})")
 
         # Tag参数验证 - 放宽约束
         tag_cfg = self.tag_config
 
         # 安全地获取Tag参数
-        if hasattr(tag_cfg, "tl_etag_t2_ue_max"):
-            tl_t2 = tag_cfg.tl_etag_t2_ue_max
-            tl_t1 = tag_cfg.tl_etag_t1_ue_max
-            tr_t2 = tag_cfg.tr_etag_t2_ue_max
-            tu_t2 = tag_cfg.tu_etag_t2_ue_max
-            tu_t1 = tag_cfg.tu_etag_t1_ue_max
-            td_t2 = tag_cfg.td_etag_t2_ue_max
+        if hasattr(tag_cfg, "TL_ETAG_T2_UE_MAX"):
+            tl_t2 = tag_cfg.TL_ETAG_T2_UE_MAX
+            tl_t1 = tag_cfg.TL_ETAG_T1_UE_MAX
+            tr_t2 = tag_cfg.TR_ETAG_T2_UE_MAX
+            tu_t2 = tag_cfg.TU_ETAG_T2_UE_MAX
+            tu_t1 = tag_cfg.TU_ETAG_T1_UE_MAX
+            td_t2 = tag_cfg.TD_ETAG_T2_UE_MAX
         elif isinstance(tag_cfg, dict):
-            tr_t2 = tag_cfg.get("tr_etag_t2_ue_max", 0)
-            tl_t2 = tag_cfg.get("tl_etag_t2_ue_max", 0)
-            tl_t1 = tag_cfg.get("tl_etag_t1_ue_max", 0)
-            td_t2 = tag_cfg.get("td_etag_t2_ue_max", 0)
-            tu_t2 = tag_cfg.get("tu_etag_t2_ue_max", 0)
-            tu_t1 = tag_cfg.get("tu_etag_t1_ue_max", 0)
+            tr_t2 = tag_cfg.get("TR_ETAG_T2_UE_MAX", 0)
+            tl_t2 = tag_cfg.get("TL_ETAG_T2_UE_MAX", 0)
+            tl_t1 = tag_cfg.get("TL_ETAG_T1_UE_MAX", 0)
+            td_t2 = tag_cfg.get("TD_ETAG_T2_UE_MAX", 0)
+            tu_t2 = tag_cfg.get("TU_ETAG_T2_UE_MAX", 0)
+            tu_t1 = tag_cfg.get("TU_ETAG_T1_UE_MAX", 0)
         else:
             tl_t2 = tl_t1 = tr_t2 = td_t2 = tu_t2 = tu_t1 = 0
 
         # 安全地获取FIFO深度
-        if hasattr(fifo_cfg, "rb_in_depth"):
-            rb_depth = fifo_cfg.rb_in_depth
-            eq_depth = fifo_cfg.eq_in_depth
+        if hasattr(fifo_cfg, "RB_IN_DEPTH"):
+            rb_depth = fifo_cfg.RB_IN_DEPTH
+            eq_depth = fifo_cfg.EQ_IN_DEPTH
         elif isinstance(fifo_cfg, dict):
-            rb_depth = fifo_cfg.get("rb_in_depth", 16)
-            eq_depth = fifo_cfg.get("eq_in_depth", 16)
+            rb_depth = fifo_cfg.get("RB_IN_DEPTH", 16)
+            eq_depth = fifo_cfg.get("EQ_IN_DEPTH", 16)
         else:
             rb_depth = eq_depth = 8
 
         if tl_t2 <= 0:
-            errors.append(f"TL ETag T2必须为正数 (tl_etag_t2_ue_max={tl_t2})")
+            errors.append(f"TL ETag T2必须为正数 (TL_ETAG_T2_UE_MAX={tl_t2})")
         if tl_t1 <= tl_t2:
-            errors.append(f"TL ETag T1必须大于T2 (tl_etag_t1_ue_max={tl_t1}, tl_etag_t2_ue_max={tl_t2})")
+            errors.append(f"TL ETag T1必须大于T2 (TL_ETAG_T1_UE_MAX={tl_t1}, TL_ETAG_T2_UE_MAX={tl_t2})")
         if tl_t1 >= rb_depth:
-            errors.append(f"TL ETag T1必须小于RB_IN_FIFO_DEPTH (tl_etag_t1_ue_max={tl_t1}, rb_in_depth={rb_depth})")
+            errors.append(f"TL ETag T1必须小于RB_IN_FIFO_DEPTH (TL_ETAG_T1_UE_MAX={tl_t1}, RB_IN_DEPTH={rb_depth})")
         if tr_t2 >= rb_depth:
-            errors.append(f"TR ETag T2必须小于RB_IN_FIFO_DEPTH (tr_etag_t2_ue_max={tr_t2}, rb_in_depth={rb_depth})")
+            errors.append(f"TR ETag T2必须小于RB_IN_FIFO_DEPTH (TR_ETAG_T2_UE_MAX={tr_t2}, RB_IN_DEPTH={rb_depth})")
 
         if tu_t2 <= 0:
-            errors.append(f"TU ETag T2必须为正数 (tu_etag_t2_ue_max={tu_t2})")
+            errors.append(f"TU ETag T2必须为正数 (TU_ETAG_T2_UE_MAX={tu_t2})")
         if tu_t1 <= tu_t2:
-            errors.append(f"TU ETag T1必须大于T2 (tu_etag_t1_ue_max={tu_t1}, tu_etag_t2_ue_max={tu_t2})")
+            errors.append(f"TU ETag T1必须大于T2 (TU_ETAG_T1_UE_MAX={tu_t1}, TU_ETAG_T2_UE_MAX={tu_t2})")
         if tu_t1 >= eq_depth:
-            errors.append(f"TU ETag T1必须小于EQ_IN_FIFO_DEPTH (tu_etag_t1_ue_max={tu_t1}, eq_in_depth={eq_depth})")
+            errors.append(f"TU ETag T1必须小于EQ_IN_FIFO_DEPTH (TU_ETAG_T1_UE_MAX={tu_t1}, EQ_IN_DEPTH={eq_depth})")
         if td_t2 >= eq_depth:
-            errors.append(f"TD ETag T2必须小于EQ_IN_FIFO_DEPTH (td_etag_t2_ue_max={td_t2}, eq_in_depth={eq_depth})")
+            errors.append(f"TD ETag T2必须小于EQ_IN_FIFO_DEPTH (TD_ETAG_T2_UE_MAX={td_t2}, EQ_IN_DEPTH={eq_depth})")
 
         #  Tracker 配置验证 - 安全地访问属性
         tracker = self.tracker_config
-        if hasattr(tracker, "rn_r_tracker_ostd"):
-            if tracker.rn_r_tracker_ostd <= 0 or tracker.rn_w_tracker_ostd <= 0:
-                errors.append(f"RN Tracker OSTD必须为正数 (rn_r_tracker_ostd={tracker.rn_r_tracker_ostd}, rn_w_tracker_ostd={tracker.rn_w_tracker_ostd})")
-            if tracker.sn_ddr_r_tracker_ostd <= 0 or tracker.sn_l2m_r_tracker_ostd <= 0:
-                errors.append(f"SN Tracker OSTD必须为正数 (sn_ddr_r_tracker_ostd={tracker.sn_ddr_r_tracker_ostd}, sn_l2m_r_tracker_ostd={tracker.sn_l2m_r_tracker_ostd})")
+        if hasattr(tracker, "RN_R_TRACKER_OSTD"):
+            if tracker.RN_R_TRACKER_OSTD <= 0 or tracker.RN_W_TRACKER_OSTD <= 0:
+                errors.append(f"RN Tracker OSTD必须为正数 (RN_R_TRACKER_OSTD={tracker.RN_R_TRACKER_OSTD}, RN_W_TRACKER_OSTD={tracker.RN_W_TRACKER_OSTD})")
+            if tracker.SN_DDR_R_TRACKER_OSTD <= 0 or tracker.SN_L2M_R_TRACKER_OSTD <= 0:
+                errors.append(f"SN Tracker OSTD必须为正数 (SN_DDR_R_TRACKER_OSTD={tracker.SN_DDR_R_TRACKER_OSTD}, SN_L2M_R_TRACKER_OSTD={tracker.SN_L2M_R_TRACKER_OSTD})")
             # 缓冲区大小一致性验证
-            if hasattr(self, "rn_rdb_size") and self.rn_rdb_size != tracker.rn_r_tracker_ostd * self.basic_config.burst:
-                errors.append(f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (rn_rdb_size={self.rn_rdb_size}, rn_r_tracker_ostd={tracker.rn_r_tracker_ostd}, burst={self.basic_config.burst})")
+            if hasattr(self, "rn_rdb_size") and self.rn_rdb_size != tracker.RN_R_TRACKER_OSTD * self.basic_config.BURST:
+                errors.append(f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (rn_rdb_size={self.rn_rdb_size}, RN_R_TRACKER_OSTD={tracker.RN_R_TRACKER_OSTD}, BURST={self.basic_config.BURST})")
         elif isinstance(tracker, dict):
-            rn_r_ostd = tracker.get("rn_r_tracker_ostd", 64)
-            rn_w_ostd = tracker.get("rn_w_tracker_ostd", 32)
+            rn_r_ostd = tracker.get("RN_R_TRACKER_OSTD", 64)
+            rn_w_ostd = tracker.get("RN_W_TRACKER_OSTD", 32)
             if rn_r_ostd <= 0 or rn_w_ostd <= 0:
-                errors.append(f"RN Tracker OSTD必须为正数 (rn_r_tracker_ostd={rn_r_ostd}, rn_w_tracker_ostd={rn_w_ostd})")
+                errors.append(f"RN Tracker OSTD必须为正数 (RN_R_TRACKER_OSTD={rn_r_ostd}, RN_W_TRACKER_OSTD={rn_w_ostd})")
             # 缓冲区大小一致性验证
-            if hasattr(self, "rn_rdb_size") and self.rn_rdb_size != rn_r_ostd * self.basic_config.burst:
-                errors.append(f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (rn_rdb_size={self.rn_rdb_size}, rn_r_tracker_ostd={rn_r_ostd}, burst={self.basic_config.burst})")
+            if hasattr(self, "rn_rdb_size") and self.rn_rdb_size != rn_r_ostd * self.basic_config.BURST:
+                errors.append(f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (rn_rdb_size={self.rn_rdb_size}, RN_R_TRACKER_OSTD={rn_r_ostd}, BURST={self.basic_config.BURST})")
 
         # IP配置验证 - 安全地访问属性
         ip_cfg = self.ip_config
-        if hasattr(ip_cfg, "gdma_count"):
-            if ip_cfg.gdma_count < 0 or ip_cfg.sdma_count < 0:
-                errors.append(f"IP数量不能为负数 (gdma_count={ip_cfg.gdma_count}, sdma_count={ip_cfg.sdma_count})")
-            if ip_cfg.gdma_bw_limit <= 0 or ip_cfg.ddr_bw_limit <= 0:
-                errors.append(f"带宽限制必须为正数 (gdma_bw_limit={ip_cfg.gdma_bw_limit}, ddr_bw_limit={ip_cfg.ddr_bw_limit})")
+        if hasattr(ip_cfg, "GDMA_COUNT"):
+            if ip_cfg.GDMA_COUNT < 0 or ip_cfg.SDMA_COUNT < 0:
+                errors.append(f"IP数量不能为负数 (GDMA_COUNT={ip_cfg.GDMA_COUNT}, SDMA_COUNT={ip_cfg.SDMA_COUNT})")
+            if ip_cfg.GDMA_BW_LIMIT <= 0 or ip_cfg.DDR_BW_LIMIT <= 0:
+                errors.append(f"带宽限制必须为正数 (GDMA_BW_LIMIT={ip_cfg.GDMA_BW_LIMIT}, DDR_BW_LIMIT={ip_cfg.DDR_BW_LIMIT})")
         elif isinstance(ip_cfg, dict):
-            gdma_count = ip_cfg.get("gdma_count", 0)
-            sdma_count = ip_cfg.get("sdma_count", 0)
+            gdma_count = ip_cfg.get("GDMA_COUNT", 0)
+            sdma_count = ip_cfg.get("SDMA_COUNT", 0)
             if gdma_count < 0 or sdma_count < 0:
-                errors.append(f"IP数量不能为负数 (gdma_count={gdma_count}, sdma_count={sdma_count})")
-            gdma_bw = ip_cfg.get("gdma_bw_limit", 8.0)
-            ddr_bw = ip_cfg.get("ddr_bw_limit", 80.0)
+                errors.append(f"IP数量不能为负数 (GDMA_COUNT={gdma_count}, SDMA_COUNT={sdma_count})")
+            gdma_bw = ip_cfg.get("GDMA_BW_LIMIT", 8.0)
+            ddr_bw = ip_cfg.get("DDR_BW_LIMIT", 80.0)
             if gdma_bw <= 0 or ddr_bw <= 0:
-                errors.append(f"带宽限制必须为正数 (gdma_bw_limit={gdma_bw}, ddr_bw_limit={ddr_bw})")
+                errors.append(f"带宽限制必须为正数 (GDMA_BW_LIMIT={gdma_bw}, DDR_BW_LIMIT={ddr_bw})")
 
         # 位置列表验证
         for pos in self.ddr_send_position_list:
-            if pos >= self.num_nodes:
-                errors.append(f"IP位置{pos}超出节点范围 (num_nodes={self.num_nodes})")
+            if pos >= self.NUM_NODES:
+                errors.append(f"IP位置{pos}超出节点范围 (num_nodes={self.NUM_NODES})")
 
         if errors:
             return False, "; ".join(errors)
@@ -375,12 +375,12 @@ class CrossRingConfig(BaseNoCConfig):
         """
         return {
             "topology_type": self.topology_type,
-            "num_nodes": self.num_nodes,
-            "num_col": self.num_col,
-            "num_row": self.num_row,
-            "num_ip": self.num_ip,
-            "num_rn": self.num_rn,
-            "num_sn": self.num_sn,
+            "num_nodes": self.NUM_NODES,
+            "num_col": self.NUM_COL,
+            "num_row": self.NUM_ROW,
+            "num_ip": self.NUM_IP,
+            "num_rn": self.NUM_RN,
+            "num_sn": self.NUM_SN,
             "channel_spec": self.channel_spec,
             "ch_name_list": self.ch_name_list,
             "ip_positions": {
@@ -400,9 +400,9 @@ class CrossRingConfig(BaseNoCConfig):
             num_col: 新的列数
             num_row: 新的行数
         """
-        self.num_row = num_row
-        self.num_col = num_col
-        self.num_nodes = num_col * num_row
+        self.NUM_ROW = num_row
+        self.NUM_COL = num_col
+        self.NUM_NODES = num_col * num_row
 
         # 重新生成相关配置
         self._generate_ip_positions()
@@ -466,7 +466,7 @@ class CrossRingConfig(BaseNoCConfig):
         strategy_enum = RoutingStrategy(strategy)
 
         # 更新配置
-        self.basic_config.routing_strategy = strategy
+        self.basic_config.ROUTING_STRATEGY = strategy
         self.routing_strategy = strategy_enum
 
     def get_routing_strategy(self) -> str:
@@ -487,29 +487,29 @@ class CrossRingConfig(BaseNoCConfig):
         """
         if preset == "2260E":
             self.update_topology_size(num_row=3, num_col=3)
-            self.num_ip = 8
-            self.update_fifo_config(rb_in_depth=16, eq_in_depth=16)
-            self.update_ip_config(gdma_count=4, sdma_count=4, ddr_count=16)
+            self.NUM_IP = 8
+            self.update_fifo_config(RB_IN_DEPTH=16, EQ_IN_DEPTH=16)
+            self.update_ip_config(GDMA_COUNT=4, SDMA_COUNT=4, DDR_COUNT=16)
             self.update_tag_config(
-                tl_etag_t2_ue_max=8,
-                tl_etag_t1_ue_max=15,
-                tr_etag_t2_ue_max=12,
-                tu_etag_t2_ue_max=8,
-                tu_etag_t1_ue_max=15,
-                td_etag_t2_ue_max=12,
+                TL_ETAG_T2_UE_MAX=8,
+                TL_ETAG_T1_UE_MAX=15,
+                TR_ETAG_T2_UE_MAX=12,
+                TU_ETAG_T2_UE_MAX=8,
+                TU_ETAG_T1_UE_MAX=15,
+                TD_ETAG_T2_UE_MAX=12,
             )
         elif preset == "2262":
             self.update_topology_size(num_row=5, num_col=4)
-            self.num_ip = 12
-            self.update_fifo_config(rb_in_depth=16, eq_in_depth=16)
-            self.update_ip_config(gdma_count=32, ddr_count=32)
+            self.NUM_IP = 12
+            self.update_fifo_config(RB_IN_DEPTH=16, EQ_IN_DEPTH=16)
+            self.update_ip_config(GDMA_COUNT=32, DDR_COUNT=32)
             self.update_tag_config(
-                tl_etag_t2_ue_max=8,
-                tl_etag_t1_ue_max=15,
-                tr_etag_t2_ue_max=12,
-                tu_etag_t2_ue_max=8,
-                tu_etag_t1_ue_max=15,
-                td_etag_t2_ue_max=12,
+                TL_ETAG_T2_UE_MAX=8,
+                TL_ETAG_T1_UE_MAX=15,
+                TR_ETAG_T2_UE_MAX=12,
+                TU_ETAG_T2_UE_MAX=8,
+                TU_ETAG_T1_UE_MAX=15,
+                TD_ETAG_T2_UE_MAX=12,
             )
         else:
             raise ValueError(f"未知的预设配置: {preset}")
@@ -530,9 +530,9 @@ class CrossRingConfig(BaseNoCConfig):
         # 添加CrossRing特有参数
         crossring_dict = {
             "config_name": self.config_name,
-            "num_col": self.num_col,
-            "num_row": self.num_row,
-            "num_ip": self.num_ip,
+            "num_col": self.NUM_COL,
+            "num_row": self.NUM_ROW,
+            "num_ip": self.NUM_IP,
             "topo_type": self.topology_type,
             # 组合配置
             "basic_config": self.basic_config.__dict__,
@@ -570,11 +570,11 @@ class CrossRingConfig(BaseNoCConfig):
         if "config_name" in config_dict:
             self.config_name = config_dict["config_name"]
         if "num_col" in config_dict:
-            self.num_col = config_dict["num_col"]
+            self.NUM_COL = config_dict["num_col"]
         if "num_row" in config_dict:
-            self.num_row = config_dict["num_row"]
+            self.NUM_ROW = config_dict["num_row"]
         if "num_ip" in config_dict:
-            self.num_ip = config_dict["num_ip"]
+            self.NUM_IP = config_dict["num_ip"]
 
         # 确保配置对象已初始化
         if not hasattr(self, "basic_config") or self.ip_config is None:
@@ -655,18 +655,18 @@ class CrossRingConfig(BaseNoCConfig):
                     self.cdma_send_position_list = ip_pos["cdma"]
 
         # 更新节点数
-        self.num_nodes = self.num_col * self.num_row
+        self.NUM_NODES = self.NUM_COL * self.NUM_ROW
 
         # 重新生成派生配置
         self._generate_derived_config()
 
     def __str__(self) -> str:
         """字符串表示。"""
-        return f"CrossRingConfig({self.config_name}, {self.num_row}×{self.num_col})"
+        return f"CrossRingConfig({self.config_name}, {self.NUM_ROW}×{self.NUM_COL})"
 
     def __repr__(self) -> str:
         """详细字符串表示。"""
-        return f"CrossRingConfig(name='{self.config_name}', topology={self.num_row}×{self.num_col})"
+        return f"CrossRingConfig(name='{self.config_name}', topology={self.NUM_ROW}×{self.NUM_COL})"
 
     # ========== 新增的NoC专用功能 ==========
 
@@ -687,7 +687,7 @@ class CrossRingConfig(BaseNoCConfig):
                 "max_cycles": max_cycles,
                 "warmup_cycles": warmup_cycles,
                 "stats_start_cycle": stats_start_cycle,
-                "cycle_frequency": self.basic_config.network_frequency,
+                "cycle_frequency": self.basic_config.NETWORK_FREQUENCY,
             },
             "topology": self.get_topology_params(),
             "resources": self.get_resource_config(),
@@ -698,70 +698,70 @@ class CrossRingConfig(BaseNoCConfig):
         """获取资源配置信息"""
         return {
             "rn_resources": {
-                "read_tracker_count": self.tracker_config.rn_r_tracker_ostd,
-                "write_tracker_count": self.tracker_config.rn_w_tracker_ostd,
+                "read_tracker_count": self.tracker_config.RN_R_TRACKER_OSTD,
+                "write_tracker_count": self.tracker_config.RN_W_TRACKER_OSTD,
                 "rdb_size": self.rn_rdb_size,
                 "wdb_size": self.rn_wdb_size,
             },
             "sn_resources": {
                 "ddr": {
-                    "read_tracker_count": self.tracker_config.sn_ddr_r_tracker_ostd,
-                    "write_tracker_count": self.tracker_config.sn_ddr_w_tracker_ostd,
+                    "read_tracker_count": self.tracker_config.SN_DDR_R_TRACKER_OSTD,
+                    "write_tracker_count": self.tracker_config.SN_DDR_W_TRACKER_OSTD,
                     "wdb_size": self.sn_ddr_wdb_size,
                 },
                 "l2m": {
-                    "read_tracker_count": self.tracker_config.sn_l2m_r_tracker_ostd,
-                    "write_tracker_count": self.tracker_config.sn_l2m_w_tracker_ostd,
+                    "read_tracker_count": self.tracker_config.SN_L2M_R_TRACKER_OSTD,
+                    "write_tracker_count": self.tracker_config.SN_L2M_W_TRACKER_OSTD,
                     "wdb_size": self.sn_l2m_wdb_size,
                 },
-                "tracker_release_latency": self.tracker_config.sn_tracker_release_latency,
+                "tracker_release_latency": self.tracker_config.SN_TRACKER_RELEASE_LATENCY,
             },
             "fifo_depths": {
-                "rb_in": self.fifo_config.rb_in_depth,
-                "rb_out": self.fifo_config.rb_out_depth,
-                "iq_out": self.fifo_config.iq_out_depth,
-                "eq_in": self.fifo_config.eq_in_depth,
-                "iq_ch": self.fifo_config.iq_ch_depth,
-                "eq_ch": self.fifo_config.eq_ch_depth,
+                "rb_in": self.fifo_config.RB_IN_DEPTH,
+                "rb_out": self.fifo_config.RB_OUT_DEPTH,
+                "iq_out": self.fifo_config.IQ_OUT_DEPTH,
+                "eq_in": self.fifo_config.EQ_IN_DEPTH,
+                "iq_ch": self.fifo_config.IQ_CH_DEPTH,
+                "eq_ch": self.fifo_config.EQ_CH_DEPTH,
             },
         }
 
     def get_traffic_config(self) -> Dict[str, Any]:
         """获取流量配置信息"""
         return {
-            "burst_length": self.basic_config.burst,
+            "burst_length": self.basic_config.BURST,
             "ip_bandwidth_limits": {
-                "gdma": self.ip_config.gdma_bw_limit,
-                "sdma": self.ip_config.sdma_bw_limit,
-                "cdma": self.ip_config.cdma_bw_limit,
-                "ddr": self.ip_config.ddr_bw_limit,
-                "l2m": self.ip_config.l2m_bw_limit,
+                "gdma": self.ip_config.GDMA_BW_LIMIT,
+                "sdma": self.ip_config.SDMA_BW_LIMIT,
+                "cdma": self.ip_config.CDMA_BW_LIMIT,
+                "ddr": self.ip_config.DDR_BW_LIMIT,
+                "l2m": self.ip_config.L2M_BW_LIMIT,
             },
             "latencies": {
-                "ddr_read": self.latency_config.ddr_r_latency,
-                "ddr_write": self.latency_config.ddr_w_latency,
-                "l2m_read": self.latency_config.l2m_r_latency,
-                "l2m_write": self.latency_config.l2m_w_latency,
+                "ddr_read": self.latency_config.DDR_R_LATENCY,
+                "ddr_write": self.latency_config.DDR_W_LATENCY,
+                "l2m_read": self.latency_config.L2M_R_LATENCY,
+                "l2m_write": self.latency_config.L2M_W_LATENCY,
             },
         }
 
     def get_etag_config(self) -> Dict[str, Any]:
         """获取ETag配置信息"""
         return {
-            "bothside_upgrade": self.tag_config.etag_bothside_upgrade,
+            "bothside_upgrade": self.tag_config.ETAG_BOTHSIDE_UPGRADE,
             "tl_settings": {
-                "t1_ue_max": self.tag_config.tl_etag_t1_ue_max,
-                "t2_ue_max": self.tag_config.tl_etag_t2_ue_max,
+                "t1_ue_max": self.tag_config.TL_ETAG_T1_UE_MAX,
+                "t2_ue_max": self.tag_config.TL_ETAG_T2_UE_MAX,
             },
             "tr_settings": {
-                "t2_ue_max": self.tag_config.tr_etag_t2_ue_max,
+                "t2_ue_max": self.tag_config.TR_ETAG_T2_UE_MAX,
             },
             "tu_settings": {
-                "t1_ue_max": self.tag_config.tu_etag_t1_ue_max,
-                "t2_ue_max": self.tag_config.tu_etag_t2_ue_max,
+                "t1_ue_max": self.tag_config.TU_ETAG_T1_UE_MAX,
+                "t2_ue_max": self.tag_config.TU_ETAG_T2_UE_MAX,
             },
             "td_settings": {
-                "t2_ue_max": self.tag_config.td_etag_t2_ue_max,
+                "t2_ue_max": self.tag_config.TD_ETAG_T2_UE_MAX,
             },
         }
 
@@ -769,12 +769,12 @@ class CrossRingConfig(BaseNoCConfig):
         """获取ITag配置信息"""
         return {
             "horizontal": {
-                "trigger_threshold": self.tag_config.itag_trigger_th_h,
-                "max_num": self.tag_config.itag_max_num_h,
+                "trigger_threshold": self.tag_config.ITAG_TRIGGER_TH_H,
+                "max_num": self.tag_config.ITAG_MAX_NUM_H,
             },
             "vertical": {
-                "trigger_threshold": self.tag_config.itag_trigger_th_v,
-                "max_num": self.tag_config.itag_max_num_v,
+                "trigger_threshold": self.tag_config.ITAG_TRIGGER_TH_V,
+                "max_num": self.tag_config.ITAG_MAX_NUM_V,
             },
         }
 
@@ -795,14 +795,14 @@ class CrossRingConfig(BaseNoCConfig):
             scale_factor = min(2.0, target_nodes / 25.0)
 
         # 按比例调整tracker数量
-        self.tracker_config.rn_r_tracker_ostd = max(32, int(self.tracker_config.rn_r_tracker_ostd * scale_factor))
-        self.tracker_config.rn_w_tracker_ostd = max(16, int(self.tracker_config.rn_w_tracker_ostd * scale_factor))
-        self.tracker_config.sn_ddr_r_tracker_ostd = max(48, int(self.tracker_config.sn_ddr_r_tracker_ostd * scale_factor))
-        self.tracker_config.sn_ddr_w_tracker_ostd = max(24, int(self.tracker_config.sn_ddr_w_tracker_ostd * scale_factor))
+        self.tracker_config.RN_R_TRACKER_OSTD = max(32, int(self.tracker_config.RN_R_TRACKER_OSTD * scale_factor))
+        self.tracker_config.RN_W_TRACKER_OSTD = max(16, int(self.tracker_config.RN_W_TRACKER_OSTD * scale_factor))
+        self.tracker_config.SN_DDR_R_TRACKER_OSTD = max(48, int(self.tracker_config.SN_DDR_R_TRACKER_OSTD * scale_factor))
+        self.tracker_config.SN_DDR_W_TRACKER_OSTD = max(24, int(self.tracker_config.SN_DDR_W_TRACKER_OSTD * scale_factor))
 
         # 按比例调整FIFO深度
-        self.fifo_config.rb_in_depth = max(8, int(self.fifo_config.rb_in_depth * scale_factor))
-        self.fifo_config.eq_in_depth = max(8, int(self.fifo_config.eq_in_depth * scale_factor))
+        self.fifo_config.RB_IN_DEPTH = max(8, int(self.fifo_config.RB_IN_DEPTH * scale_factor))
+        self.fifo_config.EQ_IN_DEPTH = max(8, int(self.fifo_config.EQ_IN_DEPTH * scale_factor))
 
         # 重新生成派生配置
         self._generate_derived_config()
@@ -810,15 +810,15 @@ class CrossRingConfig(BaseNoCConfig):
     def enable_debug_mode(self) -> None:
         """启用调试模式"""
         # 减少FIFO深度以加快调试
-        self.fifo_config.rb_in_depth = max(4, self.fifo_config.rb_in_depth // 2)
-        self.fifo_config.eq_in_depth = max(4, self.fifo_config.eq_in_depth // 2)
+        self.fifo_config.RB_IN_DEPTH = max(4, self.fifo_config.RB_IN_DEPTH // 2)
+        self.fifo_config.EQ_IN_DEPTH = max(4, self.fifo_config.EQ_IN_DEPTH // 2)
 
         # 减少tracker数量以便观察
-        self.tracker_config.rn_r_tracker_ostd = min(16, self.tracker_config.rn_r_tracker_ostd)
-        self.tracker_config.rn_w_tracker_ostd = min(8, self.tracker_config.rn_w_tracker_ostd)
+        self.tracker_config.RN_R_TRACKER_OSTD = min(16, self.tracker_config.RN_R_TRACKER_OSTD)
+        self.tracker_config.RN_W_TRACKER_OSTD = min(8, self.tracker_config.RN_W_TRACKER_OSTD)
 
         # 降低带宽限制
-        for attr in ["gdma_bw_limit", "sdma_bw_limit", "cdma_bw_limit", "ddr_bw_limit", "l2m_bw_limit"]:
+        for attr in ["GDMA_BW_LIMIT", "SDMA_BW_LIMIT", "CDMA_BW_LIMIT", "DDR_BW_LIMIT", "L2M_BW_LIMIT"]:
             setattr(self.ip_config, attr, getattr(self.ip_config, attr) / 4)
 
         # 重新生成派生配置
@@ -832,10 +832,10 @@ class CrossRingConfig(BaseNoCConfig):
             推荐的仿真参数
         """
         # 基于拓扑大小和资源配置推荐周期数
-        base_cycles = self.num_nodes * 1000
+        base_cycles = self.NUM_NODES * 1000
 
         # 根据tracker数量调整
-        tracker_factor = (self.tracker_config.rn_r_tracker_ostd + self.tracker_config.rn_w_tracker_ostd) / 96
+        tracker_factor = (self.tracker_config.RN_R_TRACKER_OSTD + self.tracker_config.RN_W_TRACKER_OSTD) / 96
         cycles = int(base_cycles * tracker_factor)
 
         return {

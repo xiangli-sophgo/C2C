@@ -233,9 +233,9 @@ class BaseIPInterface(ABC):
 
         # ========== 时钟域转换 ==========
         if hasattr(config, "basic_config"):
-            self.clock_ratio = getattr(config.basic_config, "network_frequency", 2)
+            self.clock_ratio = getattr(config.basic_config, "NETWORK_FREQUENCY", 2)
         else:
-            self.clock_ratio = getattr(config, "network_frequency", 2)
+            self.clock_ratio = getattr(config, "NETWORK_FREQUENCY", 2)
         self._setup_clock_domain_fifos()
 
         # ========== STI三通道FIFO ==========
@@ -267,11 +267,11 @@ class BaseIPInterface(ABC):
         """设置时钟域转换FIFO"""
         # 支持CrossRing的组合配置
         if hasattr(self.config, "basic_config"):
-            l2h_depth = getattr(self.config.basic_config, "ip_l2h_fifo_depth", 4)
-            h2l_depth = getattr(self.config.basic_config, "ip_h2l_fifo_depth", 4)
+            l2h_depth = getattr(self.config.basic_config, "IP_L2H_FIFO_DEPTH", 4)
+            h2l_depth = getattr(self.config.basic_config, "IP_H2L_FIFO_DEPTH", 4)
         else:
-            l2h_depth = getattr(self.config, "ip_l2h_fifo_depth", 4)
-            h2l_depth = getattr(self.config, "ip_h2l_fifo_depth", 4)
+            l2h_depth = getattr(self.config, "IP_L2H_FIFO_DEPTH", 4)
+            h2l_depth = getattr(self.config, "IP_H2L_FIFO_DEPTH", 4)
 
         self.l2h_fifos = {"req": PipelinedFIFO("l2h_req", depth=l2h_depth), "rsp": PipelinedFIFO("l2h_rsp", depth=l2h_depth), "data": PipelinedFIFO("l2h_data", depth=l2h_depth)}
 

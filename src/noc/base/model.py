@@ -90,7 +90,7 @@ class BaseNoCModel(ABC):
         self.trace_packets = set()
         
         # 请求追踪器 - 包含完整的flit追踪功能
-        self.request_tracker = RequestTracker(network_frequency=getattr(config, 'network_frequency', 1))
+        self.request_tracker = RequestTracker(network_frequency=getattr(config, 'NETWORK_FREQUENCY', 1))
         
         # packet_id生成器 - 使用简单数字确保唯一性
         self.next_packet_id = 1
@@ -922,7 +922,7 @@ class BaseNoCModel(ABC):
                         burst = int(burst)
                         
                         # 验证节点范围
-                        num_nodes = getattr(self.config, 'num_nodes', 0)
+                        num_nodes = getattr(self.config, 'NUM_NODES', 0)
                         if num_nodes > 0 and (src >= num_nodes or dst >= num_nodes):
                             self.logger.warning(f"第{line_num}行节点范围无效（src={src}, dst={dst}），跳过")
                             failed_count += 1

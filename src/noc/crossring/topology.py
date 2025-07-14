@@ -46,13 +46,13 @@ class CrossRingTopology(BaseNoCTopology):
         config.topology_type = TopologyType.CROSSRING
 
         # CrossRing特有属性
-        self.num_rows = config.num_row
-        self.num_cols = config.num_col
+        self.NUM_ROWs = config.NUM_ROW
+        self.NUM_COLs = config.NUM_COL
         self.crossring_config = config
 
         # 初始化日志
-        self._logger = logging.getLogger(f"{self.__class__.__name__}[{self.num_rows}×{self.num_cols}]")
-        self._logger.info(f"初始化CrossRing拓扑: {self.num_rows}×{self.num_cols}")
+        self._logger = logging.getLogger(f"{self.__class__.__name__}[{self.NUM_ROWs}×{self.NUM_COLs}]")
+        self._logger.info(f"初始化CrossRing拓扑: {self.NUM_ROWs}×{self.NUM_COLs}")
 
         super().__init__(config)
 
@@ -70,7 +70,7 @@ class CrossRingTopology(BaseNoCTopology):
         self._logger.info("开始构建CrossRing拓扑结构")
 
         # 创建邻接矩阵
-        self._adjacency_matrix = create_crossring_adjacency_matrix(self.num_rows, self.num_cols)
+        self._adjacency_matrix = create_crossring_adjacency_matrix(self.NUM_ROWs, self.NUM_COLs)
 
         # 验证邻接矩阵
         is_valid, error_msg = validate_adjacency_matrix(self._adjacency_matrix)
@@ -86,8 +86,8 @@ class CrossRingTopology(BaseNoCTopology):
         """建立节点位置映射。"""
         self._node_positions.clear()
 
-        for node_id in range(self.num_nodes):
-            row, col = divmod(node_id, self.num_cols)
+        for node_id in range(self.NUM_NODES):
+            row, col = divmod(node_id, self.NUM_COLs)
             self._node_positions[node_id] = (row, col)
 
     def get_neighbors(self, node_id: NodeId) -> List[NodeId]:
@@ -100,8 +100,8 @@ class CrossRingTopology(BaseNoCTopology):
         Returns:
             邻居节点ID列表
         """
-        if not (0 <= node_id < self.num_nodes):
-            raise ValueError(f"节点ID {node_id} 超出范围 [0, {self.num_nodes-1}]")
+        if not (0 <= node_id < self.NUM_NODES):
+            raise ValueError(f"节点ID {node_id} 超出范围 [0, {self.NUM_NODES-1}]")
 
         neighbors = []
         adj_matrix = self.get_adjacency_matrix()
@@ -122,8 +122,8 @@ class CrossRingTopology(BaseNoCTopology):
         Returns:
             节点位置坐标 (row, col)
         """
-        if not (0 <= node_id < self.num_nodes):
-            raise ValueError(f"节点ID {node_id} 超出范围 [0, {self.num_nodes-1}]")
+        if not (0 <= node_id < self.NUM_NODES):
+            raise ValueError(f"节点ID {node_id} 超出范围 [0, {self.NUM_NODES-1}]")
 
         return self._node_positions[node_id]
 
@@ -212,7 +212,7 @@ class CrossRingTopology(BaseNoCTopology):
             else:
                 current_col -= 1  # 向左移动
 
-            next_node = current_row * self.num_cols + current_col
+            next_node = current_row * self.NUM_COLs + current_col
             path.append(next_node)
 
         # 第二步：垂直移动到目标行
@@ -222,7 +222,7 @@ class CrossRingTopology(BaseNoCTopology):
             else:
                 current_row -= 1  # 向上移动
 
-            next_node = current_row * self.num_cols + current_col
+            next_node = current_row * self.NUM_COLs + current_col
             path.append(next_node)
 
         return path
@@ -267,7 +267,7 @@ class CrossRingTopology(BaseNoCTopology):
             else:
                 current_row -= 1  # 向上移动
 
-            next_node = current_row * self.num_cols + current_col
+            next_node = current_row * self.NUM_COLs + current_col
             path.append(next_node)
 
         # 第二步：水平移动到目标列
@@ -277,7 +277,7 @@ class CrossRingTopology(BaseNoCTopology):
             else:
                 current_col -= 1  # 向左移动
 
-            next_node = current_row * self.num_cols + current_col
+            next_node = current_row * self.NUM_COLs + current_col
             path.append(next_node)
 
         return path
@@ -394,15 +394,15 @@ class CrossRingTopology(BaseNoCTopology):
         Returns:
             拓扑效率（0.0-1.0）
         """
-        if self.num_nodes <= 1:
+        if self.NUM_NODES <= 1:
             return 1.0
 
         # 计算平均路径长度
         total_distance = 0
         path_count = 0
 
-        for src in range(self.num_nodes):
-            for dst in range(self.num_nodes):
+        for src in range(self.NUM_NODES):
+            for dst in range(self.NUM_NODES):
                 if src != dst:
                     hop_count = self.get_hop_count(src, dst)
                     if hop_count != float("inf"):
@@ -483,8 +483,8 @@ class CrossRingTopology(BaseNoCTopology):
             return False, f"邻接矩阵无效: {error_msg}"
 
         # 验证节点数量
-        if len(self._adjacency_matrix) != self.num_nodes:
-            return False, f"邻接矩阵大小不匹配: 期望{self.num_nodes}，实际{len(self._adjacency_matrix)}"
+        if len(self._adjacency_matrix) != self.NUM_NODES:
+            return False, f"邻接矩阵大小不匹配: 期望{self.NUM_NODES}，实际{len(self._adjacency_matrix)}"
 
         # 验证连通性
         if not self.is_connected():
@@ -531,10 +531,10 @@ class CrossRingTopology(BaseNoCTopology):
             水平环列表
         """
         rings = []
-        for row in range(self.num_rows):
+        for row in range(self.NUM_ROWs):
             ring = []
-            for col in range(self.num_cols):
-                node_id = row * self.num_cols + col
+            for col in range(self.NUM_COLs):
+                node_id = row * self.NUM_COLs + col
                 ring.append(node_id)
             rings.append(ring)
         return rings
@@ -547,10 +547,10 @@ class CrossRingTopology(BaseNoCTopology):
             垂直环列表
         """
         rings = []
-        for col in range(self.num_cols):
+        for col in range(self.NUM_COLs):
             ring = []
-            for row in range(self.num_rows):
-                node_id = row * self.num_cols + col
+            for row in range(self.NUM_ROWs):
+                node_id = row * self.NUM_COLs + col
                 ring.append(node_id)
             rings.append(ring)
         return rings
@@ -565,8 +565,8 @@ class CrossRingTopology(BaseNoCTopology):
         base_info = self.get_topology_info()
 
         crossring_info = {
-            "num_rows": self.num_rows,
-            "num_cols": self.num_cols,
+            "num_rows": self.NUM_ROWs,
+            "num_cols": self.NUM_COLs,
             "horizontal_rings": len(self.get_horizontal_rings()),
             "vertical_rings": len(self.get_vertical_rings()),
             "topology_efficiency": self.get_topology_efficiency(),
@@ -579,8 +579,8 @@ class CrossRingTopology(BaseNoCTopology):
 
     def __str__(self) -> str:
         """字符串表示。"""
-        return f"CrossRingTopology({self.num_rows}×{self.num_cols}, nodes={self.num_nodes})"
+        return f"CrossRingTopology({self.NUM_ROWs}×{self.NUM_COLs}, nodes={self.NUM_NODES})"
 
     def __repr__(self) -> str:
         """详细字符串表示。"""
-        return f"CrossRingTopology(rows={self.num_rows}, cols={self.num_cols}, " f"nodes={self.num_nodes}, routing={self.routing_strategy.value})"
+        return f"CrossRingTopology(rows={self.NUM_ROWs}, cols={self.NUM_COLs}, " f"nodes={self.NUM_NODES}, routing={self.routing_strategy.value})"

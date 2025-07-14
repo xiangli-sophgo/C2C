@@ -96,8 +96,8 @@ class CrossRingNodeVisualizer:
         self.logger = logging.getLogger(f"CrossRingNodeVis_{node_id}")
         
         # 提取配置参数
-        self.cols = getattr(config, 'NUM_COL', getattr(config, 'num_col', 3))
-        self.rows = getattr(config, 'NUM_ROW', getattr(config, 'num_row', 2))
+        self.cols = getattr(config, 'NUM_COL', 3)
+        self.rows = getattr(config, 'NUM_ROW', 2)
         self.iq_depth = getattr(config, 'IQ_OUT_FIFO_DEPTH', 8)
         self.eq_depth = getattr(config, 'EQ_IN_FIFO_DEPTH', 8)
         self.rb_in_depth = getattr(config, 'RB_IN_FIFO_DEPTH', 4)

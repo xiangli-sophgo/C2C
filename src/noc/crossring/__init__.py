@@ -98,14 +98,14 @@ def quick_start_simulation(config_name: str = "2262", max_cycles: int = 10000, n
         config = create_crossring_config_custom(5, 4, config_name)
 
     # 创建模型
-    model = create_crossring_model(config.config_name, config.num_row, config.num_col)
+    model = create_crossring_model(config.config_name, config.NUM_ROW, config.NUM_COL)
 
     # 注入测试流量
     import random
 
     for i in range(num_test_requests):
-        source = random.randint(0, config.num_nodes - 1)
-        destination = random.randint(0, config.num_nodes - 1)
+        source = random.randint(0, config.NUM_NODES - 1)
+        destination = random.randint(0, config.NUM_NODES - 1)
         if source != destination:
             req_type = random.choice(["read", "write"])
             model.inject_request(source=source, destination=destination, req_type=req_type, count=1)

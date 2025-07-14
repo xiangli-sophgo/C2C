@@ -74,7 +74,7 @@ class CrossRingAnalyzer:
         requests = []
 
         # 获取配置参数
-        network_frequency = getattr(config.basic, "network_frequency", 1.0) if hasattr(config, "basic") else 1.0
+        network_frequency = getattr(config.basic, "NETWORK_FREQUENCY", 1.0) if hasattr(config, "basic") else 1.0
 
         for req_id, lifecycle in request_tracker.completed_requests.items():
             if lifecycle.completed_cycle <= 0:
@@ -545,7 +545,7 @@ class CrossRingAnalyzer:
         # 处理已完成的请求
         for packet_id, lifecycle in request_tracker.completed_requests.items():
             # 转换时间（假设以周期为单位，需要转换为ns）
-            network_frequency = getattr(config, 'network_frequency', 1000)  # MHz
+            network_frequency = getattr(config, 'NETWORK_FREQUENCY', 1000)  # MHz
             cycle_time_ns = 1000.0 / network_frequency  # ns per cycle
             
             # 计算延迟

@@ -63,8 +63,8 @@ class CrossRingNode:
 
         # IP注入缓冲区配置
         # 获取FIFO配置，如果没有则使用默认值
-        iq_ch_depth = getattr(config, "iq_ch_depth", 10)
-        iq_out_depth = getattr(config, "iq_out_depth", 8)
+        iq_ch_depth = getattr(config, "IQ_CH_DEPTH", 10)
+        iq_out_depth = getattr(config, "IQ_OUT_DEPTH", 8)
 
         # 连接的IP列表（默认每个节点连接一个IP，也可以扩展为多个）
         self.connected_ips = []  # 将存储连接的IP ID列表
@@ -75,12 +75,12 @@ class CrossRingNode:
         # 方向化的注入队列 - 使用工厂方法减少重复代码
         self.inject_direction_fifos = self._create_directional_fifos("inject", ["TR", "TL", "TU", "TD", "EQ"], iq_out_depth)
         # 获取eject相关的FIFO配置
-        eq_in_depth = getattr(config, "eq_in_depth", 16)
-        eq_ch_depth = getattr(config, "eq_ch_depth", 10)
+        eq_in_depth = getattr(config, "EQ_IN_DEPTH", 16)
+        eq_ch_depth = getattr(config, "EQ_CH_DEPTH", 10)
 
         # 获取ring_bridge相关的FIFO配置
-        rb_in_depth = getattr(config, "rb_in_depth", 16)
-        rb_out_depth = getattr(config, "rb_out_depth", 8)
+        rb_in_depth = getattr(config, "RB_IN_DEPTH", 16)
+        rb_out_depth = getattr(config, "RB_OUT_DEPTH", 8)
 
         # 每个IP的eject channel_buffer - 结构：ip_eject_channel_buffers[ip_id][channel]
         self.ip_eject_channel_buffers = {}
@@ -346,7 +346,7 @@ class CrossRingNode:
             (输入源列表, 输出方向列表)
         """
         # 获取路由策略
-        routing_strategy = getattr(self.config, "routing_strategy", "XY")
+        routing_strategy = getattr(self.config, "ROUTING_STRATEGY", "XY")
         if hasattr(routing_strategy, "value"):
             routing_strategy = routing_strategy.value
 
@@ -578,7 +578,7 @@ class CrossRingNode:
             输入源列表
         """
         # 获取路由策略
-        routing_strategy = getattr(self.config, "routing_strategy", "XY")
+        routing_strategy = getattr(self.config, "ROUTING_STRATEGY", "XY")
         if hasattr(routing_strategy, "value"):
             routing_strategy = routing_strategy.value
 
@@ -1163,7 +1163,7 @@ class CrossRingNode:
             dest_x, dest_y = flit.dest_xid, flit.dest_yid
         else:
             # 如果没有坐标信息，尝试从destination计算
-            num_col = getattr(self.config, "num_col", 3)
+            num_col = getattr(self.config, "NUM_COL", 3)
             dest_x = flit.destination % num_col
             dest_y = flit.destination // num_col
 
@@ -1174,7 +1174,7 @@ class CrossRingNode:
             return "EQ"  # 本地
 
         # 获取路由策略，默认为XY
-        routing_strategy = getattr(self.config, "routing_strategy", "XY")
+        routing_strategy = getattr(self.config, "ROUTING_STRATEGY", "XY")
         if hasattr(routing_strategy, "value"):
             routing_strategy = routing_strategy.value
 

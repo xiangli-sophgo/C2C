@@ -57,7 +57,7 @@ class MeshRouter:
         
     def can_accept_packet(self, direction: str) -> bool:
         """检查是否可以接受包"""
-        buffer_depth = self.config.mesh_config.input_buffer_depth
+        buffer_depth = self.config.mesh_config.INPUT_BUFFER_DEPTH
         return len(self.input_buffers[direction]) < buffer_depth
     
     def inject_packet(self, packet: MeshPacket, direction: str = "local") -> bool:

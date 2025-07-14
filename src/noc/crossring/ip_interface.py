@@ -909,7 +909,7 @@ class CrossRingIPInterface(BaseIPInterface):
 
         try:
             # 创建CrossRing Flit
-            flit = create_crossring_flit(source=source, destination=destination, packet_id=packet_id, req_type=req_type, burst_length=burst_length, num_col=self.config.num_col)
+            flit = create_crossring_flit(source=source, destination=destination, packet_id=packet_id, req_type=req_type, burst_length=burst_length, num_col=self.config.NUM_COL)
 
             # 设置IP类型信息
             flit.source_type = source_type if source_type else self.ip_type

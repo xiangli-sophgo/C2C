@@ -68,8 +68,8 @@ class NetworkTopologyVisualizer:
         self.logger = logging.getLogger("NetworkTopologyVis")
         
         # 网络参数
-        self.num_rows = getattr(config, 'num_row', getattr(config, 'NUM_ROW', 2))
-        self.num_cols = getattr(config, 'num_col', getattr(config, 'NUM_COL', 3))
+        self.num_rows = getattr(config, 'NUM_ROW', 2)
+        self.num_cols = getattr(config, 'NUM_COL', 3)
         self.num_nodes = self.num_rows * self.num_cols
         
         # 图形设置

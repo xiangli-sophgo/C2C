@@ -72,9 +72,9 @@ class RealtimeVisualizer:
         self.logger = logging.getLogger("RealtimeVisualizer")
 
         # 网络参数
-        self.num_nodes = getattr(config, "num_nodes", 6)
-        self.num_rows = getattr(config, "num_row", 2)
-        self.num_cols = getattr(config, "num_col", 3)
+        self.num_nodes = getattr(config, "NUM_NODES", 6)
+        self.num_rows = getattr(config, "NUM_ROW", 2)
+        self.num_cols = getattr(config, "NUM_COL", 3)
 
         # 播放控制
         self.playback_state = PlaybackState.STOPPED

@@ -165,30 +165,30 @@ class CrossRingTagManager:
 
         # I-Tag配置参数
         self.itag_config = {
-            "horizontal": {"trigger_threshold": getattr(config.tag_config, "itag_trigger_th_h", 80), "max_reservations": getattr(config.tag_config, "itag_max_num_h", 1)},
-            "vertical": {"trigger_threshold": getattr(config.tag_config, "itag_trigger_th_v", 80), "max_reservations": getattr(config.tag_config, "itag_max_num_v", 1)},
+            "horizontal": {"trigger_threshold": getattr(config.tag_config, "ITAG_TRIGGER_TH_H", 80), "max_reservations": getattr(config.tag_config, "ITAG_MAX_NUM_H", 1)},
+            "vertical": {"trigger_threshold": getattr(config.tag_config, "ITAG_TRIGGER_TH_V", 80), "max_reservations": getattr(config.tag_config, "ITAG_MAX_NUM_V", 1)},
         }
 
         # E-Tag配置参数
         # TR和TD的T1最大值应该等于TL和TU的T0容量，而不是无穷大
-        tl_t0_capacity = getattr(config.fifo_config, "rb_in_depth", 16)  # TL方向T0容量
-        tu_t0_capacity = getattr(config.fifo_config, "eq_in_depth", 16)  # TU方向T0容量
+        tl_t0_capacity = getattr(config.fifo_config, "RB_IN_DEPTH", 16)  # TL方向T0容量
+        tu_t0_capacity = getattr(config.fifo_config, "EQ_IN_DEPTH", 16)  # TU方向T0容量
 
         self.etag_config = {
             "TL": {
-                "t2_ue_max": getattr(config.tag_config, "tl_etag_t2_ue_max", 8),
-                "t1_ue_max": getattr(config.tag_config, "tl_etag_t1_ue_max", 15),
+                "t2_ue_max": getattr(config.tag_config, "TL_ETAG_T2_UE_MAX", 8),
+                "t1_ue_max": getattr(config.tag_config, "TL_ETAG_T1_UE_MAX", 15),
                 "can_upgrade_to_t0": True,
                 "has_dedicated_entries": True,
             },
-            "TR": {"t2_ue_max": getattr(config.tag_config, "tr_etag_t2_ue_max", 12), "t1_ue_max": tl_t0_capacity, "can_upgrade_to_t0": False, "has_dedicated_entries": False},
+            "TR": {"t2_ue_max": getattr(config.tag_config, "TR_ETAG_T2_UE_MAX", 12), "t1_ue_max": tl_t0_capacity, "can_upgrade_to_t0": False, "has_dedicated_entries": False},
             "TU": {
-                "t2_ue_max": getattr(config.tag_config, "tu_etag_t2_ue_max", 8),
-                "t1_ue_max": getattr(config.tag_config, "tu_etag_t1_ue_max", 15),
+                "t2_ue_max": getattr(config.tag_config, "TU_ETAG_T2_UE_MAX", 8),
+                "t1_ue_max": getattr(config.tag_config, "TU_ETAG_T1_UE_MAX", 15),
                 "can_upgrade_to_t0": True,
                 "has_dedicated_entries": True,
             },
-            "TD": {"t2_ue_max": getattr(config.tag_config, "td_etag_t2_ue_max", 12), "t1_ue_max": tu_t0_capacity, "can_upgrade_to_t0": False, "has_dedicated_entries": False},
+            "TD": {"t2_ue_max": getattr(config.tag_config, "TD_ETAG_T2_UE_MAX", 12), "t1_ue_max": tu_t0_capacity, "can_upgrade_to_t0": False, "has_dedicated_entries": False},
         }
 
         # I-Tag状态管理
@@ -253,13 +253,13 @@ class CrossRingTagManager:
             T0级可用的FIFO总容量
         """
         # 获取路由策略，默认为XY
-        routing_strategy = getattr(self.config, "routing_strategy", "XY")
+        routing_strategy = getattr(self.config, "ROUTING_STRATEGY", "XY")
         if hasattr(routing_strategy, "value"):
             routing_strategy = routing_strategy.value
 
         # 获取FIFO深度配置
-        rb_in_depth = getattr(self.config.fifo_config, "rb_in_depth", 16)
-        eq_in_depth = getattr(self.config.fifo_config, "eq_in_depth", 16)
+        rb_in_depth = getattr(self.config.fifo_config, "RB_IN_DEPTH", 16)
+        eq_in_depth = getattr(self.config.fifo_config, "EQ_IN_DEPTH", 16)
 
         if routing_strategy == "XY":
             if sub_direction in ["TL", "TR"]:  # 横向环
@@ -1014,7 +1014,7 @@ class CrossRingCrossPoint:
         curr_x, curr_y = self.parent_node.coordinates
 
         # 获取路由策略
-        routing_strategy = getattr(self.parent_node.config, "routing_strategy", "XY")
+        routing_strategy = getattr(self.parent_node.config, "ROUTING_STRATEGY", "XY")
         if hasattr(routing_strategy, "value"):
             routing_strategy = routing_strategy.value
 
@@ -1164,7 +1164,7 @@ class CrossRingCrossPoint:
         Returns:
             是否成功发起预约
         """
-        threshold = getattr(self.config.tag_config, "itag_trigger_th_h", 80)
+        threshold = getattr(self.config.tag_config, "ITAG_TRIGGER_TH_H", 80)
 
         if wait_cycles < threshold:
             return False

@@ -69,8 +69,8 @@ class CrossRingLinkStateVisualizer:
             """
             self.highlight_callback = highlight_callback
             self.config = config
-            self.cols = getattr(config, 'NUM_COL', getattr(config, 'num_col', 3))
-            self.rows = getattr(config, 'NUM_ROW', getattr(config, 'num_row', 2))
+            self.cols = getattr(config, 'NUM_COL', 3)
+            self.rows = getattr(config, 'NUM_ROW', 2)
             self.parent = parent
             
             # 提取深度
@@ -737,8 +737,8 @@ class CrossRingLinkStateVisualizer:
         self.logger = logging.getLogger("CrossRingLinkStateVis")
         
         # 网络参数
-        self.rows = getattr(config, 'NUM_ROW', getattr(config, 'num_row', 2))
-        self.cols = getattr(config, 'NUM_COL', getattr(config, 'num_col', 3))
+        self.rows = getattr(config, 'NUM_ROW', 2)
+        self.cols = getattr(config, 'NUM_COL', 3)
         self.num_nodes = self.rows * self.cols
         
         # 调色板

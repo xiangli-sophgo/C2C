@@ -24,21 +24,21 @@ class BasicConfiguration:
     cols: int = 4
     
     # 路由参数
-    enable_xy_routing: bool = True
-    enable_minimal_routing: bool = True
+    ENABLE_XY_ROUTING: bool = True
+    ENABLE_MINIMAL_ROUTING: bool = True
     
     # 缓冲区配置
-    input_buffer_depth: int = 8
-    output_buffer_depth: int = 8
-    virtual_channels: int = 2
+    INPUT_BUFFER_DEPTH: int = 8
+    OUTPUT_BUFFER_DEPTH: int = 8
+    VIRTUAL_CHANNELS: int = 2
     
     # 性能参数
-    link_width: int = 64  # bits
-    flit_size: int = 64   # bits
+    LINK_WIDTH: int = 64  # bits
+    FLIT_SIZE: int = 64   # bits
     
     # 延迟参数
-    router_latency: int = 1  # cycles
-    link_latency: int = 1    # cycles
+    ROUTER_LATENCY: int = 1  # cycles
+    LINK_LATENCY: int = 1    # cycles
 
 
 @dataclass
@@ -50,21 +50,21 @@ class MeshConfiguration:
     cols: int = 4
     
     # 路由参数
-    enable_xy_routing: bool = True
-    enable_minimal_routing: bool = True
+    ENABLE_XY_ROUTING: bool = True
+    ENABLE_MINIMAL_ROUTING: bool = True
     
     # 缓冲区配置
-    input_buffer_depth: int = 8
-    output_buffer_depth: int = 8
-    virtual_channels: int = 2
+    INPUT_BUFFER_DEPTH: int = 8
+    OUTPUT_BUFFER_DEPTH: int = 8
+    VIRTUAL_CHANNELS: int = 2
     
     # 性能参数
-    link_width: int = 64  # bits
-    flit_size: int = 64   # bits
+    LINK_WIDTH: int = 64  # bits
+    FLIT_SIZE: int = 64   # bits
     
     # 延迟参数
-    router_latency: int = 1  # cycles
-    link_latency: int = 1    # cycles
+    ROUTER_LATENCY: int = 1  # cycles
+    LINK_LATENCY: int = 1    # cycles
 
 
 class MeshConfig(BaseNoCConfig):
@@ -99,7 +99,7 @@ class MeshConfig(BaseNoCConfig):
         self.mesh_config = MeshConfiguration(rows=rows, cols=cols)
         
         # 设置路由策略
-        self.routing_strategy = RoutingStrategy.XY if self.basic_config.enable_xy_routing else RoutingStrategy.SHORTEST
+        self.routing_strategy = RoutingStrategy.XY if self.basic_config.ENABLE_XY_ROUTING else RoutingStrategy.SHORTEST
         
         # 生成节点位置映射
         self._generate_node_positions()
@@ -217,29 +217,29 @@ class MeshConfig(BaseNoCConfig):
             errors.append(f"节点数必须等于行数×列数 (num_nodes={self.num_nodes}, rows={self.rows}, cols={self.cols})")
         
         # 缓冲区深度验证
-        if self.mesh_config.input_buffer_depth <= 0:
-            errors.append(f"输入缓冲区深度必须为正数 (input_buffer_depth={self.mesh_config.input_buffer_depth})")
+        if self.mesh_config.INPUT_BUFFER_DEPTH <= 0:
+            errors.append(f"输入缓冲区深度必须为正数 (INPUT_BUFFER_DEPTH={self.mesh_config.INPUT_BUFFER_DEPTH})")
         
-        if self.mesh_config.output_buffer_depth <= 0:
+        if self.mesh_config.OUTPUT_BUFFER_DEPTH <= 0:
             errors.append(f"输出缓冲区深度必须为正数 (output_buffer_depth={self.mesh_config.output_buffer_depth})")
         
         # 虚拟通道验证
-        if self.mesh_config.virtual_channels <= 0:
-            errors.append(f"虚拟通道数必须为正数 (virtual_channels={self.mesh_config.virtual_channels})")
+        if self.mesh_config.VIRTUAL_CHANNELS <= 0:
+            errors.append(f"虚拟通道数必须为正数 (VIRTUAL_CHANNELS={self.mesh_config.VIRTUAL_CHANNELS})")
         
         # 链路参数验证
-        if self.mesh_config.link_width <= 0:
-            errors.append(f"链路宽度必须为正数 (link_width={self.mesh_config.link_width})")
+        if self.mesh_config.LINK_WIDTH <= 0:
+            errors.append(f"链路宽度必须为正数 (LINK_WIDTH={self.mesh_config.LINK_WIDTH})")
         
-        if self.mesh_config.flit_size <= 0:
-            errors.append(f"Flit大小必须为正数 (flit_size={self.mesh_config.flit_size})")
+        if self.mesh_config.FLIT_SIZE <= 0:
+            errors.append(f"Flit大小必须为正数 (FLIT_SIZE={self.mesh_config.FLIT_SIZE})")
         
         # 延迟参数验证
-        if self.mesh_config.router_latency < 0:
-            errors.append(f"路由器延迟不能为负数 (router_latency={self.mesh_config.router_latency})")
+        if self.mesh_config.ROUTER_LATENCY < 0:
+            errors.append(f"路由器延迟不能为负数 (ROUTER_LATENCY={self.mesh_config.ROUTER_LATENCY})")
         
-        if self.mesh_config.link_latency < 0:
-            errors.append(f"链路延迟不能为负数 (link_latency={self.mesh_config.link_latency})")
+        if self.mesh_config.LINK_LATENCY < 0:
+            errors.append(f"链路延迟不能为负数 (LINK_LATENCY={self.mesh_config.LINK_LATENCY})")
         
         if errors:
             return False, "; ".join(errors)
@@ -260,15 +260,15 @@ class MeshConfig(BaseNoCConfig):
             "num_nodes": self.num_nodes,
             "routing_strategy": self.routing_strategy,
             "mesh_config": {
-                "enable_xy_routing": self.mesh_config.enable_xy_routing,
-                "enable_minimal_routing": self.mesh_config.enable_minimal_routing,
-                "input_buffer_depth": self.mesh_config.input_buffer_depth,
-                "output_buffer_depth": self.mesh_config.output_buffer_depth,
-                "virtual_channels": self.mesh_config.virtual_channels,
-                "link_width": self.mesh_config.link_width,
-                "flit_size": self.mesh_config.flit_size,
-                "router_latency": self.mesh_config.router_latency,
-                "link_latency": self.mesh_config.link_latency,
+                "enable_xy_routing": self.mesh_config.ENABLE_XY_ROUTING,
+                "enable_minimal_routing": self.mesh_config.ENABLE_MINIMAL_ROUTING,
+                "input_buffer_depth": self.mesh_config.INPUT_BUFFER_DEPTH,
+                "output_buffer_depth": self.mesh_config.OUTPUT_BUFFER_DEPTH,
+                "virtual_channels": self.mesh_config.VIRTUAL_CHANNELS,
+                "link_width": self.mesh_config.LINK_WIDTH,
+                "flit_size": self.mesh_config.FLIT_SIZE,
+                "router_latency": self.mesh_config.ROUTER_LATENCY,
+                "link_latency": self.mesh_config.LINK_LATENCY,
             },
             "node_positions": self.node_positions,
             "adjacency_list": self.adjacency_list,
@@ -299,7 +299,7 @@ class MeshConfig(BaseNoCConfig):
         Args:
             enable: 是否启用XY路由
         """
-        self.mesh_config.enable_xy_routing = enable
+        self.mesh_config.ENABLE_XY_ROUTING = enable
         self.routing_strategy = RoutingStrategy.XY if enable else RoutingStrategy.SHORTEST
     
     def update_buffer_config(self, input_depth: Optional[int] = None, 
@@ -314,11 +314,11 @@ class MeshConfig(BaseNoCConfig):
             virtual_channels: 虚拟通道数
         """
         if input_depth is not None:
-            self.mesh_config.input_buffer_depth = input_depth
+            self.mesh_config.INPUT_BUFFER_DEPTH = input_depth
         if output_depth is not None:
-            self.mesh_config.output_buffer_depth = output_depth
+            self.mesh_config.OUTPUT_BUFFER_DEPTH = output_depth
         if virtual_channels is not None:
-            self.mesh_config.virtual_channels = virtual_channels
+            self.mesh_config.VIRTUAL_CHANNELS = virtual_channels
     
     def to_dict(self) -> Dict[str, Any]:
         """

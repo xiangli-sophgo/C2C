@@ -89,8 +89,8 @@ class MeshTopology(BaseNoCTopology):
                         "source": node_id,
                         "destination": neighbor,
                         "bandwidth": self.config.link_bandwidth,
-                        "latency": self.mesh_config.mesh_config.link_latency,
-                        "width": self.mesh_config.mesh_config.link_width,
+                        "latency": self.mesh_config.mesh_config.LINK_LATENCY,
+                        "width": self.mesh_config.mesh_config.LINK_WIDTH,
                     }
                     link_id += 1
     
