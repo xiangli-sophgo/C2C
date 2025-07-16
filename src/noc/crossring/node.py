@@ -785,7 +785,7 @@ class CrossRingNode:
     def step_compute_phase(self, cycle: int) -> None:
         """计算阶段：准备数据传输但不执行"""
         # 更新所有FIFO的组合逻辑阶段
-        self._step_compute_phase()
+        self._step_compute_phase(cycle)
 
         self._compute_inject_arbitration(cycle)
 
@@ -825,30 +825,30 @@ class CrossRingNode:
         # 更新拥塞控制状态
         self._update_congestion_state()
 
-    def _step_compute_phase(self) -> None:
+    def _step_compute_phase(self, cycle: int) -> None:
         """更新所有FIFO的组合逻辑阶段"""
         # 更新IP inject channel buffers
         for ip_id in self.connected_ips:
             for channel in ["req", "rsp", "data"]:
-                self.ip_inject_channel_buffers[ip_id][channel].step_compute_phase()
-                self.ip_eject_channel_buffers[ip_id][channel].step_compute_phase()
+                self.ip_inject_channel_buffers[ip_id][channel].step_compute_phase(cycle)
+                self.ip_eject_channel_buffers[ip_id][channel].step_compute_phase(cycle)
 
         # 更新inject direction FIFOs
         for channel in ["req", "rsp", "data"]:
             for direction in ["TR", "TL", "TU", "TD", "EQ"]:
-                self.inject_direction_fifos[channel][direction].step_compute_phase()
+                self.inject_direction_fifos[channel][direction].step_compute_phase(cycle)
 
         # 更新eject input FIFOs
         for channel in ["req", "rsp", "data"]:
             for direction in ["TU", "TD", "TR", "TL"]:
-                self.eject_input_fifos[channel][direction].step_compute_phase()
+                self.eject_input_fifos[channel][direction].step_compute_phase(cycle)
 
         # 更新ring_bridge input/output FIFOs
         for channel in ["req", "rsp", "data"]:
             for direction in ["TR", "TL", "TU", "TD"]:
-                self.ring_bridge_input_fifos[channel][direction].step_compute_phase()
+                self.ring_bridge_input_fifos[channel][direction].step_compute_phase(cycle)
             for direction in ["EQ", "TR", "TL", "TU", "TD"]:
-                self.ring_bridge_output_fifos[channel][direction].step_compute_phase()
+                self.ring_bridge_output_fifos[channel][direction].step_compute_phase(cycle)
 
     def _step_update_phase(self) -> None:
         """更新所有FIFO的时序逻辑阶段"""

@@ -120,7 +120,6 @@ class Flit:
         "data_entry_noc_from_cake1_cycle",
         "data_received_complete_cycle",
         "data_entry_network_cycle",
-        "rsp_entry_network_cycle",
         "transaction_latency",
         "cmd_latency",
         "data_latency",

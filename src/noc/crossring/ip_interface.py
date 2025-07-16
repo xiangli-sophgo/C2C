@@ -46,7 +46,7 @@ class CrossRingIPInterface(BaseIPInterface):
         # ========== RN资源管理 ==========
         # RN Tracker
         self.rn_tracker = {"read": [], "write": []}
-        self.rn_tracker_count = {"read": config.tracker_config.rn_r_tracker_ostd, "write": config.tracker_config.rn_w_tracker_ostd}
+        self.rn_tracker_count = {"read": config.tracker_config.RN_R_TRACKER_OSTD, "write": config.tracker_config.RN_W_TRACKER_OSTD}
         self.rn_tracker_pointer = {"read": 0, "write": 0}
 
         # RN Data Buffer
@@ -634,7 +634,6 @@ class CrossRingIPInterface(BaseIPInterface):
         rsp.sync_latency_record(req)
         rsp.source_type = req.destination_type
         rsp.destination_type = req.source_type
-        rsp.sn_rsp_generate_cycle = self.current_cycle
 
         self.pending_by_channel["rsp"].append(rsp)
 
@@ -655,7 +654,6 @@ class CrossRingIPInterface(BaseIPInterface):
         rsp.sync_latency_record(req)
         rsp.source_type = req.destination_type
         rsp.destination_type = req.source_type
-        rsp.sn_rsp_generate_cycle = self.current_cycle
 
         self.pending_by_channel["rsp"].append(rsp)
 
@@ -1011,8 +1009,8 @@ class CrossRingIPInterface(BaseIPInterface):
 
         # 更新所有FIFO的计算阶段
         for channel in ["req", "rsp", "data"]:
-            self.l2h_fifos[channel].step_compute_phase()
-            self.h2l_fifos[channel].step_compute_phase()
+            self.l2h_fifos[channel].step_compute_phase(current_cycle)
+            self.h2l_fifos[channel].step_compute_phase(current_cycle)
 
     def _compute_pending_to_l2h_decision(self, current_cycle: int) -> None:
         """计算pending到l2h的传输决策"""
@@ -1173,7 +1171,6 @@ class CrossRingIPInterface(BaseIPInterface):
 
             # 从h2l FIFO读取并处理completion
             self.h2l_fifos[channel].read_output()
-            flit.set_ejection_time(current_cycle)
 
             # 根据通道类型处理
             if channel == "req":
@@ -1288,9 +1285,6 @@ class CrossRingIPInterface(BaseIPInterface):
             if self.h2l_fifos[channel].valid_signal():
                 flit = self.h2l_fifos[channel].read_output()
                 if flit:
-                    # 设置ejection时间
-                    flit.set_ejection_time(current_cycle)
-
                     # 根据通道类型处理
                     if channel == "req":
                         self._handle_received_request(flit)

@@ -36,8 +36,8 @@ class BaseFlit(ABC):
     burst_length: int = 1
     flit_size: int = 128  # 数据大小（bytes）
     priority: Priority = Priority.MEDIUM
-    source_type: str = "gdma"
-    destination_type: str = "ddr"
+    source_type: str = "gdma_0"
+    destination_type: str = "ddr_0"
 
     # ========== STI三通道协议（NoC公有） ==========
     channel: str = "req"  # "req" | "rsp" | "data"
@@ -74,8 +74,6 @@ class BaseFlit(ABC):
 
     # ========== 网络状态 ==========
     is_new_on_network: bool = True
-    is_blocked: bool = False
-    blocking_reason: str = ""
     hop_count: int = 0
 
     # ========== 时间戳记录 ==========
@@ -92,25 +90,22 @@ class BaseFlit(ABC):
     last_hop_time: float = np.inf
 
     # 延迟计算
-    injection_latency: float = np.inf
-    network_latency: float = np.inf
-    total_latency: float = np.inf
-    queuing_delay: float = 0.0
+    cmd_latency: float = np.inf
+    data_latency: float = np.inf
+    transaction_latency: float = np.inf
 
-    cmd_entry_cake0_cycle: float = np.inf  # RN端发出请求
-    cmd_entry_noc_from_cake0_cycle: float = np.inf  # 进入网络
-    cmd_entry_noc_from_cake1_cycle: float = np.inf  # SN端处理
-    cmd_received_by_cake0_cycle: float = np.inf  # RN端收到响应
-    cmd_received_by_cake1_cycle: float = np.inf  # SN端收到请求
-    data_entry_noc_from_cake0_cycle: float = np.inf  # 数据进网络(写)
-    data_entry_noc_from_cake1_cycle: float = np.inf  # 数据进网络(读)
-    data_received_complete_cycle: float = np.inf  # 数据传输完成
-    sn_rsp_generate_cycle: float = np.inf  # SN响应生成时间
+    cmd_entry_cake0_cycle: float = np.inf  # cmd进入Cake0
+    cmd_entry_noc_from_cake0_cycle: float = np.inf  # cmd从Cake0进入NoC
+    cmd_entry_noc_from_cake1_cycle: float = np.inf  # cmd从Cake1进入NoC
+    cmd_received_by_cake0_cycle: float = np.inf  # cmd从NoC进入Cake0
+    cmd_received_by_cake1_cycle: float = np.inf  # cmd从NoC进入Cake1
+    data_entry_noc_from_cake0_cycle: float = np.inf  # data从Cake0进入NoC(写)
+    data_entry_noc_from_cake1_cycle: float = np.inf  # data从Cake1进入NoC(读)
+    data_received_complete_cycle: float = np.inf  # data接收完成
 
     # ========== 位置和链路状态 ==========
     flit_position: str = "created"  # "created", "inject_queue", "network", "eject_queue", "completed"
     current_buffer: Optional[str] = None  # 当前缓冲区
-    current_vc: int = -1  # 虚拟通道ID（用于支持VC的拓扑）
 
     # ========== 流控和拥塞 ==========
     flow_control_info: Dict[str, Any] = field(default_factory=dict)
@@ -172,52 +167,6 @@ class BaseFlit(ABC):
             self.is_arrive = True
 
         return True
-
-    def set_injection_time(self, cycle: float) -> None:
-        """设置注入时间"""
-        self.injection_time = cycle
-        self.network_entry_time = cycle
-        self.is_injected = True
-        self.flit_position = "network"
-
-        # 计算注入延迟
-        if self.creation_time > 0:
-            self.injection_latency = cycle - self.creation_time
-
-    def set_ejection_time(self, cycle: float) -> None:
-        """设置弹出时间"""
-        self.ejection_time = cycle
-        self.network_exit_time = cycle
-        self.completion_time = cycle
-        self.is_ejected = True
-        self.is_finish = True
-        self.flit_position = "completed"
-
-        # 计算延迟
-        if self.injection_time < np.inf:
-            self.network_latency = cycle - self.injection_time
-        if self.creation_time > 0:
-            self.total_latency = cycle - self.creation_time
-
-    def update_hop_time(self, cycle: float) -> None:
-        """更新跳转时间"""
-        if self.first_hop_time == np.inf:
-            self.first_hop_time = cycle
-        self.last_hop_time = cycle
-
-    def add_queuing_delay(self, delay: float) -> None:
-        """添加排队延迟"""
-        self.queuing_delay += delay
-
-    def set_blocked(self, reason: str = "") -> None:
-        """设置阻塞状态"""
-        self.is_blocked = True
-        self.blocking_reason = reason
-
-    def clear_blocked(self) -> None:
-        """清除阻塞状态"""
-        self.is_blocked = False
-        self.blocking_reason = ""
 
     # ========== STI协议通用方法 ==========
 
@@ -375,19 +324,19 @@ class BaseFlit(ABC):
 
         # 命令延迟
         if self.cmd_entry_noc_from_cake0_cycle < np.inf and self.cmd_received_by_cake1_cycle < np.inf:
-            latencies["cmd_latency"] = self.cmd_received_by_cake1_cycle - self.cmd_entry_noc_from_cake0_cycle
+            latencies["cmd_latency"] = self.cmd_latency = self.cmd_received_by_cake1_cycle - self.cmd_entry_noc_from_cake0_cycle
 
         # 数据延迟
         if self.req_type == "read":
             if self.data_entry_noc_from_cake1_cycle < np.inf and self.data_received_complete_cycle < np.inf:
-                latencies["data_latency"] = self.data_received_complete_cycle - self.data_entry_noc_from_cake1_cycle
+                latencies["data_latency"] = self.data_latency = self.data_received_complete_cycle - self.data_entry_noc_from_cake1_cycle
         elif self.req_type == "write":
             if self.data_entry_noc_from_cake0_cycle < np.inf and self.data_received_complete_cycle < np.inf:
-                latencies["data_latency"] = self.data_received_complete_cycle - self.data_entry_noc_from_cake0_cycle
+                latencies["data_latency"] = self.data_latency = self.data_received_complete_cycle - self.data_entry_noc_from_cake0_cycle
 
         # 事务延迟
         if self.cmd_entry_cake0_cycle < np.inf and self.data_received_complete_cycle < np.inf:
-            latencies["transaction_latency"] = self.data_received_complete_cycle - self.cmd_entry_cake0_cycle
+            latencies["transaction_latency"] = self.transaction_latency = self.data_received_complete_cycle - self.cmd_entry_cake0_cycle
 
         return latencies
 
@@ -433,10 +382,10 @@ class BaseFlit(ABC):
             "is_injected": self.is_injected,
             "is_arrive": self.is_arrive,
             "is_finish": self.is_finish,
-            "is_blocked": self.is_blocked,
             "position": self.flit_position,
-            "total_latency": self.total_latency,
-            "network_latency": self.network_latency,
+            "cmd_latency": self.cmd_latency,
+            "data_latency": self.data_latency,
+            "transaction_latency": self.transaction_latency,
         }
 
     def to_dict(self) -> Dict[str, Any]:
@@ -454,26 +403,27 @@ class BaseFlit(ABC):
             "is_injected": self.is_injected,
             "is_arrive": self.is_arrive,
             "is_finish": self.is_finish,
-            "total_latency": self.total_latency,
-            "network_latency": self.network_latency,
+            "cmd_latency": self.cmd_latency,
+            "data_latency": self.data_latency,
+            "transaction_latency": self.transaction_latency,
             "custom_fields": self.custom_fields,
         }
 
     def __repr__(self) -> str:
         """字符串表示"""
         status = []
-        if self.is_injected:
-            status.append("I")
-        if self.is_arrive:
-            status.append("A")
+        if self.rsp_type:
+            status.append(self.rsp_type[:3])
         if self.is_finish:
             status.append("F")
-        if self.is_blocked:
-            status.append("B")
 
         status_str = "".join(status) if status else "N"
 
-        return f"Flit({self.packet_id}.{self.flit_id}: " f"{self.source}->{self.destination}@{self.current_position}, " f"hop={self.hop_count}, {status_str})"
+        return (
+            f"{self.packet_id}.{self.flit_id}, "
+            f"{self.source}{self.source_type[0]}{self.source_type[-1]}->{self.destination}{self.destination_type[0]}{self.destination_type[-1]}@{self.current_position}, "
+            f"{self.flit_type}, {status_str}"
+        )
 
 
 class FlitPool:
@@ -527,42 +477,80 @@ class FlitPool:
 # 为BaseFlit添加重置方法
 def _reset_for_reuse(self):
     """重置Flit以供重用"""
-    # 保留类型信息，重置其他字段
+    # ========== 基础标识字段 ==========
     self.packet_id = ""
     self.flit_id = 0
     self.source = 0
     self.destination = 0
+
+    # ========== 请求类型和数据 ==========
+    self.req_type = "R"
+    self.burst_length = 1
+    self.flit_size = 128
+    self.priority = Priority.MEDIUM
+    self.source_type = "gdma_0"
+    self.destination_type = "ddr_0"
+
+    # ========== STI三通道协议 ==========
+    self.channel = "req"
+    self.flit_type = "req"
+    self.req_attr = "new"
+    self.req_state = "valid"
+    self.rsp_type = None
+
+    # ========== 重试机制 ==========
+    self.retry_count = 0
+    self.max_retries = 1
+    self.original_req_time = np.inf
+    self.retry_reason = ""
+    self.is_retry = False
+
+    # ========== 路径和路由信息 ==========
     self.path = []
     self.path_index = 0
     self.current_position = -1
-    self.hop_count = 0
+    self.next_hop = -1
+
+    # ========== 通用状态字段 ==========
     self.is_injected = False
     self.is_ejected = False
     self.is_arrive = False
     self.is_finish = False
-    self.is_blocked = False
-    self.blocking_reason = ""
-    self.flit_position = "created"
-    self.current_buffer = None
-    self.current_vc = -1
+    self.is_head_flit = True
+    self.is_tail_flit = True
 
-    # 重置时间戳
+    # ========== 网络状态 ==========
+    self.is_new_on_network = True
+    self.hop_count = 0
+
+    # ========== 时间戳记录 ==========
     self.creation_time = 0.0
     self.injection_time = np.inf
     self.ejection_time = np.inf
     self.completion_time = np.inf
     self.network_entry_time = np.inf
     self.network_exit_time = np.inf
-    self.first_hop_time = np.inf
-    self.last_hop_time = np.inf
 
-    # 重置延迟
-    self.injection_latency = np.inf
-    self.network_latency = np.inf
-    self.total_latency = np.inf
-    self.queuing_delay = 0.0
+    # ========== 延迟计算 ==========
+    self.cmd_latency = np.inf
+    self.data_latency = np.inf
+    self.transaction_latency = np.inf
 
-    # 清空字典
+    # ========== 详细时间戳 ==========
+    self.cmd_entry_cake0_cycle = np.inf
+    self.cmd_entry_noc_from_cake0_cycle = np.inf
+    self.cmd_entry_noc_from_cake1_cycle = np.inf
+    self.cmd_received_by_cake0_cycle = np.inf
+    self.cmd_received_by_cake1_cycle = np.inf
+    self.data_entry_noc_from_cake0_cycle = np.inf
+    self.data_entry_noc_from_cake1_cycle = np.inf
+    self.data_received_complete_cycle = np.inf
+
+    # ========== 位置和链路状态 ==========
+    self.flit_position = "created"
+    self.current_buffer = None
+
+    # ========== 清空字典 ==========
     self.routing_info.clear()
     self.flow_control_info.clear()
     self.congestion_info.clear()

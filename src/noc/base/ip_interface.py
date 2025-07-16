@@ -15,6 +15,131 @@ from .flit import BaseFlit
 from src.noc.utils.types import NodeId
 
 
+class FIFOStatistics:
+    """FIFO统计信息收集器"""
+    
+    def __init__(self):
+        # 利用率统计
+        self.current_depth = 0
+        self.peak_depth = 0
+        self.depth_sum = 0
+        self.sample_count = 0
+        self.empty_cycles = 0
+        self.full_cycles = 0
+        
+        # 吞吐量统计
+        self.total_writes_attempted = 0
+        self.total_writes_successful = 0
+        self.total_reads_attempted = 0
+        self.total_reads_successful = 0
+        
+        # 流控统计
+        self.write_stalls = 0
+        self.read_stalls = 0
+        self.overflow_attempts = 0
+        self.underflow_attempts = 0
+        
+        # 延迟统计
+        self.flit_timestamps = {}  # {flit_id: enter_time}
+        self.residence_times = []
+        
+        # 行为模式统计
+        self.priority_writes = 0
+        self.total_simulation_cycles = 0
+        self.active_cycles = 0  # 有数据传输的周期
+        
+    def update_depth_stats(self, current_depth: int, max_capacity: int, cycle: int):
+        """更新深度相关统计"""
+        self.current_depth = current_depth
+        self.peak_depth = max(self.peak_depth, current_depth)
+        self.depth_sum += current_depth
+        self.sample_count += 1
+        self.total_simulation_cycles = cycle
+        
+        if current_depth == 0:
+            self.empty_cycles += 1
+        elif current_depth == max_capacity:
+            self.full_cycles += 1
+            
+    def record_write_attempt(self, successful: bool, is_priority: bool = False):
+        """记录写入尝试"""
+        self.total_writes_attempted += 1
+        if successful:
+            self.total_writes_successful += 1
+            self.active_cycles += 1
+            if is_priority:
+                self.priority_writes += 1
+        else:
+            self.write_stalls += 1
+            
+    def record_read_attempt(self, successful: bool):
+        """记录读取尝试"""
+        self.total_reads_attempted += 1
+        if successful:
+            self.total_reads_successful += 1
+            self.active_cycles += 1
+        else:
+            self.read_stalls += 1
+            
+    def record_flit_enter(self, flit_id: str, cycle: int):
+        """记录flit进入时间"""
+        self.flit_timestamps[flit_id] = cycle
+        
+    def record_flit_exit(self, flit_id: str, cycle: int):
+        """记录flit离开时间并计算停留时间"""
+        if flit_id in self.flit_timestamps:
+            residence_time = cycle - self.flit_timestamps[flit_id]
+            self.residence_times.append(residence_time)
+            del self.flit_timestamps[flit_id]
+            
+    def record_overflow_attempt(self):
+        """记录溢出尝试"""
+        self.overflow_attempts += 1
+        
+    def record_underflow_attempt(self):
+        """记录下溢尝试"""
+        self.underflow_attempts += 1
+        
+    def get_statistics(self) -> dict:
+        """获取统计数据字典"""
+        avg_depth = self.depth_sum / max(1, self.sample_count)
+        utilization = (avg_depth / max(1, self.current_depth)) if self.current_depth > 0 else 0
+        
+        write_efficiency = self.total_writes_successful / max(1, self.total_writes_attempted)
+        read_efficiency = self.total_reads_successful / max(1, self.total_reads_attempted)
+        
+        avg_residence = sum(self.residence_times) / max(1, len(self.residence_times)) if self.residence_times else 0
+        min_residence = min(self.residence_times) if self.residence_times else 0
+        max_residence = max(self.residence_times) if self.residence_times else 0
+        
+        active_percentage = self.active_cycles / max(1, self.total_simulation_cycles)
+        
+        return {
+            "当前深度": self.current_depth,
+            "峰值深度": self.peak_depth,
+            "平均深度": round(avg_depth, 2),
+            "利用率百分比": round(utilization * 100, 2),
+            "空队列周期数": self.empty_cycles,
+            "满队列周期数": self.full_cycles,
+            "总写入尝试": self.total_writes_attempted,
+            "成功写入次数": self.total_writes_successful,
+            "总读取尝试": self.total_reads_attempted,
+            "成功读取次数": self.total_reads_successful,
+            "写入效率": round(write_efficiency * 100, 2),
+            "读取效率": round(read_efficiency * 100, 2),
+            "写入阻塞次数": self.write_stalls,
+            "读取阻塞次数": self.read_stalls,
+            "溢出尝试次数": self.overflow_attempts,
+            "下溢尝试次数": self.underflow_attempts,
+            "平均停留时间": round(avg_residence, 2),
+            "最小停留时间": min_residence,
+            "最大停留时间": max_residence,
+            "高优先级写入": self.priority_writes,
+            "总仿真周期": self.total_simulation_cycles,
+            "活跃周期百分比": round(active_percentage * 100, 2)
+        }
+
+
 class PipelinedFIFO:
     """
     流水线FIFO，实现输出寄存器模型以确保正确的时序行为。
@@ -24,14 +149,26 @@ class PipelinedFIFO:
 
     def __init__(self, name: str, depth: int):
         self.name = name
+        self.max_depth = depth
         self.internal_queue = deque(maxlen=depth)
         self.output_register = None
         self.output_valid = False  # 输出有效信号
         self.read_this_cycle = False  # 本周期是否被读取
         self.next_output_valid = False  # 下周期输出是否有效
+        
+        # 统计信息收集器
+        self.stats = FIFOStatistics()
+        self.current_cycle = 0
 
-    def step_compute_phase(self):
+    def step_compute_phase(self, cycle: int = None):
         """组合逻辑：计算流控信号"""
+        if cycle is not None:
+            self.current_cycle = cycle
+            
+        # 更新深度统计
+        current_depth = len(self.internal_queue) + (1 if self.output_valid else 0)
+        self.stats.update_depth_stats(current_depth, self.max_depth, self.current_cycle)
+        
         # 计算下周期的输出有效性
         if self.internal_queue and not self.output_valid:
             self.next_output_valid = True
@@ -69,7 +206,20 @@ class PipelinedFIFO:
         """读取输出（只能每周期调用一次）"""
         if self.output_valid and not self.read_this_cycle:
             self.read_this_cycle = True
+            self.stats.record_read_attempt(successful=True)
+            
+            # 记录flit退出时间
+            if hasattr(self.output_register, 'packet_id'):
+                self.stats.record_flit_exit(str(self.output_register.packet_id), self.current_cycle)
+            elif hasattr(self.output_register, '__hash__'):
+                self.stats.record_flit_exit(str(hash(self.output_register)), self.current_cycle)
+                
             return self.output_register
+        else:
+            # 尝试读取但失败
+            if not self.output_valid:
+                self.stats.record_read_attempt(successful=False)
+                self.stats.record_underflow_attempt()
         return None
 
     def can_accept_input(self):
@@ -80,8 +230,19 @@ class PipelinedFIFO:
         """写入新数据"""
         if self.can_accept_input():
             self.internal_queue.append(data)
+            self.stats.record_write_attempt(successful=True)
+            
+            # 记录flit进入时间
+            if hasattr(data, 'packet_id'):
+                self.stats.record_flit_enter(str(data.packet_id), self.current_cycle)
+            elif hasattr(data, '__hash__'):
+                self.stats.record_flit_enter(str(hash(data)), self.current_cycle)
+                
             return True
-        return False
+        else:
+            self.stats.record_write_attempt(successful=False)
+            self.stats.record_overflow_attempt()
+            return False
 
     def ready_signal(self):
         """Ready信号：能否接受新数据"""
@@ -112,8 +273,26 @@ class PipelinedFIFO:
         if self.can_accept_input():
             # 将数据插入到队列头部
             self.internal_queue.appendleft(data)
+            self.stats.record_write_attempt(successful=True, is_priority=True)
+            
+            # 记录flit进入时间
+            if hasattr(data, 'packet_id'):
+                self.stats.record_flit_enter(str(data.packet_id), self.current_cycle)
+            elif hasattr(data, '__hash__'):
+                self.stats.record_flit_enter(str(hash(data)), self.current_cycle)
+                
             return True
-        return False
+        else:
+            self.stats.record_write_attempt(successful=False, is_priority=True)
+            self.stats.record_overflow_attempt()
+            return False
+            
+    def get_statistics(self) -> dict:
+        """获取FIFO统计信息"""
+        stats_dict = self.stats.get_statistics()
+        stats_dict["FIFO名称"] = self.name
+        stats_dict["最大容量"] = self.max_depth
+        return stats_dict
 
 
 class FlowControlledTransfer:
@@ -240,6 +419,15 @@ class BaseIPInterface(ABC):
 
         # ========== STI三通道FIFO ==========
         self.inject_fifos = {"req": PipelinedFIFO("inject_req", depth=16), "rsp": PipelinedFIFO("inject_rsp", depth=16), "data": PipelinedFIFO("inject_data", depth=16)}
+        
+        # ========== IP内部处理FIFO ==========
+        # IP内部处理FIFO，位于H2L FIFO和最终IP处理之间
+        ip_proc_depth = getattr(config, "IP_PROCESSING_FIFO_DEPTH", 4) if hasattr(config, "IP_PROCESSING_FIFO_DEPTH") else 4
+        self.ip_processing_fifos = {
+            "req": PipelinedFIFO("ip_proc_req", depth=ip_proc_depth), 
+            "rsp": PipelinedFIFO("ip_proc_rsp", depth=ip_proc_depth), 
+            "data": PipelinedFIFO("ip_proc_data", depth=ip_proc_depth)
+        }
 
         # ========== 统计信息 ==========
         self.stats = {
@@ -282,7 +470,8 @@ class BaseIPInterface(ABC):
             "inject_to_l2h": {"req": False, "rsp": False, "data": False},
             "l2h_to_network": {"req": False, "rsp": False, "data": False},
             "network_to_h2l": {"req": False, "rsp": False, "data": False},
-            "h2l_to_completion": {"req": False, "rsp": False, "data": False},
+            "h2l_to_ip_processing": {"req": False, "rsp": False, "data": False},
+            "ip_processing_to_completion": {"req": False, "rsp": False, "data": False},
         }
 
 
@@ -314,9 +503,9 @@ class BaseIPInterface(ABC):
     def _compute_phase(self, cycle: int) -> None:
         """阶段1：组合逻辑，计算所有流控信号和传输可能性"""
         # 所有FIFO计算流控信号
-        for fifo_dict in [self.inject_fifos, self.l2h_fifos, self.h2l_fifos]:
+        for fifo_dict in [self.inject_fifos, self.l2h_fifos, self.h2l_fifos, self.ip_processing_fifos]:
             for fifo in fifo_dict.values():
-                fifo.step_compute_phase()
+                fifo.step_compute_phase(cycle)
 
         # 计算传输可能性
         self._compute_transfer_possibilities(cycle)
@@ -339,7 +528,7 @@ class BaseIPInterface(ABC):
         self._execute_2ghz_transfers()
 
         # 更新所有FIFO的寄存器
-        for fifo_dict in [self.inject_fifos, self.l2h_fifos, self.h2l_fifos]:
+        for fifo_dict in [self.inject_fifos, self.l2h_fifos, self.h2l_fifos, self.ip_processing_fifos]:
             for fifo in fifo_dict.values():
                 fifo.step_update_phase()
 
@@ -357,8 +546,13 @@ class BaseIPInterface(ABC):
             # network → h2l 传输可能性
             self._transfer_states["network_to_h2l"][channel] = self._network_has_data(channel) and self.h2l_fifos[channel].ready_signal()
 
-            # h2l → completion 传输可能性
-            self._transfer_states["h2l_to_completion"][channel] = self.h2l_fifos[channel].valid_signal()
+            # h2l → ip_processing 传输可能性
+            self._transfer_states["h2l_to_ip_processing"][channel] = FlowControlledTransfer.can_transfer(
+                source_fifo=self.h2l_fifos[channel], dest_fifo=self.ip_processing_fifos[channel]
+            )
+            
+            # ip_processing → completion 传输可能性
+            self._transfer_states["ip_processing_to_completion"][channel] = self.ip_processing_fifos[channel].valid_signal()
 
     def _compute_1ghz_transfers(self) -> None:
         """计算1GHz域的传输"""
@@ -379,9 +573,15 @@ class BaseIPInterface(ABC):
                     source_fifo=self.inject_fifos[channel], dest_fifo=self.l2h_fifos[channel], additional_check=lambda ch=channel: self._check_and_reserve_resources_for_channel(ch)
                 )
 
-            # h2l → completion 传输
-            if self._transfer_states["h2l_to_completion"][channel]:
-                self._execute_h2l_to_completion(channel)
+            # h2l → ip_processing 传输
+            if self._transfer_states["h2l_to_ip_processing"][channel]:
+                FlowControlledTransfer.try_transfer(
+                    source_fifo=self.h2l_fifos[channel], dest_fifo=self.ip_processing_fifos[channel]
+                )
+                
+            # ip_processing → completion 传输
+            if self._transfer_states["ip_processing_to_completion"][channel]:
+                self._execute_ip_processing_to_completion(channel)
 
     def _execute_2ghz_transfers(self) -> None:
         """执行2GHz域的传输"""
@@ -428,7 +628,6 @@ class BaseIPInterface(ABC):
         """执行l2h FIFO到网络的传输"""
         flit = self.l2h_fifos[channel].read_output()
         if flit:
-            flit.set_injection_time(self.current_cycle)
             flit.flit_position = "network"
             # 调用拓扑特定的网络注入方法
             self._inject_to_topology_network(flit, channel)
@@ -440,11 +639,10 @@ class BaseIPInterface(ABC):
             flit.flit_position = "h2l_fifo"
             self.h2l_fifos[channel].write_input(flit)
 
-    def _execute_h2l_to_completion(self, channel: str) -> None:
-        """执行h2l FIFO到IP完成的传输"""
-        flit = self.h2l_fifos[channel].read_output()
+    def _execute_ip_processing_to_completion(self, channel: str) -> None:
+        """执行IP内部处理FIFO到IP完成的传输"""
+        flit = self.ip_processing_fifos[channel].read_output()
         if flit:
-            flit.set_ejection_time(self.current_cycle)
             # 根据通道类型处理
             if channel == "req":
                 self._handle_received_request(flit)
@@ -659,6 +857,9 @@ class BaseIPInterface(ABC):
                     "h2l": len(self.h2l_fifos[channel]),
                     "h2l_valid": self.h2l_fifos[channel].valid_signal(),
                     "h2l_ready": self.h2l_fifos[channel].ready_signal(),
+                    "ip_processing": len(self.ip_processing_fifos[channel]),
+                    "ip_processing_valid": self.ip_processing_fifos[channel].valid_signal(),
+                    "ip_processing_ready": self.ip_processing_fifos[channel].ready_signal(),
                 }
                 for channel in ["req", "rsp", "data"]
             },

@@ -95,6 +95,19 @@ def track_request_smart():
 
     # 禁用调试模式
     model.disable_debug()
+    
+    # 导出FIFO统计信息
+    print("-" * 60)
+    print("📊 导出FIFO统计信息...")
+    
+    # 导出CSV文件
+    csv_path = model.export_fifo_statistics()
+    print(f"✅ FIFO统计信息已导出到: {csv_path}")
+    
+    # 显示统计摘要
+    summary = model.get_fifo_statistics_summary()
+    print("\n📈 FIFO统计摘要:")
+    print(summary)
 
 
 if __name__ == "__main__":

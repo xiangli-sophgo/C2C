@@ -23,6 +23,7 @@ from src.noc.utils.types import NodeId
 from src.noc.debug import RequestTracker, RequestState, FlitType
 from src.noc.base.model import BaseNoCModel
 from src.noc.analysis.crossring_analyzer import CrossRingAnalyzer
+from src.noc.analysis.fifo_analyzer import FIFOStatsCollector
 
 
 class RingDirection(Enum):
@@ -85,8 +86,14 @@ class CrossRingModel(BaseNoCModel):
         self.debug_packet_ids = set()  # 要跟踪的packet_id集合
         self.debug_sleep_time = 0.0  # 每步的睡眠时间
 
+        # FIFO统计收集器
+        self.fifo_stats_collector = FIFOStatsCollector()
+
         # 初始化模型（包括IP接口创建）
         self.initialize_model()
+        
+        # 初始化完成后注册FIFO统计
+        self._register_all_fifos_for_statistics()
 
         # 验证CrossRing网络初始化
         if len(self.crossring_nodes) != self.config.NUM_NODES:
@@ -1521,6 +1528,196 @@ class CrossRingModel(BaseNoCModel):
         report.append("=" * 60)
 
         return "\n".join(report)
+        
+    def _get_ip_type_abbreviation(self, ip_id: str) -> str:
+        """获取IP类型缩写"""
+        ip_id_lower = ip_id.lower()
+        if 'gdma' in ip_id_lower:
+            # 提取gdma后的数字，如gdma_0 -> G0
+            import re
+            match = re.search(r'gdma[_\-]?(\d+)', ip_id_lower)
+            if match:
+                return f"G{match.group(1)}"
+            return "G0"
+        elif 'ddr' in ip_id_lower:
+            match = re.search(r'ddr[_\-]?(\d+)', ip_id_lower)
+            if match:
+                return f"D{match.group(1)}"
+            return "D0"
+        elif 'l2m' in ip_id_lower:
+            match = re.search(r'l2m[_\-]?(\d+)', ip_id_lower)
+            if match:
+                return f"L{match.group(1)}"
+            return "L0"
+        elif 'sdma' in ip_id_lower:
+            match = re.search(r'sdma[_\-]?(\d+)', ip_id_lower)
+            if match:
+                return f"S{match.group(1)}"
+            return "S0"
+        elif 'cdma' in ip_id_lower:
+            match = re.search(r'cdma[_\-]?(\d+)', ip_id_lower)
+            if match:
+                return f"C{match.group(1)}"
+            return "C0"
+        else:
+            # 对于其他类型，使用前两个字符加数字
+            return f"{ip_id[:2].upper()}0"
+
+    def _register_all_fifos_for_statistics(self) -> None:
+        """注册所有FIFO到统计收集器"""
+        self.logger.info("注册FIFO统计收集...")
+        
+        # 注册IP接口的FIFO
+        for ip_id, ip_interface in self.ip_interfaces.items():
+            node_id = str(ip_interface.node_id)
+            ip_abbrev = self._get_ip_type_abbreviation(ip_id)
+            
+            # l2h FIFO
+            for channel in ["req", "rsp", "data"]:
+                if hasattr(ip_interface, 'l2h_fifos') and channel in ip_interface.l2h_fifos:
+                    fifo = ip_interface.l2h_fifos[channel]
+                    if hasattr(fifo, 'name') and hasattr(fifo, 'stats'):  # 确保是PipelinedFIFO
+                        simplified_name = f"{channel}_L2H_{ip_abbrev}"
+                        self.fifo_stats_collector.register_fifo(
+                            fifo, node_id=node_id, simplified_name=simplified_name
+                        )
+                    
+            # h2l FIFO
+            for channel in ["req", "rsp", "data"]:
+                if hasattr(ip_interface, 'h2l_fifos') and channel in ip_interface.h2l_fifos:
+                    fifo = ip_interface.h2l_fifos[channel]
+                    if hasattr(fifo, 'name') and hasattr(fifo, 'stats'):  # 确保是PipelinedFIFO
+                        simplified_name = f"{channel}_H2L_{ip_abbrev}"
+                        self.fifo_stats_collector.register_fifo(
+                            fifo, node_id=node_id, simplified_name=simplified_name
+                        )
+                    
+            # inject FIFO (IP内部注入FIFO)
+            for channel in ["req", "rsp", "data"]:
+                if hasattr(ip_interface, 'inject_fifos') and channel in ip_interface.inject_fifos:
+                    fifo = ip_interface.inject_fifos[channel]
+                    if hasattr(fifo, 'name') and hasattr(fifo, 'stats'):  # 确保是PipelinedFIFO
+                        simplified_name = f"{channel}_IP_INJ_{ip_abbrev}"
+                        self.fifo_stats_collector.register_fifo(
+                            fifo, node_id=node_id, simplified_name=simplified_name
+                        )
+                        
+            # ip_processing FIFO (IP内部处理FIFO)
+            for channel in ["req", "rsp", "data"]:
+                if hasattr(ip_interface, 'ip_processing_fifos') and channel in ip_interface.ip_processing_fifos:
+                    fifo = ip_interface.ip_processing_fifos[channel]
+                    if hasattr(fifo, 'name') and hasattr(fifo, 'stats'):  # 确保是PipelinedFIFO
+                        simplified_name = f"{channel}_IP_PROC_{ip_abbrev}"
+                        self.fifo_stats_collector.register_fifo(
+                            fifo, node_id=node_id, simplified_name=simplified_name
+                        )
+        
+        # 注册CrossRing节点的FIFO
+        for node_id, node in self.crossring_nodes.items():
+            node_id_str = str(node_id)
+                
+            # 注册inject direction FIFOs (注入队列输出)
+            if hasattr(node, 'inject_direction_fifos'):
+                # 结构: inject_direction_fifos[channel][direction]
+                for channel in ["req", "rsp", "data"]:
+                    if channel in node.inject_direction_fifos:
+                        direction_dict = node.inject_direction_fifos[channel]
+                        if isinstance(direction_dict, dict):
+                            for direction in ["TR", "TL", "TU", "TD", "EQ"]:
+                                if direction in direction_dict:
+                                    fifo = direction_dict[direction]
+                                    if hasattr(fifo, 'name') and hasattr(fifo, 'stats'):
+                                        simplified_name = f"{channel}_IQ_OUT_{direction}"
+                                        self.fifo_stats_collector.register_fifo(
+                                            fifo, node_id=node_id_str, simplified_name=simplified_name
+                                        )
+                    
+            # 注册eject input FIFOs (弹出队列输入)
+            if hasattr(node, 'eject_input_fifos'):
+                # 结构: eject_input_fifos[channel][direction]  
+                for channel in ["req", "rsp", "data"]:
+                    if channel in node.eject_input_fifos:
+                        direction_dict = node.eject_input_fifos[channel]
+                        if isinstance(direction_dict, dict):
+                            for direction in ["TU", "TD", "TR", "TL"]:
+                                if direction in direction_dict:
+                                    fifo = direction_dict[direction]
+                                    if hasattr(fifo, 'name') and hasattr(fifo, 'stats'):
+                                        simplified_name = f"{channel}_EQ_IN_{direction}"
+                                        self.fifo_stats_collector.register_fifo(
+                                            fifo, node_id=node_id_str, simplified_name=simplified_name
+                                        )
+                    
+            # 注册ip_inject_channel_buffers (IP注入通道缓冲)
+            if hasattr(node, 'ip_inject_channel_buffers'):
+                for ip_id, channels in node.ip_inject_channel_buffers.items():
+                    if isinstance(channels, dict):
+                        ip_abbrev = self._get_ip_type_abbreviation(ip_id)
+                        for channel, fifo in channels.items():
+                            if hasattr(fifo, 'name') and hasattr(fifo, 'stats'):
+                                simplified_name = f"{channel}_IP_CH_{ip_abbrev}"
+                                self.fifo_stats_collector.register_fifo(
+                                    fifo, node_id=node_id_str, simplified_name=simplified_name
+                                )
+                    
+            # 注册ip_eject_channel_buffers (IP弹出通道缓冲)
+            if hasattr(node, 'ip_eject_channel_buffers'):
+                for ip_id, channels in node.ip_eject_channel_buffers.items():
+                    if isinstance(channels, dict):
+                        ip_abbrev = self._get_ip_type_abbreviation(ip_id)
+                        for channel, fifo in channels.items():
+                            if hasattr(fifo, 'name') and hasattr(fifo, 'stats'):
+                                simplified_name = f"{channel}_IP_EJECT_{ip_abbrev}"
+                                self.fifo_stats_collector.register_fifo(
+                                    fifo, node_id=node_id_str, simplified_name=simplified_name
+                                )
+                    
+            # 注册ring_bridge input FIFOs (环桥输入)
+            if hasattr(node, 'ring_bridge_input_fifos'):
+                for channel in ["req", "rsp", "data"]:
+                    if channel in node.ring_bridge_input_fifos:
+                        direction_dict = node.ring_bridge_input_fifos[channel]
+                        if isinstance(direction_dict, dict):
+                            for direction, fifo in direction_dict.items():
+                                if hasattr(fifo, 'name') and hasattr(fifo, 'stats'):
+                                    simplified_name = f"{channel}_RB_IN_{direction}"
+                                    self.fifo_stats_collector.register_fifo(
+                                        fifo, node_id=node_id_str, simplified_name=simplified_name
+                                    )
+                                    
+            # 注册ring_bridge output FIFOs (环桥输出)
+            if hasattr(node, 'ring_bridge_output_fifos'):
+                for channel in ["req", "rsp", "data"]:
+                    if channel in node.ring_bridge_output_fifos:
+                        direction_dict = node.ring_bridge_output_fifos[channel]
+                        if isinstance(direction_dict, dict):
+                            for direction, fifo in direction_dict.items():
+                                if hasattr(fifo, 'name') and hasattr(fifo, 'stats'):
+                                    simplified_name = f"{channel}_RB_OUT_{direction}"
+                                    self.fifo_stats_collector.register_fifo(
+                                        fifo, node_id=node_id_str, simplified_name=simplified_name
+                                    )
+        
+        # 统计注册的FIFO数量
+        total_fifos = len(self.fifo_stats_collector.fifo_stats)
+        self.logger.info(f"已注册 {total_fifos} 个FIFO到统计收集器")
+        
+    def export_fifo_statistics(self, filename: str = None, output_dir: str = "results") -> str:
+        """
+        导出FIFO统计信息到CSV文件
+        
+        Args:
+            filename: 文件名（不包含扩展名），如果为None则自动生成
+            output_dir: 输出目录
+            
+        Returns:
+            导出的文件路径
+        """
+        return self.fifo_stats_collector.export_to_csv(filename, output_dir)
+        
+    def get_fifo_statistics_summary(self) -> str:
+        """获取FIFO统计摘要报告"""
+        return self.fifo_stats_collector.get_summary_report()
 
     def __del__(self):
         """析构函数"""

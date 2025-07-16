@@ -372,7 +372,6 @@ def _reset_crossring_for_reuse(self):
     self.data_entry_noc_from_cake0_cycle = np.inf
     self.data_entry_noc_from_cake1_cycle = np.inf
     self.data_received_complete_cycle = np.inf
-    self.sn_rsp_generate_cycle = np.inf
 
     # 重置tracker信息
     self.rn_tracker_type = None
