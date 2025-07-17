@@ -50,7 +50,6 @@ class BufferType(Enum):
 
     SHARED = "shared"
     DEDICATED = "dedicated"
-    VIRTUAL_CHANNEL = "virtual_channel"
     CREDIT_BASED = "credit_based"
 
 
@@ -65,15 +64,6 @@ class TrafficPattern(Enum):
     NEAREST_NEIGHBOR = "nearest_neighbor"
     TRACE_BASED = "trace_based"
 
-
-class NodeType(Enum):
-    """Node type enumeration."""
-
-    ROUTER = "router"
-    PROCESSING_ELEMENT = "processing_element"
-    MEMORY_CONTROLLER = "memory_controller"
-    NETWORK_INTERFACE = "network_interface"
-    BRIDGE = "bridge"
 
 
 class LinkType(Enum):
@@ -157,7 +147,6 @@ class NoCConfiguration:
     # Buffer sizes
     input_buffer_size: int = 8
     output_buffer_size: int = 8
-    virtual_channels: int = 2
 
     # Link parameters
     link_bandwidth: float = 1.0  # GB/s
@@ -184,15 +173,6 @@ class NoCConfiguration:
     static_power: float = 0.0  # W
     dynamic_power_per_flit: float = 0.0  # W per flit
 
-    # Fault tolerance
-    fault_rate: float = 0.0
-    redundancy_level: int = 0
-
-    # Advanced features
-    enable_qos: bool = False
-    enable_multicast: bool = False
-    enable_adaptive_routing: bool = False
-    enable_power_gating: bool = False
 
     # Custom parameters
     custom_params: Dict[str, Any] = field(default_factory=dict)

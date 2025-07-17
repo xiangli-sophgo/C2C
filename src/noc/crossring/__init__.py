@@ -13,15 +13,13 @@ from .config import (
     TagConfiguration,
     TrackerConfiguration,
     LatencyConfiguration,
-    create_crossring_config_2260e,
-    create_crossring_config_2262,
-    create_crossring_config_custom,
-    load_crossring_config_from_file,
+    create_preset_config,
+    create_custom_config,
+    load_config_from_file,
 )
 
 from .flit import (
     CrossRingFlit,
-    CrossRingFlitPool,
     create_crossring_flit,
     return_crossring_flit,
     get_crossring_flit_pool_stats,
@@ -54,7 +52,6 @@ __all__ = [
     "LatencyConfiguration",
     # Flit相关
     "CrossRingFlit",
-    "CrossRingFlitPool",
     # IP接口
     "CrossRingIPInterface",
     # 主模型
@@ -65,10 +62,9 @@ __all__ = [
     "CrossRingCrossPoint",
     "CrossRingTagManager",
     # 便捷函数
-    "create_crossring_config_2260e",
-    "create_crossring_config_2262",
-    "create_crossring_config_custom",
-    "load_crossring_config_from_file",
+    "create_preset_config",
+    "create_custom_config",
+    "load_config_from_file",
     "create_crossring_flit",
     "return_crossring_flit",
     "get_crossring_flit_pool_stats",
@@ -91,11 +87,11 @@ def quick_start_simulation(config_name: str = "2262", max_cycles: int = 10000, n
     """
     # 创建配置
     if config_name == "2260E":
-        config = create_crossring_config_2260e()
+        config = create_preset_config("2260E")
     elif config_name == "2262":
-        config = create_crossring_config_2262()
+        config = create_preset_config("2262")
     else:
-        config = create_crossring_config_custom(5, 4, config_name)
+        config = create_custom_config(5, 4, config_name)
 
     # 创建模型
     model = create_crossring_model(config.config_name, config.NUM_ROW, config.NUM_COL)
@@ -153,7 +149,7 @@ def validate_installation() -> bool:
     """验证模块安装和依赖"""
     try:
         # 测试基本功能
-        config = create_crossring_config_custom(3, 3, "test")
+        config = create_custom_config(3, 3, "test")
         model = create_crossring_model("test", 3, 3)
 
         # 测试基本操作

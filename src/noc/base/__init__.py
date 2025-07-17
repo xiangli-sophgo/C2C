@@ -16,7 +16,6 @@ from .flit import (
 
 from .ip_interface import (
     BaseIPInterface,
-    BaseResourceManager,
 )
 
 from .model import BaseNoCModel
@@ -33,7 +32,6 @@ __all__ = [
     "create_flit",
     # IP接口相关
     "BaseIPInterface",
-    "BaseResourceManager",
     # 模型相关
     "BaseNoCModel",
 ]

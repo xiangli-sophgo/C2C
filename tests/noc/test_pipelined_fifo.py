@@ -175,12 +175,12 @@ def test_crossring_integration():
     print("\n=== 测试CrossRing组件集成 ===")
 
     from src.noc.crossring.node import CrossRingNode
-    from src.noc.crossring.config import create_crossring_config_2260e
+    from src.noc.crossring.config import create_preset_config
     from src.noc.crossring.flit import create_crossring_flit
     import logging
 
     # 创建配置和节点
-    config = create_crossring_config_2260e()
+    config = create_preset_config("2260E")
     logger = logging.getLogger("test")
     node = CrossRingNode(node_id=0, coordinates=(0, 0), config=config, logger=logger)
 

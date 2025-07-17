@@ -14,15 +14,12 @@ from enum import Enum
 from dataclasses import dataclass
 
 from src.noc.base.node import BaseNoCNode
-from src.noc.base.ip_interface import PipelinedFIFO, FlowControlledTransfer
+from src.noc.base.ip_interface import PipelinedFIFO
 from ..base.link import PriorityLevel
 from .flit import CrossRingFlit
 from .config import CrossRingConfig, RoutingStrategy
 from .crossring_link import CrossRingSlot, RingSlice  # 导入新的类
 from .cross_point import CrossRingCrossPoint, CrossPointDirection
-
-
-
 
 
 class CrossRingNode:
@@ -38,13 +35,7 @@ class CrossRingNode:
 
     def _create_directional_fifos(self, prefix: str, directions: List[str], depth: int) -> Dict[str, Dict[str, PipelinedFIFO]]:
         """工厂方法：创建方向化FIFO集合减少代码重复"""
-        return {
-            channel: {
-                direction: PipelinedFIFO(f"{prefix}_{channel}_{direction}_{self.node_id}", depth=depth)
-                for direction in directions
-            }
-            for channel in ["req", "rsp", "data"]
-        }
+        return {channel: {direction: PipelinedFIFO(f"{prefix}_{channel}_{direction}_{self.node_id}", depth=depth) for direction in directions} for channel in ["req", "rsp", "data"]}
 
     def __init__(self, node_id: int, coordinates: Tuple[int, int], config: CrossRingConfig, logger: logging.Logger):
         """
@@ -190,7 +181,6 @@ class CrossRingNode:
             "transferred_flits": {"horizontal": 0, "vertical": 0},
             "congestion_events": 0,
         }
-
 
         # 存储FIFO配置供后续使用
         self.iq_ch_depth = iq_ch_depth
@@ -701,7 +691,7 @@ class CrossRingNode:
                 # 从IP ID中提取IP类型（例如：ddr_0_node1 -> ddr_0）
                 ip_type = "_".join(ip_id.split("_")[:-1])  # 去掉最后的_nodeX部分
                 ip_base_type = ip_type.split("_")[0]  # 获取基础类型（例如：ddr）
-                
+
                 # 从destination_type中提取基础类型（例如：l2m_2 -> l2m）
                 dest_base_type = flit.destination_type.split("_")[0]
 
@@ -819,12 +809,6 @@ class CrossRingNode:
         # 处理eject队列的轮询仲裁
         self.process_eject_arbitration(cycle)
 
-        # 更新仲裁状态
-        self._update_arbitration_state(cycle)
-
-        # 更新拥塞控制状态
-        self._update_congestion_state()
-
     def _step_compute_phase(self, cycle: int) -> None:
         """更新所有FIFO的组合逻辑阶段"""
         # 更新IP inject channel buffers
@@ -874,51 +858,6 @@ class CrossRingNode:
                 self.ring_bridge_input_fifos[channel][direction].step_update_phase()
             for direction in ["EQ", "TR", "TL", "TU", "TD"]:
                 self.ring_bridge_output_fifos[channel][direction].step_update_phase()
-
-    def _update_arbitration_state(self, cycle: int) -> None:
-        """
-        更新仲裁状态
-
-        Args:
-            cycle: 当前周期
-        """
-        # 检查是否需要重置仲裁优先级
-        for direction in ["horizontal", "vertical"]:
-            last_arbitration = self.arbitration_state["last_arbitration"][direction]
-            if cycle - last_arbitration > self.config.arbitration_timeout:
-                # 重置为默认优先级
-                self.arbitration_state[f"{direction}_priority"] = "inject"
-                self.logger.debug(f"节点{self.node_id}的{direction}仲裁状态重置为默认")
-
-    def _update_congestion_state(self) -> None:
-        """更新拥塞控制状态"""
-        # 更新ETag状态
-        for direction in ["horizontal", "vertical"]:
-            for channel in ["req", "rsp", "data"]:
-                # 检查eject input fifos的拥塞情况
-                eject_congestion = False
-                eject_threshold = self.eq_in_depth * 0.8
-
-                for eject_dir in ["TR", "TL", "TD", "TU"]:
-                    eject_fifo = self.eject_input_fifos[channel][eject_dir]
-                    buffer_occupancy = len(eject_fifo.internal_queue)
-                    if buffer_occupancy >= eject_threshold:
-                        eject_congestion = True
-                        break
-
-                ring_congestion = False
-
-                # 设置ETag状态
-                old_status = self.etag_status[direction][channel]
-                new_status = eject_congestion or ring_congestion
-
-                if old_status != new_status:
-                    self.etag_status[direction][channel] = new_status
-                    if new_status:
-                        self.stats["congestion_events"] += 1
-                        self.logger.debug(f"节点{self.node_id}的{direction} {channel} ETag状态变为拥塞")
-                    else:
-                        self.logger.debug(f"节点{self.node_id}的{direction} {channel} ETag状态变为畅通")
 
     def can_inject_flit(self, channel: str, direction: str) -> bool:
         """

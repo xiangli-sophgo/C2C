@@ -13,7 +13,7 @@ from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import deque, defaultdict
 from enum import Enum
 
-from src.noc.utils.types import NodeId, Position, NodeType, Priority, NodeMetrics, MetricsDict, ConfigDict
+from src.noc.utils.types import NodeId, Position, Priority, NodeMetrics, MetricsDict, ConfigDict
 
 
 class NodeState(Enum):
@@ -42,7 +42,7 @@ class BaseNoCNode(ABC):
     缓冲区管理、路由决策等功能。
     """
 
-    def __init__(self, node_id: NodeId, position: Position, node_type: NodeType = NodeType.ROUTER):
+    def __init__(self, node_id: NodeId, position: Position, node_type: Optional[str] = None):
         """
         初始化NoC节点。
 
@@ -65,12 +65,10 @@ class BaseNoCNode(ABC):
         # 缓冲区配置
         self.input_buffer_size = 8
         self.output_buffer_size = 8
-        self.virtual_channels = 2
 
         # 缓冲区存储
         self.input_buffers: Dict[str, deque] = {}
         self.output_buffers: Dict[str, deque] = {}
-        self.virtual_channel_buffers: Dict[str, List[deque]] = {}
 
         # 缓冲区状态
         self.buffer_status: Dict[str, BufferStatus] = {}
@@ -106,8 +104,6 @@ class BaseNoCNode(ABC):
             # 输出缓冲区
             self.output_buffers[direction] = deque(maxlen=self.output_buffer_size)
 
-            # 虚拟通道缓冲区
-            self.virtual_channel_buffers[direction] = [deque(maxlen=self.input_buffer_size // self.virtual_channels) for _ in range(self.virtual_channels)]
 
             # 初始化缓冲区状态
             self.buffer_status[direction] = BufferStatus.EMPTY
@@ -298,58 +294,6 @@ class BaseNoCNode(ABC):
         occupancy = self.get_buffer_occupancy(buffer_name)
         return max_size - occupancy
 
-    # ========== 虚拟通道管理 ==========
-
-    def get_virtual_channel(self, direction: str, vc_id: int) -> Optional[deque]:
-        """
-        获取虚拟通道。
-
-        Args:
-            direction: 方向
-            vc_id: 虚拟通道ID
-
-        Returns:
-            虚拟通道队列，如果不存在则返回None
-        """
-        if direction in self.virtual_channel_buffers:
-            if 0 <= vc_id < len(self.virtual_channel_buffers[direction]):
-                return self.virtual_channel_buffers[direction][vc_id]
-        return None
-
-    def allocate_virtual_channel(self, direction: str, priority: Priority = Priority.MEDIUM) -> Optional[int]:
-        """
-        分配虚拟通道。
-
-        Args:
-            direction: 方向
-            priority: 优先级
-
-        Returns:
-            分配的虚拟通道ID，如果无法分配则返回None
-        """
-        if direction not in self.virtual_channel_buffers:
-            return None
-
-        # 根据优先级选择虚拟通道
-        vc_buffers = self.virtual_channel_buffers[direction]
-
-        # 优先分配给高优先级
-        if priority in [Priority.HIGH, Priority.CRITICAL]:
-            for i in range(len(vc_buffers)):
-                if len(vc_buffers[i]) < vc_buffers[i].maxlen:
-                    return i
-
-        # 为普通优先级找最空的通道
-        min_occupancy = float("inf")
-        best_vc = None
-
-        for i, vc_buffer in enumerate(vc_buffers):
-            occupancy = len(vc_buffer)
-            if occupancy < vc_buffer.maxlen and occupancy < min_occupancy:
-                min_occupancy = occupancy
-                best_vc = i
-
-        return best_vc
 
     # ========== Tag方法 ==========
 
@@ -584,11 +528,8 @@ class BaseNoCNode(ABC):
             self.input_buffer_size = config["input_buffer_size"]
         if "output_buffer_size" in config:
             self.output_buffer_size = config["output_buffer_size"]
-        if "virtual_channels" in config:
-            self.virtual_channels = config["virtual_channels"]
-
         # 重新初始化缓冲区（如果大小发生变化）
-        if any(key in config for key in ["input_buffer_size", "output_buffer_size", "virtual_channels"]):
+        if any(key in config for key in ["input_buffer_size", "output_buffer_size"]):
             self._initialize_buffers()
             self._initialize_flow_control()
 
@@ -605,7 +546,6 @@ class BaseNoCNode(ABC):
             "node_type": self.node_type.value,
             "input_buffer_size": self.input_buffer_size,
             "output_buffer_size": self.output_buffer_size,
-            "virtual_channels": self.virtual_channels,
             "neighbors": self.neighbors.copy(),
         }
 

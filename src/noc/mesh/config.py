@@ -30,7 +30,6 @@ class BasicConfiguration:
     # 缓冲区配置
     INPUT_BUFFER_DEPTH: int = 8
     OUTPUT_BUFFER_DEPTH: int = 8
-    VIRTUAL_CHANNELS: int = 2
     
     # 性能参数
     LINK_WIDTH: int = 64  # bits
@@ -56,7 +55,6 @@ class MeshConfiguration:
     # 缓冲区配置
     INPUT_BUFFER_DEPTH: int = 8
     OUTPUT_BUFFER_DEPTH: int = 8
-    VIRTUAL_CHANNELS: int = 2
     
     # 性能参数
     LINK_WIDTH: int = 64  # bits
@@ -223,10 +221,6 @@ class MeshConfig(BaseNoCConfig):
         if self.mesh_config.OUTPUT_BUFFER_DEPTH <= 0:
             errors.append(f"输出缓冲区深度必须为正数 (output_buffer_depth={self.mesh_config.output_buffer_depth})")
         
-        # 虚拟通道验证
-        if self.mesh_config.VIRTUAL_CHANNELS <= 0:
-            errors.append(f"虚拟通道数必须为正数 (VIRTUAL_CHANNELS={self.mesh_config.VIRTUAL_CHANNELS})")
-        
         # 链路参数验证
         if self.mesh_config.LINK_WIDTH <= 0:
             errors.append(f"链路宽度必须为正数 (LINK_WIDTH={self.mesh_config.LINK_WIDTH})")
@@ -264,7 +258,6 @@ class MeshConfig(BaseNoCConfig):
                 "enable_minimal_routing": self.mesh_config.ENABLE_MINIMAL_ROUTING,
                 "input_buffer_depth": self.mesh_config.INPUT_BUFFER_DEPTH,
                 "output_buffer_depth": self.mesh_config.OUTPUT_BUFFER_DEPTH,
-                "virtual_channels": self.mesh_config.VIRTUAL_CHANNELS,
                 "link_width": self.mesh_config.LINK_WIDTH,
                 "flit_size": self.mesh_config.FLIT_SIZE,
                 "router_latency": self.mesh_config.ROUTER_LATENCY,
@@ -303,22 +296,18 @@ class MeshConfig(BaseNoCConfig):
         self.routing_strategy = RoutingStrategy.XY if enable else RoutingStrategy.SHORTEST
     
     def update_buffer_config(self, input_depth: Optional[int] = None, 
-                           output_depth: Optional[int] = None,
-                           virtual_channels: Optional[int] = None) -> None:
+                           output_depth: Optional[int] = None) -> None:
         """
         更新缓冲区配置。
         
         Args:
             input_depth: 输入缓冲区深度
             output_depth: 输出缓冲区深度
-            virtual_channels: 虚拟通道数
         """
         if input_depth is not None:
             self.mesh_config.INPUT_BUFFER_DEPTH = input_depth
         if output_depth is not None:
             self.mesh_config.OUTPUT_BUFFER_DEPTH = output_depth
-        if virtual_channels is not None:
-            self.mesh_config.VIRTUAL_CHANNELS = virtual_channels
     
     def to_dict(self) -> Dict[str, Any]:
         """

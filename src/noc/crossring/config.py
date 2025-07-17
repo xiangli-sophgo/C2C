@@ -10,7 +10,7 @@ import json
 from dataclasses import dataclass, field
 from enum import Enum
 
-from ..base.config import BaseNoCConfig
+from ..base.config import BaseNoCConfig, ConfigRegistry
 from src.noc.utils.types import TopologyType, ValidationResult
 
 
@@ -43,8 +43,8 @@ class BasicConfiguration:
     CROSSPOINT_BUFFER_DEPTH: int = 4
 
     # Link Slice配置 - CrossRing非环绕设计专用
-    NORMAL_LINK_SLICES: int = 8    # 正常节点间连接的slice数量
-    SELF_LINK_SLICES: int = 2      # 自连接（边界节点到自己）的slice数量
+    NORMAL_LINK_SLICES: int = 8  # 正常节点间连接的slice数量
+    SELF_LINK_SLICES: int = 2  # 自连接（边界节点到自己）的slice数量
 
     # 仲裁配置（用于支持不同路由策略）
     ARBITRATION_TIMEOUT: int = 10  # 仲裁超时周期
@@ -121,11 +121,11 @@ class TrackerConfiguration:
 class LatencyConfiguration:
     """延迟配置数据类。"""
 
-    DDR_R_LATENCY: int = 5  # 从100降到5，方便观察读数据返回
+    DDR_R_LATENCY: int = 100
     DDR_R_LATENCY_VAR: int = 0
-    DDR_W_LATENCY: int = 0
+    DDR_W_LATENCY: int = 40
     DDR_W_LATENCY_VAR: int = 0
-    L2M_R_LATENCY: int = 3  # 从12降到3，方便观察读数据返回
+    L2M_R_LATENCY: int = 12
     L2M_R_LATENCY_VAR: int = 0
     L2M_W_LATENCY: int = 16
     L2M_W_LATENCY_VAR: int = 0
@@ -660,39 +660,66 @@ class CrossRingConfig(BaseNoCConfig):
         # 重新生成派生配置
         self._generate_derived_config()
 
-    def __str__(self) -> str:
-        """字符串表示。"""
-        return f"CrossRingConfig({self.config_name}, {self.NUM_ROW}×{self.NUM_COL})"
-
-    def __repr__(self) -> str:
-        """详细字符串表示。"""
-        return f"CrossRingConfig(name='{self.config_name}', topology={self.NUM_ROW}×{self.NUM_COL})"
-
-    # ========== 新增的NoC专用功能 ==========
-
-    def create_simulation_config(self, max_cycles: int = 10000, warmup_cycles: int = 0, stats_start_cycle: int = 1000) -> Dict[str, Any]:
+    @classmethod
+    def create_custom_config(cls, num_row: int = 4, num_col: int = 4, config_name: str = "custom", **kwargs) -> "CrossRingConfig":
         """
-        创建仿真配置
+        创建自定义配置。
 
         Args:
-            max_cycles: 最大仿真周期
-            warmup_cycles: 热身周期
-            stats_start_cycle: 统计开始周期
+            num_row: 行数
+            num_col: 列数
+            config_name: 配置名称
+            **kwargs: 其他配置参数
 
         Returns:
-            仿真配置字典
+            CrossRing配置实例
         """
-        return {
-            "simulation": {
-                "max_cycles": max_cycles,
-                "warmup_cycles": warmup_cycles,
-                "stats_start_cycle": stats_start_cycle,
-                "cycle_frequency": self.basic_config.NETWORK_FREQUENCY,
-            },
-            "topology": self.get_topology_params(),
-            "resources": self.get_resource_config(),
-            "traffic": self.get_traffic_config(),
-        }
+        config = cls(num_row=num_row, num_col=num_col, config_name=config_name)
+
+        # 应用自定义参数
+        for key, value in kwargs.items():
+            if hasattr(config, key):
+                setattr(config, key, value)
+            elif hasattr(config.basic_config, key):
+                setattr(config.basic_config, key, value)
+            elif hasattr(config.ip_config, key):
+                setattr(config.ip_config, key, value)
+            elif hasattr(config.fifo_config, key):
+                setattr(config.fifo_config, key, value)
+            elif hasattr(config.tag_config, key):
+                setattr(config.tag_config, key, value)
+            elif hasattr(config.tracker_config, key):
+                setattr(config.tracker_config, key, value)
+            elif hasattr(config.latency_config, key):
+                setattr(config.latency_config, key, value)
+
+        # 重新生成派生配置
+        config._generate_derived_config()
+        return config
+
+    @classmethod
+    def load_from_file(cls, file_path: str) -> "CrossRingConfig":
+        """
+        从文件加载配置。
+
+        Args:
+            file_path: 配置文件路径
+
+        Returns:
+            CrossRing配置实例
+        """
+        import json
+
+        with open(file_path, "r") as f:
+            config_dict = json.load(f)
+
+        # 创建基础配置
+        config = cls(num_row=config_dict.get("num_row", 4), num_col=config_dict.get("num_col", 4), config_name=config_dict.get("config_name", "loaded"))
+
+        # 从字典加载
+        config.from_dict(config_dict)
+
+        return config
 
     def get_resource_config(self) -> Dict[str, Any]:
         """获取资源配置信息"""
@@ -777,149 +804,3 @@ class CrossRingConfig(BaseNoCConfig):
                 "max_num": self.tag_config.ITAG_MAX_NUM_V,
             },
         }
-
-    def scale_for_size(self, target_nodes: int) -> None:
-        """
-        根据目标节点数自动调整配置
-
-        Args:
-            target_nodes: 目标节点数
-        """
-        if target_nodes <= 9:  # 3x3及以下
-            scale_factor = 0.5
-        elif target_nodes <= 16:  # 4x4
-            scale_factor = 0.75
-        elif target_nodes <= 25:  # 5x5
-            scale_factor = 1.0
-        else:  # 更大规模
-            scale_factor = min(2.0, target_nodes / 25.0)
-
-        # 按比例调整tracker数量
-        self.tracker_config.RN_R_TRACKER_OSTD = max(32, int(self.tracker_config.RN_R_TRACKER_OSTD * scale_factor))
-        self.tracker_config.RN_W_TRACKER_OSTD = max(16, int(self.tracker_config.RN_W_TRACKER_OSTD * scale_factor))
-        self.tracker_config.SN_DDR_R_TRACKER_OSTD = max(48, int(self.tracker_config.SN_DDR_R_TRACKER_OSTD * scale_factor))
-        self.tracker_config.SN_DDR_W_TRACKER_OSTD = max(24, int(self.tracker_config.SN_DDR_W_TRACKER_OSTD * scale_factor))
-
-        # 按比例调整FIFO深度
-        self.fifo_config.RB_IN_DEPTH = max(8, int(self.fifo_config.RB_IN_DEPTH * scale_factor))
-        self.fifo_config.EQ_IN_DEPTH = max(8, int(self.fifo_config.EQ_IN_DEPTH * scale_factor))
-
-        # 重新生成派生配置
-        self._generate_derived_config()
-
-    def enable_debug_mode(self) -> None:
-        """启用调试模式"""
-        # 减少FIFO深度以加快调试
-        self.fifo_config.RB_IN_DEPTH = max(4, self.fifo_config.RB_IN_DEPTH // 2)
-        self.fifo_config.EQ_IN_DEPTH = max(4, self.fifo_config.EQ_IN_DEPTH // 2)
-
-        # 减少tracker数量以便观察
-        self.tracker_config.RN_R_TRACKER_OSTD = min(16, self.tracker_config.RN_R_TRACKER_OSTD)
-        self.tracker_config.RN_W_TRACKER_OSTD = min(8, self.tracker_config.RN_W_TRACKER_OSTD)
-
-        # 降低带宽限制
-        for attr in ["GDMA_BW_LIMIT", "SDMA_BW_LIMIT", "CDMA_BW_LIMIT", "DDR_BW_LIMIT", "L2M_BW_LIMIT"]:
-            setattr(self.ip_config, attr, getattr(self.ip_config, attr) / 4)
-
-        # 重新生成派生配置
-        self._generate_derived_config()
-
-    def get_recommended_simulation_cycles(self) -> Dict[str, int]:
-        """
-        根据配置推荐仿真周期数
-
-        Returns:
-            推荐的仿真参数
-        """
-        # 基于拓扑大小和资源配置推荐周期数
-        base_cycles = self.NUM_NODES * 1000
-
-        # 根据tracker数量调整
-        tracker_factor = (self.tracker_config.RN_R_TRACKER_OSTD + self.tracker_config.RN_W_TRACKER_OSTD) / 96
-        cycles = int(base_cycles * tracker_factor)
-
-        return {
-            "warmup_cycles": 0,
-            "stats_start_cycle": 0,
-            "max_cycles": cycles,
-            "recommended_min_cycles": cycles // 2,
-            "recommended_max_cycles": cycles * 2,
-        }
-
-
-# ========== 便捷函数 ==========
-
-
-def create_crossring_config_2260e() -> CrossRingConfig:
-    """创建2260E芯片的CrossRing配置"""
-    config = CrossRingConfig(num_row=3, num_col=3, config_name="2260E")
-    config.set_preset_configuration("2260E")
-    return config
-
-
-def create_crossring_config_2262() -> CrossRingConfig:
-    """创建2262芯片的CrossRing配置"""
-    config = CrossRingConfig(num_row=5, num_col=4, config_name="2262")
-    config.set_preset_configuration("2262")
-    return config
-
-
-def create_crossring_config_custom(num_row: int, num_col: int, config_name: str = "custom", **kwargs) -> CrossRingConfig:
-    """
-    创建自定义CrossRing配置
-
-    Args:
-        num_row: 行数
-        num_col: 列数
-        config_name: 配置名称
-        **kwargs: 其他配置参数
-
-    Returns:
-        CrossRing配置实例
-    """
-    config = CrossRingConfig(num_row=num_row, num_col=num_col, config_name=config_name)
-
-    # 应用自定义参数
-    for key, value in kwargs.items():
-        if hasattr(config, key):
-            setattr(config, key, value)
-        elif hasattr(config.basic_config, key):
-            setattr(config.basic_config, key, value)
-        elif hasattr(config.ip_config, key):
-            setattr(config.ip_config, key, value)
-        elif hasattr(config.fifo_config, key):
-            setattr(config.fifo_config, key, value)
-        elif hasattr(config.tag_config, key):
-            setattr(config.tag_config, key, value)
-        elif hasattr(config.tracker_config, key):
-            setattr(config.tracker_config, key, value)
-        elif hasattr(config.latency_config, key):
-            setattr(config.latency_config, key, value)
-
-    # 重新生成派生配置
-    config._generate_derived_config()
-    return config
-
-
-def load_crossring_config_from_file(file_path: str) -> CrossRingConfig:
-    """
-    从文件加载CrossRing配置
-
-    Args:
-        file_path: 配置文件路径
-
-    Returns:
-        CrossRing配置实例
-    """
-    import json
-
-    with open(file_path, "r") as f:
-        config_dict = json.load(f)
-
-    # 创建基础配置
-    config = CrossRingConfig(num_row=config_dict.get("num_row", 5), num_col=config_dict.get("num_col", 4), config_name=config_dict.get("config_name", "loaded"))
-
-    # 从字典加载
-    config.from_dict(config_dict)
-
-    return config

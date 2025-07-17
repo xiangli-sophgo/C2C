@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 
 from src.noc.utils.types import TopologyType, RoutingStrategy, FlowControlType, BufferType, TrafficPattern, NoCConfiguration, ConfigDict, ValidationResult
+from typing import Type
 
 
 class BaseNoCConfig(ABC):
@@ -45,12 +46,11 @@ class BaseNoCConfig(ABC):
         # Tag参数
         self.flow_control = FlowControlType.WORMHOLE
         self.buffer_type = BufferType.SHARED
-        self.virtual_channels = 2
 
         # 仿真参数
         self.simulation_cycles = 10000
         self.warmup_cycles = 0
-        self.stats_start_cycle = 1000
+        self.stats_start_cycle = 0
 
         # 时钟和时序
         self.clock_frequency = 1.0  # GHz
@@ -60,21 +60,11 @@ class BaseNoCConfig(ABC):
         self.traffic_pattern = TrafficPattern.UNIFORM_RANDOM
         self.injection_rate = 0.1  # flits per cycle per node
 
-        # 服务质量
-        self.enable_qos = False
-        self.priority_levels = 4
-
-        # 高级功能
-        self.enable_adaptive_routing = False
-        self.enable_multicast = False
-        self.enable_power_management = False
-
-        # 容错能力
-        self.fault_tolerance_enabled = False
-        self.redundancy_level = 0
-
         # 自定义参数存储
         self._custom_params = {}
+
+        # 预设配置存储
+        self._presets = {}
 
         # 初始化拓扑特定参数
         self._init_topology_params()
@@ -276,9 +266,6 @@ class BaseNoCConfig(ABC):
         """
         return {
             "topology_type": self.topology_type.value,
-            "supports_adaptive_routing": self.enable_adaptive_routing,
-            "supports_qos": self.enable_qos,
-            "supports_multicast": self.enable_multicast,
             "flow_control": self.flow_control.value,
             "buffer_type": self.buffer_type.value,
         }
@@ -359,6 +346,118 @@ class BaseNoCConfig(ABC):
         """Detailed string representation of the configuration."""
         return f"{self.__class__.__name__}({self.to_dict()})"
 
+    # ========== 预设配置管理 ==========
+
+    def register_preset(self, name: str, config_params: Dict[str, Any]) -> None:
+        """
+        注册预设配置。
+
+        Args:
+            name: 预设配置名称
+            config_params: 配置参数字典
+        """
+        self._presets[name] = config_params.copy()
+
+    def apply_preset(self, preset_name: str) -> None:
+        """
+        应用预设配置。
+
+        Args:
+            preset_name: 预设配置名称
+
+        Raises:
+            ValueError: 如果预设配置不存在
+        """
+        if preset_name not in self._presets:
+            available = ", ".join(self._presets.keys())
+            raise ValueError(f"未知的预设配置: {preset_name}。可用配置: {available}")
+
+        preset_params = self._presets[preset_name]
+        self.from_dict(preset_params)
+
+    def get_preset_info(self, preset_name: str) -> Dict[str, Any]:
+        """
+        获取预设配置信息。
+
+        Args:
+            preset_name: 预设配置名称
+
+        Returns:
+            预设配置参数字典
+
+        Raises:
+            ValueError: 如果预设配置不存在
+        """
+        if preset_name not in self._presets:
+            available = ", ".join(self._presets.keys())
+            raise ValueError(f"未知的预设配置: {preset_name}。可用配置: {available}")
+
+        return self._presets[preset_name].copy()
+
+    def get_registered_presets(self) -> List[str]:
+        """
+        获取已注册的预设配置列表。
+
+        Returns:
+            预设配置名称列表
+        """
+        return list(self._presets.keys())
+
+    # ========== 抽象工厂方法 ==========
+
+    @classmethod
+    @abstractmethod
+    def create_preset_config(cls, preset_name: str, **kwargs) -> "BaseNoCConfig":
+        """
+        创建预设配置。
+
+        Args:
+            preset_name: 预设配置名称
+            **kwargs: 额外配置参数
+
+        Returns:
+            配置实例
+        """
+        pass
+
+    @classmethod
+    @abstractmethod
+    def create_custom_config(cls, **kwargs) -> "BaseNoCConfig":
+        """
+        创建自定义配置。
+
+        Args:
+            **kwargs: 配置参数
+
+        Returns:
+            配置实例
+        """
+        pass
+
+    @classmethod
+    @abstractmethod
+    def load_from_file(cls, file_path: str) -> "BaseNoCConfig":
+        """
+        从文件加载配置。
+
+        Args:
+            file_path: 配置文件路径
+
+        Returns:
+            配置实例
+        """
+        pass
+
+    @abstractmethod
+    def get_supported_presets(self) -> List[str]:
+        """
+        获取支持的预设配置列表。
+
+        Returns:
+            预设配置名称列表
+        """
+        pass
+
 
 def create_config_from_type(topology_type: TopologyType, **kwargs) -> BaseNoCConfig:
     """
@@ -372,11 +471,7 @@ def create_config_from_type(topology_type: TopologyType, **kwargs) -> BaseNoCCon
         Configuration instance appropriate for the topology type
     """
     if topology_type == TopologyType.CROSSRING:
-        from src.noc.crossring.config import CrossRingConfig  # 延迟导入，避免循环依赖
-
-        config = CrossRingConfig(**kwargs)
+        from src.noc.crossring.config import CrossRingConfig
+        return CrossRingConfig.create_custom_config(**kwargs)
     else:
         raise NotImplementedError(f"暂不支持的拓扑类型: {topology_type}")
-    for key, value in kwargs.items():
-        config.set_parameter(key, value)
-    return config

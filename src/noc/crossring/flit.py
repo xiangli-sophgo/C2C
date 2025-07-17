@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Any
 import numpy as np
 from dataclasses import dataclass, field
 
-from ..base.flit import BaseFlit
+from ..base.flit import BaseFlit, FlitPool
 from src.noc.utils.types import NodeId
 
 
@@ -337,59 +337,44 @@ class CrossRingFlit(BaseFlit):
             # 简化显示
             return self.flit_position
 
+    def _reset_for_reuse(self):
+        """重置CrossRing Flit以供重用"""
+        # 调用基类重置方法
+        super()._reset_for_reuse()
 
-# 重写基类的重置方法以支持CrossRing特有字段
-def _reset_crossring_for_reuse(self):
-    """重置CrossRing Flit以供重用"""
-    # 调用基类重置方法
-    BaseFlit._reset_for_reuse(self)
+        # 重置CrossRing特有字段
+        self.etag_priority = "T2"
+        self.used_entry_level = None
+        self.itag_h = False
+        self.itag_v = False
+        self.itag_reservation = 0
+        self.moving_direction = 1
+        self.moving_direction_v = 1
+        self.circuits_completed_h = 0
+        self.circuits_completed_v = 0
+        self.wait_cycle_h = 0
+        self.wait_cycle_v = 0
+        self.dest_xid = 0
+        self.dest_yid = 0
+        self.station_position = -1
+        self.current_seat_index = -1
 
-    # 重置CrossRing特有字段
-    self.etag_priority = "T2"
-    self.used_entry_level = None
-    self.itag_h = False
-    self.itag_v = False
-    self.itag_reservation = 0
-    self.moving_direction = 1
-    self.moving_direction_v = 1
-    self.circuits_completed_h = 0
-    self.circuits_completed_v = 0
-    self.wait_cycle_h = 0
-    self.wait_cycle_v = 0
-    self.dest_xid = 0
-    self.dest_yid = 0
-    self.station_position = -1
-    self.current_seat_index = -1
-    self.current_link = None
-    self.is_on_station = False
+        # 重置详细位置追踪字段
+        self.current_node_id = -1
+        self.current_link_id = ""
+        self.current_slice_index = -1
+        self.current_slot_index = -1
+        self.current_tag_info = ""
+        self.crosspoint_direction = ""
+        
+        # 重置延迟发送
+        self.departure_cycle = 0.0
 
-    # 重置时间戳
-    self.cmd_entry_cake0_cycle = np.inf
-    self.cmd_entry_noc_from_cake0_cycle = np.inf
-    self.cmd_entry_noc_from_cake1_cycle = np.inf
-    self.cmd_received_by_cake0_cycle = np.inf
-    self.cmd_received_by_cake1_cycle = np.inf
-    self.data_entry_noc_from_cake0_cycle = np.inf
-    self.data_entry_noc_from_cake1_cycle = np.inf
-    self.data_received_complete_cycle = np.inf
-
-    # 重置tracker信息
-    self.rn_tracker_type = None
-    self.sn_tracker_type = None
-
-    # 重置详细位置追踪字段
-    self.current_node_id = -1
-    self.current_link_id = ""
-    self.current_slice_index = -1
-    self.current_slot_index = -1
-    self.current_tag_info = ""
-    self.crosspoint_direction = ""
-    
-    # 重置延迟发送
-    self.departure_cycle = 0.0
+    def reset(self):
+        """重置方法的简化接口"""
+        self._reset_for_reuse()
 
 
-CrossRingFlit._reset_for_reuse = _reset_crossring_for_reuse
 
 
 # 工厂函数
@@ -419,84 +404,8 @@ def create_crossring_flit(source: NodeId, destination: NodeId, path: List[NodeId
 # ========== Flit对象池管理 ==========
 
 
-class CrossRingFlitPool:
-    """CrossRing Flit对象池，用于高效的内存管理。"""
-
-    def __init__(self, initial_size: int = 1000):
-        """
-        初始化Flit对象池。
-
-        Args:
-            initial_size: 初始池大小
-        """
-        self.pool: List[CrossRingFlit] = []
-        self.stats = {"created": 0, "reused": 0, "returned": 0, "peak_usage": 0, "current_usage": 0}
-
-        # 预创建一些flit对象
-        for _ in range(initial_size):
-            flit = CrossRingFlit(source=0, destination=0)
-            self.pool.append(flit)
-            self.stats["created"] += 1
-
-    def get_flit(self, source: NodeId, destination: NodeId, **kwargs) -> CrossRingFlit:
-        """
-        从池中获取flit对象。
-
-        Args:
-            source: 源节点
-            destination: 目标节点
-            **kwargs: 其他参数
-
-        Returns:
-            CrossRingFlit实例
-        """
-        if self.pool:
-            flit = self.pool.pop()
-            self.stats["reused"] += 1
-        else:
-            flit = CrossRingFlit(source=0, destination=0)
-            self.stats["created"] += 1
-
-        # 重置flit状态
-        flit.reset()
-        flit.source = source
-        flit.destination = destination
-
-        # 设置其他参数
-        for key, value in kwargs.items():
-            if hasattr(flit, key):
-                setattr(flit, key, value)
-
-        self.stats["current_usage"] += 1
-        if self.stats["current_usage"] > self.stats["peak_usage"]:
-            self.stats["peak_usage"] = self.stats["current_usage"]
-
-        return flit
-
-    def return_flit(self, flit: CrossRingFlit) -> None:
-        """
-        将flit对象返回到池中。
-
-        Args:
-            flit: 要返回的flit对象
-        """
-        if flit is not None:
-            self.pool.append(flit)
-            self.stats["returned"] += 1
-            self.stats["current_usage"] -= 1
-
-    def get_stats(self) -> Dict[str, Any]:
-        """获取池统计信息。"""
-        return self.stats.copy()
-
-    def clear(self) -> None:
-        """清空池。"""
-        self.pool.clear()
-        self.stats = {"created": 0, "reused": 0, "returned": 0, "peak_usage": 0, "current_usage": 0}
-
-
-# 全局flit池实例
-_global_flit_pool = CrossRingFlitPool()
+# 全局CrossRing flit池实例
+_global_crossring_flit_pool = FlitPool(CrossRingFlit, initial_size=1000)
 
 
 def create_crossring_flit(source: NodeId, destination: NodeId, path: Optional[List[NodeId]] = None, **kwargs) -> CrossRingFlit:
@@ -515,7 +424,7 @@ def create_crossring_flit(source: NodeId, destination: NodeId, path: Optional[Li
     if path is None:
         path = [source, destination]
 
-    flit = _global_flit_pool.get_flit(source, destination, path=path, **kwargs)
+    flit = _global_crossring_flit_pool.get_flit(source=source, destination=destination, path=path, **kwargs)
 
     # 设置CrossRing坐标信息
     # 尝试从kwargs获取num_col，如果没有则使用默认值3
@@ -532,7 +441,7 @@ def return_crossring_flit(flit: CrossRingFlit) -> None:
     Args:
         flit: 要返回的flit对象
     """
-    _global_flit_pool.return_flit(flit)
+    _global_crossring_flit_pool.return_flit(flit)
 
 
 def get_crossring_flit_pool_stats() -> Dict[str, Any]:
@@ -542,11 +451,6 @@ def get_crossring_flit_pool_stats() -> Dict[str, Any]:
     Returns:
         统计信息字典
     """
-    return _global_flit_pool.get_stats()
+    return _global_crossring_flit_pool.get_stats()
 
 
-def reset(self):
-    self._reset_for_reuse()
-
-
-CrossRingFlit.reset = reset

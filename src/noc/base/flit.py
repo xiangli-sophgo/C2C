@@ -409,6 +409,89 @@ class BaseFlit(ABC):
             "custom_fields": self.custom_fields,
         }
 
+    def _reset_for_reuse(self):
+        """重置Flit以供重用"""
+        # ========== 基础标识字段 ==========
+        self.packet_id = ""
+        self.flit_id = 0
+        self.source = 0
+        self.destination = 0
+
+        # ========== 请求类型和数据 ==========
+        self.req_type = "R"
+        self.burst_length = 1
+        self.flit_size = 128
+        self.priority = Priority.MEDIUM
+        self.source_type = "gdma_0"
+        self.destination_type = "ddr_0"
+
+        # ========== STI三通道协议 ==========
+        self.channel = "req"
+        self.flit_type = "req"
+        self.req_attr = "new"
+        self.req_state = "valid"
+        self.rsp_type = None
+
+        # ========== 重试机制 ==========
+        self.retry_count = 0
+        self.max_retries = 1
+        self.original_req_time = np.inf
+        self.retry_reason = ""
+        self.is_retry = False
+
+        # ========== 路径和路由信息 ==========
+        self.path = []
+        self.path_index = 0
+        self.current_position = -1
+        self.next_hop = -1
+
+        # ========== 通用状态字段 ==========
+        self.is_injected = False
+        self.is_ejected = False
+        self.is_arrive = False
+        self.is_finish = False
+        self.is_head_flit = True
+        self.is_tail_flit = True
+
+        # ========== 网络状态 ==========
+        self.is_new_on_network = True
+        self.hop_count = 0
+
+        # ========== 时间戳记录 ==========
+        self.creation_time = 0.0
+        self.injection_time = np.inf
+        self.ejection_time = np.inf
+        self.completion_time = np.inf
+        self.network_entry_time = np.inf
+        self.network_exit_time = np.inf
+
+        # ========== 延迟计算 ==========
+        self.cmd_latency = np.inf
+        self.data_latency = np.inf
+        self.transaction_latency = np.inf
+
+        # ========== 详细时间戳 ==========
+        self.cmd_entry_cake0_cycle = np.inf
+        self.cmd_entry_noc_from_cake0_cycle = np.inf
+        self.cmd_entry_noc_from_cake1_cycle = np.inf
+        self.cmd_received_by_cake0_cycle = np.inf
+        self.cmd_received_by_cake1_cycle = np.inf
+        self.data_entry_noc_from_cake0_cycle = np.inf
+        self.data_entry_noc_from_cake1_cycle = np.inf
+        self.data_received_complete_cycle = np.inf
+
+        # ========== 位置和链路状态 ==========
+        self.flit_position = "created"
+        self.current_buffer = None
+
+        # ========== 清空字典 ==========
+        self.routing_info.clear()
+        self.flow_control_info.clear()
+        self.congestion_info.clear()
+        self.protocol_info.clear()
+        self.debug_info.clear()
+        self.custom_fields.clear()
+
     def __repr__(self) -> str:
         """字符串表示"""
         status = []
@@ -474,92 +557,6 @@ class FlitPool:
             return {"pool_size": len(self._pool), "created_count": self._created_count, "flit_type": self.flit_class.__name__}
 
 
-# 为BaseFlit添加重置方法
-def _reset_for_reuse(self):
-    """重置Flit以供重用"""
-    # ========== 基础标识字段 ==========
-    self.packet_id = ""
-    self.flit_id = 0
-    self.source = 0
-    self.destination = 0
-
-    # ========== 请求类型和数据 ==========
-    self.req_type = "R"
-    self.burst_length = 1
-    self.flit_size = 128
-    self.priority = Priority.MEDIUM
-    self.source_type = "gdma_0"
-    self.destination_type = "ddr_0"
-
-    # ========== STI三通道协议 ==========
-    self.channel = "req"
-    self.flit_type = "req"
-    self.req_attr = "new"
-    self.req_state = "valid"
-    self.rsp_type = None
-
-    # ========== 重试机制 ==========
-    self.retry_count = 0
-    self.max_retries = 1
-    self.original_req_time = np.inf
-    self.retry_reason = ""
-    self.is_retry = False
-
-    # ========== 路径和路由信息 ==========
-    self.path = []
-    self.path_index = 0
-    self.current_position = -1
-    self.next_hop = -1
-
-    # ========== 通用状态字段 ==========
-    self.is_injected = False
-    self.is_ejected = False
-    self.is_arrive = False
-    self.is_finish = False
-    self.is_head_flit = True
-    self.is_tail_flit = True
-
-    # ========== 网络状态 ==========
-    self.is_new_on_network = True
-    self.hop_count = 0
-
-    # ========== 时间戳记录 ==========
-    self.creation_time = 0.0
-    self.injection_time = np.inf
-    self.ejection_time = np.inf
-    self.completion_time = np.inf
-    self.network_entry_time = np.inf
-    self.network_exit_time = np.inf
-
-    # ========== 延迟计算 ==========
-    self.cmd_latency = np.inf
-    self.data_latency = np.inf
-    self.transaction_latency = np.inf
-
-    # ========== 详细时间戳 ==========
-    self.cmd_entry_cake0_cycle = np.inf
-    self.cmd_entry_noc_from_cake0_cycle = np.inf
-    self.cmd_entry_noc_from_cake1_cycle = np.inf
-    self.cmd_received_by_cake0_cycle = np.inf
-    self.cmd_received_by_cake1_cycle = np.inf
-    self.data_entry_noc_from_cake0_cycle = np.inf
-    self.data_entry_noc_from_cake1_cycle = np.inf
-    self.data_received_complete_cycle = np.inf
-
-    # ========== 位置和链路状态 ==========
-    self.flit_position = "created"
-    self.current_buffer = None
-
-    # ========== 清空字典 ==========
-    self.routing_info.clear()
-    self.flow_control_info.clear()
-    self.congestion_info.clear()
-    self.protocol_info.clear()
-    self.debug_info.clear()
-    self.custom_fields.clear()
-
-
-BaseFlit._reset_for_reuse = _reset_for_reuse
 
 
 # 工厂函数

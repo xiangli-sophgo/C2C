@@ -384,10 +384,8 @@ class NoCTopologyFactory:
             # 为吞吐量优化
             optimized_config.routing_strategy = "load_balanced"
             optimized_config.buffer_depth = max(optimized_config.buffer_depth, 8)
-            optimized_config.virtual_channels = max(getattr(optimized_config, "virtual_channels", 2), 4)
         elif optimization_target == "power":
             # 为功耗优化
-            optimized_config.enable_power_management = True
             optimized_config.buffer_depth = min(optimized_config.buffer_depth, 4)
 
         return optimized_config
