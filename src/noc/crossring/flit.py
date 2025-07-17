@@ -140,7 +140,8 @@ class CrossRingFlit(BaseFlit):
         self.dest_yid = self.destination // num_col
 
         # 设置dest_coordinates属性（用于路由计算）
-        self.dest_coordinates = (self.dest_xid, self.dest_yid)
+        # 修复：使用(row, col)格式，与topology保持一致
+        self.dest_coordinates = (self.dest_yid, self.dest_xid)
 
         # 设置源坐标到custom_fields
         src_x = self.source % num_col
@@ -424,11 +425,12 @@ def create_crossring_flit(source: NodeId, destination: NodeId, path: Optional[Li
     if path is None:
         path = [source, destination]
 
+    # 提取num_col参数，避免传递给Flit构造函数
+    num_col = kwargs.pop("num_col", 3)
+    
     flit = _global_crossring_flit_pool.get_flit(source=source, destination=destination, path=path, **kwargs)
 
     # 设置CrossRing坐标信息
-    # 尝试从kwargs获取num_col，如果没有则使用默认值3
-    num_col = kwargs.get("num_col", 3)
     flit.set_crossring_coordinates(num_col)
 
     return flit

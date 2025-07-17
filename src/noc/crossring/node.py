@@ -174,6 +174,13 @@ class CrossRingNode:
             },
         }
 
+        # Ring_bridge仲裁决策缓存（两阶段执行用）
+        self.ring_bridge_arbitration_decisions = {
+            "req": {"flit": None, "output_direction": None, "input_source": None},
+            "rsp": {"flit": None, "output_direction": None, "input_source": None},
+            "data": {"flit": None, "output_direction": None, "input_source": None},
+        }
+
         # 性能统计
         self.stats = {
             "injected_flits": {"req": 0, "rsp": 0, "data": 0},
@@ -552,6 +559,129 @@ class CrossRingNode:
             return output_fifo.read_output()
         return None
 
+    def _compute_ring_bridge_arbitration(self, cycle: int) -> None:
+        """
+        计算ring_bridge仲裁决策（两阶段执行的compute阶段）
+        
+        Args:
+            cycle: 当前周期
+        """
+        # 清空上一周期的决策
+        for channel in ["req", "rsp", "data"]:
+            self.ring_bridge_arbitration_decisions[channel] = {
+                "flit": None, "output_direction": None, "input_source": None
+            }
+
+        # 首先初始化源和方向列表（如果还没有初始化）
+        if not self.ring_bridge_arbitration_state["req"]["input_sources"]:
+            self._initialize_ring_bridge_arbitration()
+
+        # 为每个通道计算仲裁决策
+        for channel in ["req", "rsp", "data"]:
+            self._compute_channel_ring_bridge_arbitration(channel, cycle)
+
+    def _compute_channel_ring_bridge_arbitration(self, channel: str, cycle: int) -> None:
+        """
+        计算单个通道的ring_bridge仲裁决策
+        
+        Args:
+            channel: 通道类型
+            cycle: 当前周期
+        """
+        arb_state = self.ring_bridge_arbitration_state[channel]
+        input_sources = arb_state["input_sources"]
+
+        # 轮询所有输入源，寻找可用的flit
+        for input_attempt in range(len(input_sources)):
+            current_input_idx = arb_state["current_input"]
+            input_source = input_sources[current_input_idx]
+
+            # 检查是否有可用的flit（但不取出）
+            flit = self._peek_flit_from_ring_bridge_input(input_source, channel)
+            if flit is not None:
+                # 计算输出方向
+                output_direction = self._determine_ring_bridge_output_direction(flit)
+                
+                # 检查输出FIFO是否可用
+                output_fifo = self.ring_bridge_output_fifos[channel][output_direction]
+                if output_fifo.ready_signal():
+                    # 保存仲裁决策（在update阶段执行）
+                    self.ring_bridge_arbitration_decisions[channel] = {
+                        "flit": flit,
+                        "output_direction": output_direction,
+                        "input_source": input_source
+                    }
+                    break
+
+            # 移动到下一个输入源
+            arb_state["current_input"] = (current_input_idx + 1) % len(input_sources)
+
+    def _peek_flit_from_ring_bridge_input(self, input_source: str, channel: str) -> Optional[CrossRingFlit]:
+        """
+        查看ring_bridge输入中的flit（不取出）
+        
+        Args:
+            input_source: 输入源名称
+            channel: 通道类型
+            
+        Returns:
+            可用的flit，如果没有则返回None
+        """
+        if input_source.startswith("IQ_"):
+            direction = input_source[3:]
+            iq_fifo = self.inject_direction_fifos[channel][direction]
+            if iq_fifo.valid_signal():
+                return iq_fifo.peek_output()  # 查看但不取出
+                
+        elif input_source.startswith("RB_"):
+            direction = input_source[3:]
+            rb_fifo = self.ring_bridge_input_fifos[channel][direction]
+            if rb_fifo.valid_signal() or len(rb_fifo.internal_queue) > 0:
+                if rb_fifo.valid_signal():
+                    return rb_fifo.peek_output()  # 查看但不取出
+                elif len(rb_fifo.internal_queue) > 0:
+                    return rb_fifo.internal_queue[0]  # 查看队首元素
+
+        return None
+
+    def _execute_ring_bridge_arbitration(self, cycle: int) -> None:
+        """
+        执行ring_bridge仲裁决策（两阶段执行的update阶段）
+        
+        Args:
+            cycle: 当前周期
+        """
+        for channel in ["req", "rsp", "data"]:
+            decision = self.ring_bridge_arbitration_decisions[channel]
+            if decision["flit"] is not None:
+                # 执行之前计算的仲裁决策
+                self._execute_channel_ring_bridge_transfer(channel, decision, cycle)
+
+    def _execute_channel_ring_bridge_transfer(self, channel: str, decision: dict, cycle: int) -> None:
+        """
+        执行单个通道的ring_bridge传输
+        
+        Args:
+            channel: 通道类型
+            decision: 仲裁决策
+            cycle: 当前周期
+        """
+        input_source = decision["input_source"]
+        output_direction = decision["output_direction"]
+        
+        # 从输入源获取flit（实际取出）
+        flit = self._get_flit_from_ring_bridge_input(input_source, channel)
+        if flit is not None:
+            # 分配到输出FIFO
+            if self._assign_flit_to_ring_bridge_output(flit, output_direction, channel, cycle):
+                # 成功传输，更新仲裁状态
+                arb_state = self.ring_bridge_arbitration_state[channel]
+                arb_state["last_served_input"][input_source] = cycle
+                
+                self.logger.debug(f"节点{self.node_id}: ring_bridge成功传输flit {flit.packet_id} 从{input_source}到{output_direction}")
+            else:
+                self.logger.debug(f"节点{self.node_id}: ring_bridge分配到输出{output_direction}失败")
+
     def _update_eject_arbitration_ips(self) -> None:
         """更新eject仲裁状态中的IP列表"""
         for channel in ["req", "rsp", "data"]:
@@ -803,8 +933,11 @@ class CrossRingNode:
         else:
             self.vertical_crosspoint.step(cycle, self.inject_direction_fifos, self.eject_input_fifos)
 
-        # 处理ring_bridge的轮询仲裁
-        self.process_ring_bridge_arbitration(cycle)
+        # 首先更新所有FIFO的时序逻辑阶段（确保valid_signal正确）
+        self._step_update_phase()
+
+        # 执行ring_bridge仲裁决策（基于compute阶段的计算结果）
+        self._execute_ring_bridge_arbitration(cycle)
 
         # 处理eject队列的轮询仲裁
         self.process_eject_arbitration(cycle)
@@ -833,6 +966,9 @@ class CrossRingNode:
                 self.ring_bridge_input_fifos[channel][direction].step_compute_phase(cycle)
             for direction in ["EQ", "TR", "TL", "TU", "TD"]:
                 self.ring_bridge_output_fifos[channel][direction].step_compute_phase(cycle)
+
+        # 计算ring_bridge仲裁决策（但不执行传输）
+        self._compute_ring_bridge_arbitration(cycle)
 
     def _step_update_phase(self) -> None:
         """更新所有FIFO的时序逻辑阶段"""
@@ -1078,9 +1214,9 @@ class CrossRingNode:
         if hasattr(flit, "dest_node_id") and flit.dest_node_id == self.node_id:
             return True
         if hasattr(flit, "dest_coordinates"):
-            dest_x, dest_y = flit.dest_coordinates
-            curr_x, curr_y = self.coordinates
-            if dest_x == curr_x and dest_y == curr_y:
+            dest_row, dest_col = flit.dest_coordinates
+            curr_row, curr_col = self.coordinates
+            if dest_row == curr_row and dest_col == curr_col:
                 return True
         return False
 
@@ -1095,21 +1231,22 @@ class CrossRingNode:
         Returns:
             路由方向（"TR", "TL", "TU", "TD", "EQ"）
         """
-        # 获取目标坐标
+        # 获取目标坐标 - 注意：坐标格式为(row, col)
         if hasattr(flit, "dest_coordinates"):
-            dest_x, dest_y = flit.dest_coordinates
+            dest_row, dest_col = flit.dest_coordinates
         elif hasattr(flit, "dest_xid") and hasattr(flit, "dest_yid"):
-            dest_x, dest_y = flit.dest_xid, flit.dest_yid
+            # dest_xid是列，dest_yid是行
+            dest_col, dest_row = flit.dest_xid, flit.dest_yid
         else:
             # 如果没有坐标信息，尝试从destination计算
             num_col = getattr(self.config, "NUM_COL", 3)
-            dest_x = flit.destination % num_col
-            dest_y = flit.destination // num_col
+            dest_col = flit.destination % num_col
+            dest_row = flit.destination // num_col
 
-        curr_x, curr_y = self.coordinates
+        curr_row, curr_col = self.coordinates
 
         # 如果已经到达目标位置
-        if dest_x == curr_x and dest_y == curr_y:
+        if dest_row == curr_row and dest_col == curr_col:
             return "EQ"  # 本地
 
         # 获取路由策略，默认为XY
@@ -1117,24 +1254,24 @@ class CrossRingNode:
         if hasattr(routing_strategy, "value"):
             routing_strategy = routing_strategy.value
 
-        # 计算移动需求
-        need_horizontal = dest_x != curr_x
-        need_vertical = dest_y != curr_y
+        # 计算移动需求 - 修正：水平移动是列的变化，垂直移动是行的变化
+        need_horizontal = dest_col != curr_col  # 列不同需要水平移动
+        need_vertical = dest_row != curr_row    # 行不同需要垂直移动
 
         # 应用路由策略
         if routing_strategy == "XY":
             # XY路由：先水平后垂直
             if need_horizontal:
-                return "TR" if dest_x > curr_x else "TL"
+                return "TR" if dest_col > curr_col else "TL"
             elif need_vertical:
-                return "TD" if dest_y > curr_y else "TU"
+                return "TD" if dest_row > curr_row else "TU"
 
         elif routing_strategy == "YX":
             # YX路由：先垂直后水平
             if need_vertical:
-                return "TD" if dest_y > curr_y else "TU"
+                return "TD" if dest_row > curr_row else "TU"
             elif need_horizontal:
-                return "TR" if dest_x > curr_x else "TL"
+                return "TR" if dest_col > curr_col else "TL"
 
         elif routing_strategy == "ADAPTIVE":
             # 自适应路由：根据拥塞状态选择路径
@@ -1146,24 +1283,24 @@ class CrossRingNode:
                 # 根据拥塞情况选择优先维度
                 if horizontal_congested and not vertical_congested:
                     # 水平拥塞，优先垂直
-                    return "TD" if dest_y > curr_y else "TU"
+                    return "TD" if dest_row > curr_row else "TU"
                 elif vertical_congested and not horizontal_congested:
                     # 垂直拥塞，优先水平
-                    return "TR" if dest_x > curr_x else "TL"
+                    return "TR" if dest_col > curr_col else "TL"
                 else:
                     # 都不拥塞或都拥塞，默认XY路由
-                    return "TR" if dest_x > curr_x else "TL"
+                    return "TR" if dest_col > curr_col else "TL"
             elif need_horizontal:
-                return "TR" if dest_x > curr_x else "TL"
+                return "TR" if dest_col > curr_col else "TL"
             elif need_vertical:
-                return "TD" if dest_y > curr_y else "TU"
+                return "TD" if dest_row > curr_row else "TU"
         else:
             # 未知策略，默认使用XY
             self.logger.warning(f"未知路由策略 {routing_strategy}，使用XY路由")
             if need_horizontal:
-                return "TR" if dest_x > curr_x else "TL"
+                return "TR" if dest_col > curr_col else "TL"
             elif need_vertical:
-                return "TD" if dest_y > curr_y else "TU"
+                return "TD" if dest_row > curr_row else "TU"
 
         return "EQ"  # 本地
 

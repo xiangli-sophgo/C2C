@@ -15,6 +15,7 @@ from .link import PriorityLevel
 from .flit import CrossRingFlit
 from .link import CrossRingSlot, RingSlice
 from .config import CrossRingConfig
+from ..base.link import BasicDirection
 
 # from .node import CrossRingNode
 
@@ -936,7 +937,7 @@ class CrossRingCrossPoint:
         # 创建新的slot或使用预约的slot
         if current_slot is None:
             # 创建新slot
-            new_slot = CrossRingSlot(slot_id=len(self.injection_queues[channel]), cycle=0, channel=channel)
+            new_slot = CrossRingSlot(slot_id=len(self.injection_queues[channel]), cycle=0, direction=BasicDirection.LOCAL, channel=channel)
             new_slot.assign_flit(flit)
             departure_slice.receive_slot(new_slot, channel)
         else:

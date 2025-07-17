@@ -825,7 +825,8 @@ class BaseNoCModel(ABC):
         # 空集合表示跟踪所有
         if not self.trace_packets:
             return True
-        return packet_id in self.trace_packets
+        # 支持整数和字符串形式的packet_id比较
+        return packet_id in self.trace_packets or str(packet_id) in self.trace_packets
 
     def print_debug_report(self) -> None:
         """打印调试报告"""

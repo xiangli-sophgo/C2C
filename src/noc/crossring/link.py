@@ -67,13 +67,20 @@ class CrossRingSlot(LinkSlot):
 
     def __post_init__(self):
         """初始化后处理"""
-        # 调用父类的post_init
-        super().__post_init__()
+        # 不调用父类的post_init，避免设置is_occupied字段冲突
+        # 在CrossRing中，valid字段控制占用状态
+        if self.flit is not None:
+            self.valid = True
 
     @property
     def is_occupied(self) -> bool:
         """检查slot是否被占用 - CrossRing使用valid字段"""
         return self.valid and self.flit is not None
+    
+    @is_occupied.setter
+    def is_occupied(self, value: bool) -> None:
+        """设置占用状态 - 为了与父类兼容"""
+        self.valid = value
 
     @property
     def is_available(self) -> bool:
@@ -541,6 +548,7 @@ class CrossRingLink(BaseLink):
             "slots_created": {"req": 0, "rsp": 0, "data": 0},
             "slots_destroyed": {"req": 0, "rsp": 0, "data": 0},
             "utilization": {"req": 0.0, "rsp": 0.0, "data": 0.0},
+            "total_cycles": 0,
         })
 
         self.logger.info(f"CrossRingLink {link_id} 初始化完成: {source_node} -> {dest_node}, 方向: {direction.value}")
@@ -564,7 +572,7 @@ class CrossRingLink(BaseLink):
             self.slot_pools[channel] = []
             # 预创建一些slot，实际使用时动态分配
             for i in range(self.num_slices * 2):  # 每个slice预分配2个slot
-                slot = CrossRingSlot(slot_id=i, cycle=0, channel=channel)
+                slot = CrossRingSlot(slot_id=i, cycle=0, direction=BasicDirection.LOCAL, channel=channel)
                 self.slot_pools[channel].append(slot)
 
         self.logger.debug(f"初始化Slot池，每通道 {self.num_slices * 2} 个slot")

@@ -661,6 +661,44 @@ class CrossRingConfig(BaseNoCConfig):
         self._generate_derived_config()
 
     @classmethod
+    def create_preset_config(cls, preset_name: str, **kwargs) -> "CrossRingConfig":
+        """
+        创建预设配置。
+
+        Args:
+            preset_name: 预设配置名称 ('2260E', '2262', 'default')
+            **kwargs: 额外配置参数
+
+        Returns:
+            CrossRing配置实例
+        """
+        if preset_name == "2260E":
+            config = cls(num_row=3, num_col=3, config_name=preset_name)
+            config.set_preset_configuration(preset_name)
+        elif preset_name == "2262":
+            config = cls(num_row=5, num_col=4, config_name=preset_name)
+            config.set_preset_configuration(preset_name)
+        elif preset_name == "default":
+            config = cls(num_row=4, num_col=4, config_name=preset_name)
+        else:
+            raise ValueError(f"未知的预设配置: {preset_name}")
+
+        # 应用额外参数
+        for key, value in kwargs.items():
+            config.set_parameter(key, value)
+
+        return config
+
+    def get_supported_presets(self) -> List[str]:
+        """
+        获取支持的预设配置列表。
+
+        Returns:
+            预设配置名称列表
+        """
+        return ["default", "2260E", "2262"]
+
+    @classmethod
     def create_custom_config(cls, num_row: int = 4, num_col: int = 4, config_name: str = "custom", **kwargs) -> "CrossRingConfig":
         """
         创建自定义配置。

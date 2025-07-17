@@ -905,6 +905,8 @@ class CrossRingIPInterface(BaseIPInterface):
         if not packet_id:
             packet_id = f"{req_type}_{source}_{destination}_{self.current_cycle}"
 
+        print(f"🔍 inject_request调用: packet_id={packet_id}, source={source}, dest={destination}, req_type={req_type}")
+
         try:
             # 创建CrossRing Flit
             flit = create_crossring_flit(source=source, destination=destination, packet_id=packet_id, req_type=req_type, burst_length=burst_length, num_col=self.config.NUM_COL)
@@ -963,10 +965,13 @@ class CrossRingIPInterface(BaseIPInterface):
             }
 
             self.logger.debug(f"请求已添加到pending_by_channel: {packet_id} ({req_type}: {source}->{destination})")
+            print(f"✅ inject_request成功: packet_id={packet_id}")
             return True
 
         except Exception as e:
             self.logger.error(f"添加请求到pending_by_channel失败: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def step(self, current_cycle: int) -> None:
