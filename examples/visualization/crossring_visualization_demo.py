@@ -299,9 +299,10 @@ def demo_integration_with_crossring():
         model = CrossRingModel(config, traffic_file_path=str(traffic_file))
         print("✅ CrossRing模型创建成功")
         
-        # 注入流量
-        injected = model.inject_from_traffic_file(traffic_file_path=str(traffic_file), cycle_accurate=True)
-        print(f"✅ 成功注入 {injected} 个请求")
+        # 设置TrafficScheduler
+        traffic_filename = traffic_file.name
+        model.setup_traffic_scheduler([[traffic_filename]], str(traffic_file.parent))
+        print(f"✅ TrafficScheduler已设置并准备注入请求")
         
         # 创建可视化器
         visualizer = RealtimeVisualizer(config, model, update_interval=0.2)

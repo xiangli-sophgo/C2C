@@ -10,7 +10,7 @@ import json
 from dataclasses import dataclass, field
 from enum import Enum
 
-from ..base.config import BaseNoCConfig, ConfigRegistry
+from ..base.config import BaseNoCConfig
 from src.noc.utils.types import TopologyType, ValidationResult
 
 

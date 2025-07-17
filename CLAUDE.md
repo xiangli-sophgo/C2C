@@ -120,55 +120,81 @@ The demo validates:
 - The builder pattern ensures consistent topology construction
 - Address translation supports multiple address formats for different communication contexts
 
-## CrossRing NoC Architecture
+## NoC模块架构 (src/noc/)
 
-### Overview
-CrossRing is a Network-on-Chip (NoC) architecture based on Cross Ring Spec v2.0, featuring:
-- Ring-based topology with horizontal and vertical rings
-- Non-wrap-around boundary handling (edge nodes connect to themselves)
-- Advanced I-Tag/E-Tag anti-starvation mechanisms
-- XY dimension-order routing
-- Slot-based transmission with pipeline optimization
+NoC模块采用分层架构设计，基于继承和组合模式实现功能复用和扩展性：
 
-### Key Components
+### 基础抽象层 (base/)
+提供所有NoC拓扑的通用功能和抽象接口：
 
-#### 1. CrossRingModel (`src/noc/crossring/model.py`)
-- Main model class for CrossRing simulation
-- Manages network topology setup and simulation loops
-- Coordinates IP interfaces, nodes, and links
-- Handles traffic injection and collection
+- **model.py**: NoC模型基类
+  - 功能：仿真循环控制、IP接口管理、统计收集、TrafficScheduler集成
+  - 扩展性：支持新的NoC拓扑类型继承
+  
+- **topology.py**: 拓扑基类  
+  - 功能：路由算法基础实现（XY/YX路由）、邻接矩阵管理、路径计算
+  - 扩展性：支持新的路由策略和拓扑类型
+  
+- **node.py**: 节点基类
+  - 功能：节点接口定义、基本状态管理
+  - 扩展性：支持不同类型节点实现（router, switch, endpoint）
+  
+- **ip_interface.py**: IP接口基类
+  - 功能：FIFO管理、流控机制、统计收集
+  - 扩展性：支持不同协议的IP接口
+  
+- **flit.py**: Flit基类和对象池
+  - 功能：数据包抽象、内存管理
+  - 扩展性：支持新的包格式和协议
+  
+- **link.py**: 链路基类
+  - 功能：点对点连接抽象
+  - 扩展性：支持不同带宽和延迟特性
+  
+- **config.py**: 配置管理基类
+  - 功能：参数验证、配置加载
+  - 扩展性：支持新拓扑的配置参数
 
-#### 2. CrossRingNode (`src/noc/crossring/node.py`)
-- Contains two CrossPoints (horizontal and vertical)
-- Manages IP injection/ejection queues
-- Handles local arbitration and flow control
-- Implements ring buffer and bridge logic
+### 拓扑实现层
+基于继承机制实现具体拓扑：
 
-#### 3. CrossRingCrossPoint (`src/noc/crossring/node.py`)
-- **Critical Architecture**: Each CrossPoint manages 4 slices (2 per direction)
-  - Arrival slice: For ejection decisions (from upstream ring)
-  - Departure slice: For injection decisions (to downstream ring)
-- Horizontal CP: Manages TL/TR directions
-- Vertical CP: Manages TU/TD directions
-- Integrates with Tag management for anti-starvation
+#### CrossRing实现 (crossring/)
+- **model.py**: 继承base/model.py，实现CrossRing特有的仿真控制
+- **topology.py**: 继承base/topology.py，实现CrossRing路由算法和环形拓扑结构  
+- **node.py**: 继承base/node.py，实现CrossPoint、环形缓冲区、维度转换
+- **ip_interface.py**: 继承base/ip_interface.py，实现CrossRing协议适配、Tag机制
+- **flit.py**: 继承base/flit.py，实现CrossRing包格式和Tag字段
+- **link.py**: 继承base/link.py，实现环形slice链接、pipeline流控
+- **cross_point.py**: CrossRing核心组件，实现环形路由决策、仲裁机制
+- **config.py**: 继承base/config.py，定义CrossRing特有参数
 
-#### 4. CrossRingLink (`src/noc/crossring/crossring_link.py`)
-- Manages RingSlice chains forming the ring links
-- Handles slot transmission between slices
-- Implements pipeline flow control
+#### Mesh实现 (mesh/)
+- 类似继承结构，实现Mesh拓扑特有功能
 
-#### 5. CrossRingSlot (`src/noc/crossring/crossring_link.py`)
-- Basic transmission unit containing:
-  - Valid bit
-  - I-Tag (injection reservation)
-  - E-Tag (ejection priority)
-  - Flit data
+### 功能模块层
+独立的功能模块，通过组合方式提供服务：
 
-#### 6. Tag Mechanism (`src/noc/crossring/tag_mechanism.py`)
-- **I-Tag**: Injection reservation to prevent starvation
-- **E-Tag**: Priority-based ejection (T0/T1/T2 levels)
-- **FifoEntryManager**: Manages tiered entry allocation
-- **T0_Etag_Order_FIFO**: Global round-robin queue for T0 slots
+- **analysis/**: 性能分析工具
+  - 功能：延迟分析、吞吐量统计、拥塞检测
+  - 扩展性：支持新的分析指标和报告格式
+  
+- **utils/**: 通用工具
+  - 功能：Traffic调度、工厂模式、类型定义、邻接矩阵生成
+  - 扩展性：支持新的调度策略和工具函数
+  
+- **debug/**: 调试工具
+  - 功能：请求追踪、状态监控、生命周期管理
+  - 扩展性：支持新的调试模式和日志格式
+  
+- **visualization/**: 可视化工具
+  - 功能：实时状态显示、性能图表、拓扑渲染
+  - 扩展性：支持新的可视化方式和交互模式
+
+### 新拓扑添加指南
+1. 继承base/模块创建新拓扑实现
+2. 实现特有的路由算法和节点行为  
+3. 使用现有的analysis、utils、debug、visualization模块
+4. 在utils/factory.py中注册新拓扑类型
 
 ### Data Flow Paths
 

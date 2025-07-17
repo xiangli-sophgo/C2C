@@ -55,14 +55,17 @@ def run_crossring_simulation(rows=2, cols=3, max_cycles=10000):
         config = create_config(rows, cols)
         model = CrossRingModel(config, traffic_file_path=str(traffic_file))
 
-        # 2. 注入流量并运行仿真
-        injected = model.inject_from_traffic_file(traffic_file_path=str(traffic_file), cycle_accurate=True)  # 使用周期精确模式
-
-        if injected == 0:
-            print("❌ 没有成功注入任何请求")
+        # 2. 设置TrafficScheduler并注入流量
+        traffic_filename = traffic_file.name
+        model.setup_traffic_scheduler([[traffic_filename]], str(traffic_file.parent))
+        
+        # 检查是否有traffic请求
+        traffic_status = model.get_traffic_status()
+        if not traffic_status.get("has_pending", False):
+            print("❌ 没有找到待处理的请求")
             return False
 
-        print(f"✅ 成功注入 {injected} 个请求")
+        print(f"✅ TrafficScheduler已设置并准备注入请求")
 
         # 3. 逐个跟踪请求运行仿真
         # 先运行一小段时间让部分请求注入

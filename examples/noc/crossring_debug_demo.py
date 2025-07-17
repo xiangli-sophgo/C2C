@@ -39,15 +39,17 @@ def track_request_smart():
     with contextlib.redirect_stdout(io.StringIO()):
         model = CrossRingModel(config, traffic_file_path=str(traffic_file))
 
-    # 2. 注入流量并运行仿真
-    injected_count = model.inject_from_traffic_file(traffic_file_path=str(traffic_file), cycle_accurate=True)  # 使用周期精确模式
-
+    # 2. 设置TrafficScheduler并注入流量
+    traffic_filename = traffic_file.name
+    model.setup_traffic_scheduler([[traffic_filename]], str(traffic_file.parent))
+    
     # 检查注入结果
-    if not injected_count:
+    traffic_status = model.get_traffic_status()
+    if not traffic_status.get("has_pending", False):
         print("❌ 流量注入失败")
         return False
 
-    print(f"✅ 成功加载 {injected_count} 个请求到待处理队列")
+    print(f"✅ 成功设置TrafficScheduler，准备处理请求")
 
     # 在cycle-accurate模式下，packet_id从pending_file_requests获取
     # 运行几个周期让请求被实际注入

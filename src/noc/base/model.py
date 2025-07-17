@@ -17,6 +17,11 @@ from .ip_interface import BaseIPInterface
 from src.noc.utils.types import NodeId
 from src.noc.debug import RequestTracker, RequestState, FlitType
 
+# 为了避免循环导入，使用TYPE_CHECKING
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .topology import BaseNoCTopology
+
 
 class BaseNoCModel(ABC):
     """
@@ -43,9 +48,15 @@ class BaseNoCModel(ABC):
         self.cycle = 0
         self.traffic_file_path = traffic_file_path
 
+        # 拓扑实例（通过组合使用）
+        self.topology = None
+
         # IP接口管理
         self.ip_interfaces: Dict[str, BaseIPInterface] = {}
         self._ip_registry: Dict[str, BaseIPInterface] = {}
+
+        # Traffic调度器（可选）
+        self.traffic_scheduler = None
 
         # Flit对象池
         self.flit_pools: Dict[Type[BaseFlit], FlitPool] = {}
@@ -84,14 +95,14 @@ class BaseNoCModel(ABC):
             "detailed_stats": False,
             "sleep_time": 0.0,  # debug模式下每个周期的休眠时间（秒）
         }
-        
+
         # 调试模式标志
         self.debug_enabled = False
         self.trace_packets = set()
-        
+
         # 请求追踪器 - 包含完整的flit追踪功能
-        self.request_tracker = RequestTracker(network_frequency=getattr(config, 'NETWORK_FREQUENCY', 1))
-        
+        self.request_tracker = RequestTracker(network_frequency=getattr(config, "NETWORK_FREQUENCY", 1))
+
         # packet_id生成器 - 使用简单数字确保唯一性
         self.next_packet_id = 1
         self.packet_id_map = {}  # {packet_id: {source, destination, req_type, burst_length}}
@@ -106,19 +117,43 @@ class BaseNoCModel(ABC):
         pass
 
     @abstractmethod
-    def _step_topology_network(self) -> None:
-        """拓扑网络步进（拓扑特定）"""
+    def _step_topology_network_compute(self) -> None:
+        """拓扑网络计算阶段（拓扑特定）"""
         pass
 
     @abstractmethod
-    def _get_topology_info(self) -> Dict[str, Any]:
-        """获取拓扑信息（拓扑特定）"""
+    def _step_topology_network_update(self) -> None:
+        """拓扑网络更新阶段（拓扑特定）"""
         pass
 
     @abstractmethod
-    def _calculate_path(self, source: NodeId, destination: NodeId) -> List[NodeId]:
-        """计算路径（拓扑特定）"""
+    def _create_topology_instance(self, config) -> 'BaseNoCTopology':
+        """创建拓扑实例（子类实现具体拓扑类型）"""
         pass
+
+    def get_topology_info(self) -> Dict[str, Any]:
+        """获取拓扑信息（通过拓扑实例）"""
+        if hasattr(self, 'topology') and self.topology:
+            return self.topology.get_topology_summary()
+        return {"type": "unknown", "nodes": 0, "status": "topology_not_initialized"}
+
+    def calculate_path(self, source: NodeId, destination: NodeId) -> List[NodeId]:
+        """计算路径（通过拓扑实例）"""
+        if hasattr(self, 'topology') and self.topology:
+            path_result = self.topology.calculate_route(source, destination)
+            return path_result.node_path if hasattr(path_result, 'node_path') else []
+        raise NotImplementedError("拓扑实例未初始化，无法计算路径")
+
+    def _get_all_fifos_for_statistics(self) -> Dict[str, Any]:
+        """获取所有FIFO用于统计收集（子类可重写）"""
+        # 默认返回空字典，子类可以重写此方法
+        return {}
+
+    def _register_all_fifos_for_statistics(self) -> None:
+        """注册所有FIFO到统计收集器（子类可重写）"""
+        # 基类提供默认实现，子类可以重写此方法
+        fifos = self._get_all_fifos_for_statistics()
+        self.logger.info(f"注册了 {len(fifos)} 个FIFO到统计收集器")
 
     # ========== 通用方法 ==========
 
@@ -126,6 +161,11 @@ class BaseNoCModel(ABC):
         """初始化模型"""
         try:
             self.logger.info("开始初始化NoC模型...")
+
+            # 创建拓扑实例
+            self.logger.info("创建拓扑实例...")
+            self.topology = self._create_topology_instance(self.config)
+            self.logger.info(f"拓扑实例创建成功: {type(self.topology).__name__}")
 
             # 设置拓扑网络
             self.logger.info("调用_setup_topology_network...")
@@ -146,6 +186,7 @@ class BaseNoCModel(ABC):
         except Exception as e:
             self.logger.error(f"NoC模型初始化失败: {e}")
             import traceback
+
             traceback.print_exc()
             raise
 
@@ -156,43 +197,40 @@ class BaseNoCModel(ABC):
             self._setup_optimized_ip_interfaces()
         else:
             self._setup_all_ip_interfaces()
-            
+
     def _setup_optimized_ip_interfaces(self) -> None:
         """基于traffic文件分析，只创建需要的IP接口"""
         from src.noc.utils.traffic_scheduler import TrafficFileReader
-        
+
         self.logger.info(f"开始优化IP接口创建，分析traffic文件: {self.traffic_file_path}")
-        
+
         try:
             # 分析traffic文件获取需要的IP接口
             traffic_reader = TrafficFileReader(
-                filename=self.traffic_file_path.split('/')[-1],
-                traffic_file_path='/'.join(self.traffic_file_path.split('/')[:-1]),
-                config=self.config,
-                time_offset=0,
-                traffic_id="analysis"
+                filename=self.traffic_file_path.split("/")[-1], traffic_file_path="/".join(self.traffic_file_path.split("/")[:-1]), config=self.config, time_offset=0, traffic_id="analysis"
             )
-            
+
             ip_info = traffic_reader.get_required_ip_interfaces()
-            required_ips = ip_info['required_ips']
-            
+            required_ips = ip_info["required_ips"]
+
             self.logger.info(f"Traffic文件分析完成: 需要 {len(required_ips)} 个IP接口，涉及 {len(ip_info['used_nodes'])} 个节点")
             self.logger.info(f"Required IPs: {required_ips}")
-            
+
             # 调用子类实现的创建方法
             self._create_specific_ip_interfaces(required_ips)
-                
+
         except Exception as e:
             self.logger.warning(f"Traffic文件分析失败: {e}，回退到全量创建模式")
             import traceback
+
             traceback.print_exc()
             self._setup_all_ip_interfaces()
-            
+
     def _setup_all_ip_interfaces(self) -> None:
         """创建所有IP接口（传统模式）- 由子类实现"""
         # 默认实现为空，由子类重写
         self.logger.debug("使用默认的IP接口创建（需要子类实现）")
-        
+
     def _create_specific_ip_interfaces(self, required_ips: List[Tuple[int, str]]) -> None:
         """创建特定的IP接口 - 由子类实现"""
         # 默认实现为空，由子类重写
@@ -211,14 +249,14 @@ class BaseNoCModel(ABC):
             ip_interface: IP接口实例
         """
         # 验证IP接口的属性
-        if not hasattr(ip_interface, 'ip_type') or not ip_interface.ip_type:
+        if not hasattr(ip_interface, "ip_type") or not ip_interface.ip_type:
             self.logger.warning(f"IP接口缺少ip_type属性: {ip_interface}")
             return
-            
-        if not hasattr(ip_interface, 'node_id') or ip_interface.node_id is None:
+
+        if not hasattr(ip_interface, "node_id") or ip_interface.node_id is None:
             self.logger.warning(f"IP接口缺少node_id属性: {ip_interface}")
             return
-            
+
         key = f"{ip_interface.ip_type}_{ip_interface.node_id}"
         self._ip_registry[key] = ip_interface
         self.logger.debug(f"注册IP接口: {key}")
@@ -227,11 +265,16 @@ class BaseNoCModel(ABC):
         """执行一个仿真周期（使用两阶段执行模型）"""
         self.cycle += 1
 
-        # 阶段0：如果有待注入的文件请求，检查是否需要注入
-        if hasattr(self, 'pending_file_requests') and self.pending_file_requests:
-            injected = self._inject_pending_file_requests()
-            if injected > 0:
-                print(f"🎯 周期{self.cycle}: 从文件注入了{injected}个请求")
+        # 阶段0：时钟同步阶段 - 确保所有组件使用统一的时钟值
+        self._sync_global_clock()
+
+        # 阶段0.1：TrafficScheduler处理请求注入（如果有配置）
+        if hasattr(self, "traffic_scheduler") and self.traffic_scheduler:
+            ready_requests = self.traffic_scheduler.get_ready_requests(self.cycle)
+            if ready_requests:
+                injected = self._inject_traffic_requests(ready_requests)
+                if injected > 0:
+                    print(f"🎯 周期{self.cycle}: 从traffic文件注入了{injected}个请求")
 
         # 阶段1：组合逻辑阶段 - 所有组件计算传输决策
         self._step_compute_phase()
@@ -260,7 +303,6 @@ class BaseNoCModel(ABC):
         for ip_interface in self.ip_interfaces.values():
             ip_interface.step_compute_phase(self.cycle)
 
-
         # 2. 拓扑网络组件计算阶段
         self._step_topology_network_compute()
 
@@ -268,24 +310,17 @@ class BaseNoCModel(ABC):
         """阶段2：时序逻辑阶段 - 所有组件执行传输和状态更新"""
         # 1. 所有IP接口更新阶段
         for ip_interface in self.ip_interfaces.values():
-            if hasattr(ip_interface, "step_update_phase"):
-                ip_interface.step_update_phase(self.cycle)
-            else:
-                # 兼容性：如果没有两阶段方法，调用原始step
-                ip_interface.step(self.cycle)
+            ip_interface.step_update_phase(self.cycle)
 
         # 2. 拓扑网络组件更新阶段
         self._step_topology_network_update()
 
-    def _step_topology_network_compute(self) -> None:
-        """拓扑网络计算阶段（可被子类重写）"""
-        # 默认实现：如果子类没有实现两阶段，则不做操作
-        pass
-
-    def _step_topology_network_update(self) -> None:
-        """拓扑网络更新阶段（可被子类重写）"""
-        # 默认实现：调用原有的单阶段方法
-        self._step_topology_network()
+    def _sync_global_clock(self) -> None:
+        """时钟同步阶段：确保所有组件使用统一的时钟值"""
+        # 同步所有IP接口的时钟
+        for ip_interface in self.ip_interfaces.values():
+            if hasattr(ip_interface, "current_cycle"):
+                ip_interface.current_cycle = self.cycle
 
     def run_simulation(self, max_cycles: int = 10000, warmup_cycles: int = 1000, stats_start_cycle: int = 1000, convergence_check: bool = True) -> Dict[str, Any]:
         """
@@ -512,8 +547,9 @@ class BaseNoCModel(ABC):
             total += len(ip.active_requests)
         return total
 
-    def inject_request(self, source: NodeId, destination: NodeId, req_type: str, count: int = 1, 
-                      burst_length: int = 4, ip_type: str = None, source_type: str = None, destination_type: str = None, **kwargs) -> List[str]:
+    def inject_request(
+        self, source: NodeId, destination: NodeId, req_type: str, count: int = 1, burst_length: int = 4, ip_type: str = None, source_type: str = None, destination_type: str = None, **kwargs
+    ) -> List[str]:
         """
         注入请求
 
@@ -547,19 +583,21 @@ class BaseNoCModel(ABC):
             # 生成简单的数字packet_id
             packet_id = self.next_packet_id
             self.next_packet_id += 1
-            
+
             # 保存packet_id映射信息
             self.packet_id_map[packet_id] = {
-                'source': source,
-                'destination': destination,
-                'req_type': req_type,
-                'burst_length': burst_length,
-                'cycle': self.cycle,
-                'source_type': source_type,
-                'destination_type': destination_type
+                "source": source,
+                "destination": destination,
+                "req_type": req_type,
+                "burst_length": burst_length,
+                "cycle": self.cycle,
+                "source_type": source_type,
+                "destination_type": destination_type,
             }
-            
-            success = ip_interface.inject_request(source=source, destination=destination, req_type=req_type, burst_length=burst_length, packet_id=packet_id, source_type=source_type, destination_type=destination_type, **kwargs)
+
+            success = ip_interface.inject_request(
+                source=source, destination=destination, req_type=req_type, burst_length=burst_length, packet_id=packet_id, source_type=source_type, destination_type=destination_type, **kwargs
+            )
 
             if success:
                 packet_ids.append(packet_id)
@@ -567,51 +605,127 @@ class BaseNoCModel(ABC):
                 self.logger.warning(f"测试请求注入失败: {packet_id}")
 
         return packet_ids
-    
+
     def get_packet_info(self, packet_id) -> Optional[Dict[str, Any]]:
         """获取packet_id的详细信息"""
         return self.packet_id_map.get(packet_id)
-        
+
     def print_packet_id_map(self) -> None:
         """打印packet_id映射表"""
         if not self.packet_id_map:
             print("📦 尚未生成任何packet")
             return
-            
+
         print(f"\n📦 生成的Packet列表 (共{len(self.packet_id_map)}个):")
         print("=" * 60)
         for packet_id, info in self.packet_id_map.items():
-            src_type = info['source_type'] if info['source_type'] else '??'
-            dst_type = info['destination_type'] if info['destination_type'] else '??'
-            print(f"  {packet_id}: {info['source']}:{src_type} -> {info['destination']}:{dst_type} "
-                  f"({info['req_type']}, burst={info['burst_length']})")
+            src_type = info["source_type"] if info["source_type"] else "??"
+            dst_type = info["destination_type"] if info["destination_type"] else "??"
+            print(f"  {packet_id}: {info['source']}:{src_type} -> {info['destination']}:{dst_type} " f"({info['req_type']}, burst={info['burst_length']})")
         print("=" * 60)
 
-    def _find_ip_interface_for_request(self, node_id: NodeId, req_type: str, ip_type: str = None) -> Optional[BaseIPInterface]:
+    def _find_ip_interface(self, node_id: NodeId, req_type: str = None, ip_type: str = None) -> Optional[BaseIPInterface]:
         """
-        为请求查找合适的IP接口
-
+        通用IP接口查找方法 (base版本)
+        
         Args:
             node_id: 节点ID
-            req_type: 请求类型 ("read" | "write")
+            req_type: 请求类型 (可选)
             ip_type: IP类型 (可选)
-
+            
         Returns:
-            找到的IP接口，如果未找到则返回None
+            找到的IP接口，未找到返回None
         """
         if ip_type:
-            # 如果指定了IP类型，则精确匹配
+            # 精确匹配指定IP类型
             matching_ips = [ip for ip in self._ip_registry.values() 
-                           if ip.node_id == node_id and getattr(ip, 'ip_type', '').startswith(ip_type)]
-            if matching_ips:
-                return matching_ips[0]
+                          if ip.node_id == node_id and getattr(ip, "ip_type", "").startswith(ip_type)]
+            if not matching_ips:
+                self.logger.error(f"未找到指定IP类型: node_id={node_id}, ip_type={ip_type}")
+                return None
         else:
-            # 如果未指定IP类型，则返回第一个匹配节点的IP
+            # 获取该节点的所有IP接口
             matching_ips = [ip for ip in self._ip_registry.values() if ip.node_id == node_id]
-            if matching_ips:
-                return matching_ips[0]
+            if not matching_ips:
+                self.logger.error(f"节点{node_id}没有任何IP接口")
+                return None
+            
+        return matching_ips[0]
+    
+    def _find_ip_interface_for_request(self, node_id: NodeId, req_type: str, ip_type: str = None) -> Optional[BaseIPInterface]:
+        """为请求查找合适的IP接口"""
+        return self._find_ip_interface(node_id, req_type, ip_type)
 
-        return None
+    # ========== TrafficScheduler集成方法 ==========
+
+    def setup_traffic_scheduler(self, traffic_chains: List[List[str]], traffic_file_path: str = None) -> None:
+        """
+        设置TrafficScheduler
+        
+        Args:
+            traffic_chains: traffic链配置，每个链包含文件名列表
+            traffic_file_path: traffic文件路径，默认使用初始化时的路径
+        """
+        from src.noc.utils.traffic_scheduler import TrafficScheduler
+        
+        file_path = traffic_file_path or self.traffic_file_path or "traffic_data"
+        self.traffic_scheduler = TrafficScheduler(self.config, file_path)
+        self.traffic_scheduler.setup_parallel_chains(traffic_chains)
+        self.traffic_scheduler.start_initial_traffics()
+        
+        self.logger.info(f"TrafficScheduler已设置: {len(traffic_chains)}条链")
+
+    def _inject_traffic_requests(self, ready_requests: List[Tuple]) -> int:
+        """
+        注入TrafficScheduler提供的请求
+        
+        Args:
+            ready_requests: 准备就绪的请求列表
+            
+        Returns:
+            成功注入的请求数量
+        """
+        injected_count = 0
+        
+        for req in ready_requests:
+            try:
+                cycle, src, src_type, dst, dst_type, op, burst, traffic_id = req
+                op_type = "read" if op.upper() == "R" else "write"
+                
+                packet_ids = self.inject_request(
+                    source=src,
+                    destination=dst, 
+                    req_type=op_type,
+                    count=1,
+                    burst_length=burst,
+                    ip_type=src_type,
+                    source_type=src_type,
+                    destination_type=dst_type
+                )
+                
+                if packet_ids:
+                    injected_count += 1
+                    # 更新TrafficScheduler统计
+                    if self.traffic_scheduler:
+                        self.traffic_scheduler.update_traffic_stats(traffic_id, "injected_req")
+                        
+            except (ValueError, IndexError) as e:
+                self.logger.warning(f"处理traffic请求失败: {e}")
+                continue
+                
+        return injected_count
+
+    def get_traffic_status(self) -> Dict[str, Any]:
+        """获取traffic调度器状态"""
+        if not self.traffic_scheduler:
+            return {"status": "未配置TrafficScheduler"}
+            
+        return {
+            "active_traffics": self.traffic_scheduler.get_active_traffic_count(),
+            "chain_status": self.traffic_scheduler.get_chain_status(),
+            "has_pending": self.traffic_scheduler.has_pending_requests(),
+            "is_completed": self.traffic_scheduler.is_all_completed()
+        }
 
     def get_model_summary(self) -> Dict[str, Any]:
         """获取模型摘要"""
@@ -653,32 +767,65 @@ class BaseNoCModel(ABC):
 
         self.logger.info(f"启用调试跟踪: flits={trace_flits}, channels={trace_channels}")
 
-    def enable_debug(self, level: int = 1, trace_packets: List[str] = None) -> None:
+    def enable_debug(self, level: int = 1, trace_packets: List[str] = None, sleep_time: float = 0.0) -> None:
         """启用调试模式
 
         Args:
             level: 调试级别 (1-3)
             trace_packets: 要追踪的特定包ID列表
+            sleep_time: 每步的睡眠时间(秒)
         """
         self.debug_enabled = True
-        
+        self.debug_config["sleep_time"] = sleep_time
+
         if trace_packets:
-            self.trace_packets.update(trace_packets)
+            if isinstance(trace_packets, (list, tuple)):
+                self.trace_packets.update(trace_packets)
+            else:
+                self.trace_packets.add(trace_packets)
 
         # 启用请求跟踪器的调试功能
-        if hasattr(self.request_tracker, 'enable_debug'):
+        if hasattr(self.request_tracker, "enable_debug"):
             self.request_tracker.enable_debug(level, trace_packets)
 
         self.logger.info(f"调试模式已启用，级别: {level}")
         if trace_packets:
             self.logger.info(f"追踪包: {trace_packets}")
+        if sleep_time > 0:
+            self.logger.info(f"调试睡眠时间: {sleep_time}s")
 
     def track_packet(self, packet_id: str) -> None:
         """添加要追踪的包"""
         self.trace_packets.add(packet_id)
-        if hasattr(self.request_tracker, 'track_packet'):
+        if hasattr(self.request_tracker, "track_packet"):
             self.request_tracker.track_packet(packet_id)
         self.logger.debug(f"开始追踪包: {packet_id}")
+
+    def disable_debug(self) -> None:
+        """禁用调试模式"""
+        self.debug_enabled = False
+        self.trace_packets.clear()
+        self.debug_config["sleep_time"] = 0.0
+        self.logger.info("调试模式已禁用")
+
+    def add_debug_packet(self, packet_id) -> None:
+        """添加要跟踪的packet_id"""
+        self.trace_packets.add(packet_id)
+        self.logger.info(f"添加调试跟踪: {packet_id}")
+
+    def remove_debug_packet(self, packet_id) -> None:
+        """移除跟踪的packet_id"""
+        self.trace_packets.discard(packet_id)
+        self.logger.info(f"移除调试跟踪: {packet_id}")
+
+    def _should_debug_packet(self, packet_id) -> bool:
+        """检查是否应该调试此packet_id"""
+        if not self.debug_enabled:
+            return False
+        # 空集合表示跟踪所有
+        if not self.trace_packets:
+            return True
+        return packet_id in self.trace_packets
 
     def print_debug_report(self) -> None:
         """打印调试报告"""
@@ -689,9 +836,9 @@ class BaseNoCModel(ABC):
         print(f"\n=== {self.model_name} 调试报告 ===")
         print(f"当前周期: {self.cycle}")
         print(f"活跃请求: {self.get_total_active_requests()}")
-        
+
         # 打印请求追踪器报告
-        if hasattr(self.request_tracker, 'print_final_report'):
+        if hasattr(self.request_tracker, "print_final_report"):
             self.request_tracker.print_final_report()
 
         # 打印统计信息
@@ -700,9 +847,9 @@ class BaseNoCModel(ABC):
 
     def validate_traffic_correctness(self) -> Dict[str, Any]:
         """验证流量的正确性"""
-        if not hasattr(self.request_tracker, 'get_statistics'):
+        if not hasattr(self.request_tracker, "get_statistics"):
             return {"error": "请求追踪器不支持统计"}
-            
+
         stats = self.request_tracker.get_statistics()
 
         validation_result = {
@@ -718,141 +865,19 @@ class BaseNoCModel(ABC):
         }
 
         return validation_result
-        
-    # ========== 请求和Flit追踪相关方法 ==========
-    
-    def start_request_tracking(self, packet_id: str, source: int, destination: int, 
-                              op_type: str, burst_size: int) -> None:
-        """开始追踪一个新请求"""
-        self.request_tracker.start_request(packet_id, source, destination, op_type, burst_size, self.cycle)
-        
-        if self.debug_config["trace_flits"]:
-            self.logger.debug(f"开始追踪请求: {packet_id}")
-    
-    def track_request_flit(self, packet_id: str, flit, node_id: int = None) -> None:
-        """追踪请求flit对象"""
-        # 添加flit到RequestLifecycle中
-        if packet_id in self.request_tracker.active_requests:
-            self.request_tracker.active_requests[packet_id].request_flits.append(flit)
-        
-        # 追踪flit位置
-        if node_id is not None:
-            self.request_tracker.track_flit_position(packet_id, FlitType.REQUEST, node_id, self.cycle, flit)
-        
-        if self.debug_config["trace_flits"]:
-            self.logger.debug(f"追踪请求flit: {packet_id} @ 周期{self.cycle}")
-    
-    def track_response_flit(self, packet_id: str, flit, node_id: int = None) -> None:
-        """追踪响应flit对象"""
-        # 添加flit到RequestLifecycle中
-        if packet_id in self.request_tracker.active_requests:
-            self.request_tracker.active_requests[packet_id].response_flits.append(flit)
-        elif packet_id in self.request_tracker.completed_requests:
-            self.request_tracker.completed_requests[packet_id].response_flits.append(flit)
-        
-        # 追踪flit位置
-        if node_id is not None:
-            self.request_tracker.track_flit_position(packet_id, FlitType.RESPONSE, node_id, self.cycle, flit)
-        
-        if self.debug_config["trace_flits"]:
-            self.logger.debug(f"追踪响应flit: {packet_id} @ 周期{self.cycle}")
-    
-    def track_data_flit(self, packet_id: str, flit, node_id: int = None) -> None:
-        """追踪数据flit对象"""
-        # 添加flit到RequestLifecycle中
-        if packet_id in self.request_tracker.active_requests:
-            self.request_tracker.active_requests[packet_id].data_flits.append(flit)
-        elif packet_id in self.request_tracker.completed_requests:
-            self.request_tracker.completed_requests[packet_id].data_flits.append(flit)
-        
-        # 追踪flit位置
-        if node_id is not None:
-            self.request_tracker.track_flit_position(packet_id, FlitType.DATA, node_id, self.cycle, flit)
-        
-        if self.debug_config["trace_flits"]:
-            self.logger.debug(f"追踪数据flit: {packet_id} @ 周期{self.cycle}")
-    
-    def update_request_state(self, packet_id: str, new_state: RequestState, **kwargs) -> None:
-        """更新请求状态"""
-        self.request_tracker.update_request_state(packet_id, new_state, self.cycle, **kwargs)
-        
-        if self.debug_config["trace_flits"]:
-            self.logger.debug(f"更新请求状态: {packet_id} -> {new_state.value}")
-    
-    def print_packet_flit_status(self, packet_id: str) -> None:
-        """打印指定包的详细状态，包括flit信息"""
-        lifecycle = self.request_tracker.get_request_status(packet_id)
-        if not lifecycle:
-            print(f"  包 {packet_id} 未找到")
-            return
-            
-        print(f"  包 {packet_id} 的详细状态:")
-        print(f"    状态: {lifecycle.current_state.value}")
-        print(f"    源: {lifecycle.source} -> 目标: {lifecycle.destination}")
-        print(f"    操作: {lifecycle.op_type}, 突发长度: {lifecycle.burst_size}")
-        
-        # 显示flit信息（利用flit的__repr__方法）
-        if lifecycle.request_flits:
-            print(f"    请求flits ({len(lifecycle.request_flits)}):")
-            for i, flit in enumerate(lifecycle.request_flits):
-                print(f"      [{i}] {flit}")
-        
-        if lifecycle.response_flits:
-            print(f"    响应flits ({len(lifecycle.response_flits)}):")
-            for i, flit in enumerate(lifecycle.response_flits):
-                print(f"      [{i}] {flit}")
-        
-        if lifecycle.data_flits:
-            print(f"    数据flits ({len(lifecycle.data_flits)}):")
-            for i, flit in enumerate(lifecycle.data_flits):
-                print(f"      [{i}] {flit}")
-        
-        # 显示路径信息
-        if lifecycle.request_path:
-            print(f"    请求路径: {lifecycle.request_path[-3:]}...")  # 显示最后3个位置
-        if lifecycle.data_path:
-            print(f"    数据路径: {lifecycle.data_path[-3:]}...")
-    
-    def get_packet_flits(self, packet_id: str) -> Dict[str, List[Any]]:
-        """获取指定包的所有flit"""
-        lifecycle = self.request_tracker.get_request_status(packet_id)
-        if lifecycle:
-            return {
-                'request_flits': lifecycle.request_flits,
-                'response_flits': lifecycle.response_flits,
-                'data_flits': lifecycle.data_flits
-            }
-        return {'request_flits': [], 'response_flits': [], 'data_flits': []}
-    
-    def get_all_tracked_packets(self) -> List[str]:
-        """获取所有被追踪的packet_id"""
-        active_ids = list(self.request_tracker.active_requests.keys())
-        completed_ids = list(self.request_tracker.completed_requests.keys())
-        return active_ids + completed_ids
-    
-    def get_request_tracker_statistics(self) -> Dict[str, Any]:
-        """获取请求追踪器统计信息"""
-        return self.request_tracker.get_statistics()
-    
-    def print_request_tracker_report(self) -> None:
-        """打印请求追踪器完整报告"""
-        self.request_tracker.print_final_report()
-    
-    def clear_request_tracker(self) -> None:
-        """清空请求追踪器"""
-        self.request_tracker.reset()
-        self.logger.info("请求追踪器已清空")
-    
+
+    # ========== 调试相关方法 ==========
+
     def debug_func(self) -> None:
         """主调试函数，每个周期调用（可被子类重写）"""
         if not self.debug_enabled:
             return
-        
+
         # 默认实现：打印基本状态
         if self.cycle % 100 == 0:  # 每100周期打印一次
             active_requests = self.get_total_active_requests()
             self.logger.debug(f"周期 {self.cycle}: 活跃请求={active_requests}")
-        
+
         # 追踪特定包
         if self.trace_packets:
             for packet_id in self.trace_packets:
@@ -877,336 +902,7 @@ class BaseNoCModel(ABC):
 
         self.logger.info("NoC模型资源清理完成")
 
-    def inject_from_traffic_file(self, traffic_file_path: str, max_requests: int = None, 
-                                 cycle_accurate: bool = True, immediate_inject: bool = False) -> int:
-        """
-        从traffic文件注入流量
 
-        Args:
-            traffic_file_path: traffic文件路径
-            max_requests: 最大请求数（可选）
-            cycle_accurate: 是否按照文件中的cycle时间注入（默认True）
-            immediate_inject: 是否立即注入所有请求（忽略cycle时间，默认False）
-
-        Returns:
-            成功加载/注入的请求数量
-        """
-        injected_count = 0
-        failed_count = 0
-        pending_requests = []
-
-        try:
-            with open(traffic_file_path, "r") as f:
-                for line_num, line in enumerate(f, 1):
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-
-                    # 支持多种分隔符格式
-                    if ',' in line:
-                        parts = line.split(',')
-                    else:
-                        parts = line.split()
-                    
-                    if len(parts) < 7:
-                        self.logger.warning(f"第{line_num}行格式不正确，跳过: {line}")
-                        continue
-
-                    try:
-                        cycle, src, src_type, dst, dst_type, op, burst = parts[:7]
-                        
-                        # 转换类型
-                        injection_cycle = int(cycle)
-                        src = int(src)
-                        dst = int(dst)
-                        burst = int(burst)
-                        
-                        # 验证节点范围
-                        num_nodes = getattr(self.config, 'NUM_NODE', 0)
-                        if num_nodes > 0 and (src >= num_nodes or dst >= num_nodes):
-                            self.logger.warning(f"第{line_num}行节点范围无效（src={src}, dst={dst}），跳过")
-                            failed_count += 1
-                            continue
-                        
-                        # 验证操作类型
-                        if op.upper() not in ['R', 'W', 'READ', 'WRITE']:
-                            self.logger.warning(f"第{line_num}行操作类型无效（{op}），跳过")
-                            failed_count += 1
-                            continue
-                        
-                        # 标准化操作类型
-                        op_type = "read" if op.upper() in ['R', 'READ'] else "write"
-                        
-                        if immediate_inject or not cycle_accurate:
-                            # 立即注入模式
-                            packet_ids = self.inject_request(
-                                source=src, 
-                                destination=dst, 
-                                req_type=op_type, 
-                                count=1, 
-                                burst_length=burst, 
-                                ip_type=src_type
-                            )
-                            
-                            if packet_ids:
-                                injected_count += len(packet_ids)
-                                self.logger.debug(f"注入请求: {src}({src_type}) -> {dst}({dst_type}), {op_type}, burst={burst}")
-                            else:
-                                failed_count += 1
-                        else:
-                            # cycle-accurate模式：存储请求
-                            pending_requests.append({
-                                'cycle': injection_cycle,
-                                'src': src,
-                                'dst': dst,
-                                'op_type': op_type,
-                                'burst': burst,
-                                'src_type': src_type,
-                                'dst_type': dst_type,
-                                'line_num': line_num
-                            })
-                    
-                    except (ValueError, IndexError) as e:
-                        self.logger.warning(f"第{line_num}行解析失败: {e}")
-                        failed_count += 1
-                        continue
-
-                    # 检查是否达到最大请求数
-                    if max_requests and (injected_count + len(pending_requests)) >= max_requests:
-                        self.logger.info(f"达到最大请求数限制: {max_requests}")
-                        break
-
-        except FileNotFoundError:
-            self.logger.error(f"Traffic文件不存在: {traffic_file_path}")
-            return 0
-        except Exception as e:
-            self.logger.error(f"读取traffic文件失败: {e}")
-            return 0
-
-        # 如果是cycle_accurate模式，存储pending_requests
-        if cycle_accurate and not immediate_inject:
-            self.pending_file_requests = sorted(pending_requests, key=lambda x: x['cycle'])
-            self.logger.info(f"加载了 {len(self.pending_file_requests)} 个待注入请求")
-            return len(self.pending_file_requests)
-        else:
-            self.logger.info(f"从文件注入 {injected_count} 个请求，失败 {failed_count} 个")
-            return injected_count
-
-    def _inject_pending_file_requests(self) -> int:
-        """
-        注入当前周期应该注入的文件请求（用于cycle_accurate模式）
-        
-        Returns:
-            本周期注入的请求数量
-        """
-        if not hasattr(self, 'pending_file_requests') or not self.pending_file_requests:
-            return 0
-        
-        injected_count = 0
-        remaining_requests = []
-        
-        for request in self.pending_file_requests:
-            if request['cycle'] <= self.cycle:
-                print(f"🎯 尝试注入: 周期{self.cycle}, 请求周期{request['cycle']}, {request['src']}:{request.get('src_type')} -> {request['dst']}:{request.get('dst_type')}")
-                
-                # 注入这个请求
-                packet_ids = self.inject_request(
-                    source=request['src'],
-                    destination=request['dst'],
-                    req_type=request['op_type'],
-                    count=1,
-                    burst_length=request['burst'],
-                    ip_type=request.get('src_type'),
-                    source_type=request.get('src_type'),
-                    destination_type=request.get('dst_type')
-                )
-                
-                if packet_ids:
-                    injected_count += 1
-                    print(f"✅ 注入成功: packet_ids={packet_ids}")
-                    self.logger.debug(f"周期 {self.cycle}: 注入请求 {request['src']} -> {request['dst']}")
-                else:
-                    # 注入失败，保留请求下次重试
-                    print(f"❌ 注入失败: {request['src']} -> {request['dst']}")
-                    self.logger.warning(f"周期 {self.cycle}: 请求注入失败，将在下个周期重试 (第{request['line_num']}行)")
-                    remaining_requests.append(request)
-            else:
-                # 保留未来的请求
-                remaining_requests.append(request)
-        
-        # 更新待注入列表
-        self.pending_file_requests = remaining_requests
-        
-        if injected_count > 0:
-            self.logger.debug(f"周期 {self.cycle}: 注入了 {injected_count} 个请求，剩余 {len(remaining_requests)} 个")
-        
-        return injected_count
-
-    def analyze_simulation_results(self, results: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        分析仿真结果
-
-        Args:
-            results: 仿真结果字典
-
-        Returns:
-            分析结果字典
-        """
-        analysis = {}
-
-        # 基础指标分析
-        simulation_info = results.get("simulation_info", {})
-        global_stats = results.get("global_stats", {})
-        ip_stats = results.get("ip_interface_stats", {})
-
-        # 计算基础性能指标
-        total_cycles = simulation_info.get("total_cycles", 1)
-        effective_cycles = simulation_info.get("effective_cycles", total_cycles)
-        
-        analysis["basic_metrics"] = {
-            "total_cycles": total_cycles,
-            "effective_cycles": effective_cycles,
-            "total_requests": global_stats.get("total_requests", 0),
-            "total_responses": global_stats.get("total_responses", 0),
-            "total_data_flits": global_stats.get("total_data_flits", 0),
-            "total_retries": global_stats.get("total_retries", 0),
-            "peak_active_requests": global_stats.get("peak_active_requests", 0),
-            "average_latency": global_stats.get("average_latency", 0.0),
-            "throughput": global_stats.get("throughput", 0.0),
-            "network_utilization": global_stats.get("network_utilization", 0.0),
-        }
-
-        # 计算额外的性能指标
-        if effective_cycles > 0:
-            analysis["basic_metrics"]["requests_per_cycle"] = global_stats.get("total_requests", 0) / effective_cycles
-            analysis["basic_metrics"]["bandwidth_utilization"] = global_stats.get("total_data_flits", 0) / effective_cycles
-
-        # IP接口分析
-        if ip_stats:
-            analysis["ip_summary"] = self._analyze_ip_interfaces(ip_stats)
-
-        # 性能分布分析
-        performance_metrics = results.get("performance_metrics", {})
-        if performance_metrics:
-            analysis["performance_distribution"] = performance_metrics
-
-        return analysis
-
-    def _analyze_ip_interfaces(self, ip_stats: Dict[str, Any]) -> Dict[str, Any]:
-        """分析IP接口统计"""
-        summary = {
-            "total_interfaces": len(ip_stats),
-            "by_type": {},
-            "total_active_requests": 0,
-            "total_completed_requests": 0,
-            "total_retries": 0
-        }
-
-        for ip_key, stats in ip_stats.items():
-            # 提取IP类型
-            ip_type = ip_key.split("_")[0] if "_" in ip_key else "unknown"
-
-            if ip_type not in summary["by_type"]:
-                summary["by_type"][ip_type] = {
-                    "count": 0,
-                    "active_requests": 0,
-                    "completed_requests": 0,
-                    "retries": 0
-                }
-
-            summary["by_type"][ip_type]["count"] += 1
-            summary["by_type"][ip_type]["active_requests"] += stats.get("active_requests", 0)
-            summary["by_type"][ip_type]["completed_requests"] += stats.get("completed_requests", 0)
-            summary["by_type"][ip_type]["retries"] += stats.get("retries", 0)
-
-            summary["total_active_requests"] += stats.get("active_requests", 0)
-            summary["total_completed_requests"] += stats.get("completed_requests", 0)
-            summary["total_retries"] += stats.get("retries", 0)
-
-        return summary
-
-    def generate_simulation_report(self, results: Dict[str, Any], analysis: Dict[str, Any] = None) -> str:
-        """
-        生成仿真报告
-
-        Args:
-            results: 仿真结果
-            analysis: 分析结果（可选，如果未提供则自动分析）
-
-        Returns:
-            报告文本
-        """
-        if analysis is None:
-            analysis = self.analyze_simulation_results(results)
-
-        report = []
-        report.append("=" * 60)
-        report.append(f"{self.model_name} 仿真报告")
-        report.append("=" * 60)
-
-        # 基础信息
-        simulation_info = results.get("simulation_info", {})
-        topology_info = simulation_info.get("topology", {})
-        
-        if topology_info:
-            report.append(f"拓扑类型: {topology_info.get('topology_type', 'Unknown')}")
-            if 'num_row' in topology_info and 'num_col' in topology_info:
-                report.append(f"拓扑大小: {topology_info['num_row']}x{topology_info['num_col']}")
-            report.append(f"总节点数: {topology_info.get('total_nodes', 'Unknown')}")
-        
-        report.append("")
-
-        # 性能指标
-        basic = analysis.get("basic_metrics", {})
-        report.append("性能指标:")
-        report.append(f"  仿真周期: {basic.get('total_cycles', 0):,}")
-        report.append(f"  有效周期: {basic.get('effective_cycles', 0):,}")
-        report.append(f"  总请求数: {basic.get('total_requests', 0):,}")
-        report.append(f"  总响应数: {basic.get('total_responses', 0):,}")
-        report.append(f"  峰值活跃请求: {basic.get('peak_active_requests', 0)}")
-        report.append(f"  平均延迟: {basic.get('average_latency', 0):.2f} 周期")
-        report.append(f"  吞吐量: {basic.get('throughput', 0):.4f} 请求/周期")
-        report.append(f"  带宽利用率: {basic.get('bandwidth_utilization', 0):.4f} flit/周期")
-        report.append("")
-
-        # 重试统计
-        total_retries = basic.get('total_retries', 0)
-        if total_retries > 0:
-            report.append("重试统计:")
-            report.append(f"  总重试次数: {total_retries}")
-            total_requests = basic.get('total_requests', 1)
-            retry_rate = total_retries / total_requests * 100 if total_requests > 0 else 0
-            report.append(f"  重试率: {retry_rate:.2f}%")
-            report.append("")
-
-        # IP接口统计
-        ip_summary = analysis.get("ip_summary", {})
-        if ip_summary:
-            report.append("IP接口统计:")
-            report.append(f"  总接口数: {ip_summary.get('total_interfaces', 0)}")
-
-            by_type = ip_summary.get("by_type", {})
-            for ip_type, stats in by_type.items():
-                report.append(f"  {ip_type}: {stats['count']}个接口, "
-                            f"活跃请求={stats['active_requests']}, "
-                            f"完成请求={stats['completed_requests']}, "
-                            f"重试={stats['retries']}")
-            report.append("")
-
-        # 性能分布
-        perf_dist = analysis.get("performance_distribution", {})
-        if perf_dist.get("latency_percentiles"):
-            percentiles = perf_dist["latency_percentiles"]
-            report.append("延迟分布:")
-            report.append(f"  最小延迟: {percentiles.get('min', 0)} 周期")
-            report.append(f"  P50延迟: {percentiles.get('p50', 0)} 周期")
-            report.append(f"  P90延迟: {percentiles.get('p90', 0)} 周期")
-            report.append(f"  P99延迟: {percentiles.get('p99', 0)} 周期")
-            report.append(f"  最大延迟: {percentiles.get('max', 0)} 周期")
-            report.append("")
-
-        report.append("=" * 60)
-        return "\n".join(report)
 
     def __repr__(self) -> str:
         """字符串表示"""

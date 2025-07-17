@@ -23,7 +23,39 @@
 │   │   ├── topology/       # 拓扑建模相关
 │   │   ├── protocol/       # 协议实现（CDMA等）
 │   │   └── utils/          # 工具和异常
-│   ├── noc/                # NoC实现
+│   ├── noc/                # NoC实现 - 分层架构设计
+│   │   ├── base/           # 基础抽象层（所有NoC的通用接口）
+│   │   │   ├── model.py    # NoC模型基类（仿真控制、统计收集）
+│   │   │   ├── topology.py # 拓扑基类（路由算法、路径计算）
+│   │   │   ├── node.py     # 节点基类（状态管理、接口定义）
+│   │   │   ├── ip_interface.py # IP接口基类（FIFO、流控）
+│   │   │   ├── flit.py     # Flit基类和对象池管理
+│   │   │   ├── link.py     # 链路基类（连接抽象）
+│   │   │   └── config.py   # 配置管理基类
+│   │   ├── crossring/      # CrossRing拓扑实现（继承base/）
+│   │   │   ├── model.py    # CrossRing模型实现
+│   │   │   ├── topology.py # CrossRing路由和拓扑结构
+│   │   │   ├── node.py     # CrossRing节点（CrossPoint实现）
+│   │   │   ├── cross_point.py # 环形路由核心组件
+│   │   │   ├── ip_interface.py # CrossRing IP接口
+│   │   │   ├── link.py     # 环形链路和slice管理
+│   │   │   ├── flit.py     # CrossRing包格式
+│   │   │   └── config.py   # CrossRing配置
+│   │   ├── mesh/           # Mesh拓扑实现（继承base/）
+│   │   ├── analysis/       # 性能分析模块
+│   │   │   ├── crossring_analyzer.py # CrossRing专用分析
+│   │   │   └── fifo_analyzer.py # FIFO统计分析
+│   │   ├── utils/          # 通用工具模块
+│   │   │   ├── traffic_scheduler.py # Traffic调度管理
+│   │   │   ├── factory.py  # 组件工厂模式
+│   │   │   ├── types.py    # 类型定义和枚举
+│   │   │   └── adjacency.py # 邻接矩阵工具
+│   │   ├── debug/          # 调试工具模块
+│   │   │   └── request_tracker.py # 请求生命周期追踪
+│   │   └── visualization/  # 可视化模块
+│   │       ├── realtime_visualizer.py # 实时仿真可视化
+│   │       ├── crossring_*_visualizer.py # CrossRing专用可视化
+│   │       └── network_topology_visualizer.py # 拓扑可视化
 │   ├── simulation/         # 仿真引擎
 │   ├── visualization/      # 可视化工具
 │   └── config/             # 配置管理
@@ -34,6 +66,29 @@
 ├── setup.py
 └── requirements.txt
 ```
+
+## NoC架构设计
+
+### 设计原则
+- **分层架构**: 基础抽象层 + 拓扑实现层 + 功能模块层
+- **继承复用**: 通过继承base/模块实现新拓扑，避免重复代码
+- **组合模式**: 独立的功能模块（analysis, utils, debug, visualization）
+- **扩展性**: 支持新拓扑类型、路由策略、分析方法的简单添加
+
+### 核心组件
+- **base/**: 所有NoC拓扑的通用抽象接口和基础功能
+- **crossring/**: CrossRing拓扑的完整实现，继承并扩展base/功能
+- **mesh/**: Mesh拓扑实现（类似继承结构）
+- **analysis/**: 性能分析工具集
+- **utils/**: 通用工具和辅助功能
+- **debug/**: 调试和监控工具
+- **visualization/**: 可视化和图表生成
+
+### 新拓扑添加指南
+1. 继承base/中的相应模块
+2. 实现拓扑特有的功能（路由算法、节点行为等）
+3. 复用existing的analysis、utils、debug、visualization模块
+4. 在utils/factory.py中注册新拓扑类型
 
 ## 安装
 
