@@ -33,7 +33,7 @@ from .model import (
 )
 
 # 导入现有的组件
-from .crossring_link import CrossRingSlot, RingSlice
+from .link import CrossRingSlot, RingSlice
 from .cross_point import CrossRingTagManager, CrossRingCrossPoint, CrossPointDirection
 
 # 版本信息
@@ -100,8 +100,8 @@ def quick_start_simulation(config_name: str = "2262", max_cycles: int = 10000, n
     import random
 
     for i in range(num_test_requests):
-        source = random.randint(0, config.NUM_NODES - 1)
-        destination = random.randint(0, config.NUM_NODES - 1)
+        source = random.randint(0, config.NUM_NODE - 1)
+        destination = random.randint(0, config.NUM_NODE - 1)
         if source != destination:
             req_type = random.choice(["read", "write"])
             model.inject_request(source=source, destination=destination, req_type=req_type, count=1)

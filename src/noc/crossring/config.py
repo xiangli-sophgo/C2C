@@ -154,7 +154,7 @@ class CrossRingConfig(BaseNoCConfig):
         self.config_name = config_name
         self.NUM_COL = num_col
         self.NUM_ROW = num_row
-        self.NUM_NODES = num_col * num_row
+        self.NUM_NODE = num_col * num_row
         self.NUM_IP = num_col * num_row
         self.NUM_RN = self.NUM_IP
         self.NUM_SN = self.NUM_IP
@@ -222,7 +222,7 @@ class CrossRingConfig(BaseNoCConfig):
     def _generate_ip_positions(self) -> None:
         """生成IP位置列表。"""
         # 默认IP分布策略：每个节点都会挂所有的IP
-        ip_positions = [i for i in range(self.NUM_NODES)]
+        ip_positions = [i for i in range(self.NUM_NODE)]
 
         # 各类IP使用相同的位置列表
         self.ddr_send_position_list = ip_positions.copy()
@@ -246,8 +246,8 @@ class CrossRingConfig(BaseNoCConfig):
         errors = []
 
         # 拓扑参数验证
-        if self.NUM_NODES != self.NUM_ROW * self.NUM_COL:
-            errors.append(f"节点数必须等于行数×列数 (NUM_NODES={self.NUM_NODES}, NUM_ROW={self.NUM_ROW}, NUM_COL={self.NUM_COL})")
+        if self.NUM_NODE != self.NUM_ROW * self.NUM_COL:
+            errors.append(f"节点数必须等于行数×列数 (NUM_NODE={self.NUM_NODE}, NUM_ROW={self.NUM_ROW}, NUM_COL={self.NUM_COL})")
 
         if self.NUM_COL < 2 or self.NUM_ROW < 2:
             errors.append(f"CrossRing拓扑至少需要2×2节点 (num_row={self.NUM_ROW}, num_col={self.NUM_COL})")
@@ -358,8 +358,8 @@ class CrossRingConfig(BaseNoCConfig):
 
         # 位置列表验证
         for pos in self.ddr_send_position_list:
-            if pos >= self.NUM_NODES:
-                errors.append(f"IP位置{pos}超出节点范围 (num_nodes={self.NUM_NODES})")
+            if pos >= self.NUM_NODE:
+                errors.append(f"IP位置{pos}超出节点范围 (num_nodes={self.NUM_NODE})")
 
         if errors:
             return False, "; ".join(errors)
@@ -375,7 +375,7 @@ class CrossRingConfig(BaseNoCConfig):
         """
         return {
             "topology_type": self.topology_type,
-            "num_nodes": self.NUM_NODES,
+            "num_nodes": self.NUM_NODE,
             "num_col": self.NUM_COL,
             "num_row": self.NUM_ROW,
             "num_ip": self.NUM_IP,
@@ -402,7 +402,7 @@ class CrossRingConfig(BaseNoCConfig):
         """
         self.NUM_ROW = num_row
         self.NUM_COL = num_col
-        self.NUM_NODES = num_col * num_row
+        self.NUM_NODE = num_col * num_row
 
         # 重新生成相关配置
         self._generate_ip_positions()
@@ -655,7 +655,7 @@ class CrossRingConfig(BaseNoCConfig):
                     self.cdma_send_position_list = ip_pos["cdma"]
 
         # 更新节点数
-        self.NUM_NODES = self.NUM_COL * self.NUM_ROW
+        self.NUM_NODE = self.NUM_COL * self.NUM_ROW
 
         # 重新生成派生配置
         self._generate_derived_config()

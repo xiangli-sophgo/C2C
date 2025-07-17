@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 from src.noc.crossring.node import CrossRingNode
 from src.noc.crossring.config import CrossRingConfig, RoutingStrategy
 from src.noc.crossring.flit import CrossRingFlit
-from src.noc.crossring.crossring_link import CrossRingSlot, RingSlice
+from src.noc.crossring.link import CrossRingSlot, RingSlice
 from src.noc.crossring.tag_mechanism import CrossRingTagManager
 
 

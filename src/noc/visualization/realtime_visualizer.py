@@ -72,7 +72,7 @@ class RealtimeVisualizer:
         self.logger = logging.getLogger("RealtimeVisualizer")
 
         # 网络参数
-        self.num_nodes = getattr(config, "NUM_NODES", 6)
+        self.num_nodes = getattr(config, "NUM_NODE", 6)
         self.num_rows = getattr(config, "NUM_ROW", 2)
         self.num_cols = getattr(config, "NUM_COL", 3)
 

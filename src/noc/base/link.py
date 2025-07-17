@@ -1,10 +1,10 @@
 """
-Base Link类定义，提供链路的基础接口和slot管理机制。
+Base Link类定义，提供链路的基础接口和通用统计框架。
 
 本模块定义了NoC中链路的抽象基类，包括：
-- 基础的slot时间片管理
-- ETag/ITag在slot层面的抽象接口
-- 流控和仲裁的基础框架
+- 通用的Slot时间片基础管理
+- 基础的链路统计和监控框架
+- 可扩展的抽象接口供具体拓扑实现
 """
 
 from abc import ABC, abstractmethod
@@ -16,21 +16,22 @@ from dataclasses import dataclass, field
 from .flit import BaseFlit
 
 
-class PriorityLevel(Enum):
-    """优先级级别枚举"""
+class BasicPriority(Enum):
+    """通用优先级枚举"""
 
-    T0 = "T0"  # 最高优先级
-    T1 = "T1"  # 中等优先级
-    T2 = "T2"  # 最低优先级
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
 
 
-class Direction(Enum):
-    """方向枚举"""
+class BasicDirection(Enum):
+    """通用方向枚举"""
 
-    TR = "TR"  # 向右
-    TL = "TL"  # 向左
-    TU = "TU"  # 向上
-    TD = "TD"  # 向下
+    NORTH = "north"
+    SOUTH = "south"
+    EAST = "east"
+    WEST = "west"
+    LOCAL = "local"
 
 
 @dataclass
@@ -44,7 +45,7 @@ class LinkSlot:
     # 基础信息
     slot_id: int
     cycle: int
-    direction: Direction
+    direction: BasicDirection
     channel: str  # "req", "rsp", "data"
 
     # 承载的flit信息
@@ -127,19 +128,18 @@ class BaseLink(ABC):
 
         # 拥塞控制状态
         self.congestion_state = {
-            "req": {"etag_level": PriorityLevel.T2, "itag_count": 0},
-            "rsp": {"etag_level": PriorityLevel.T2, "itag_count": 0},
-            "data": {"etag_level": PriorityLevel.T2, "itag_count": 0},
+            "req": {"utilization": 0.0, "blocked_cycles": 0},
+            "rsp": {"utilization": 0.0, "blocked_cycles": 0},
+            "data": {"utilization": 0.0, "blocked_cycles": 0},
         }
 
         # 统计信息
         self.stats = {
             "flits_transmitted": {"req": 0, "rsp": 0, "data": 0},
             "slots_utilized": {"req": 0, "rsp": 0, "data": 0},
-            "etag_upgrades": {"T2_to_T1": 0, "T1_to_T0": 0},
-            "itag_activations": {"horizontal": 0, "vertical": 0},
             "congestion_cycles": 0,
             "total_wait_cycles": 0,
+            "blocked_transmissions": 0,
         }
 
     def _initialize_slots(self) -> None:
@@ -147,84 +147,35 @@ class BaseLink(ABC):
         for channel in ["req", "rsp", "data"]:
             self.slots[channel] = []
             for i in range(self.num_slots):
-                slot = LinkSlot(slot_id=i, cycle=0, direction=self._get_link_direction(), channel=channel)
+                slot = LinkSlot(slot_id=i, cycle=0, direction=BasicDirection.LOCAL, channel=channel)
                 self.slots[channel].append(slot)
 
-    @abstractmethod
-    def _get_link_direction(self) -> Direction:
-        """获取链路方向，由子类实现"""
-        pass
 
-    @abstractmethod
-    def can_upgrade_etag(self, channel: str, from_level: PriorityLevel, to_level: PriorityLevel) -> bool:
-        """
-        检查是否可以升级ETag优先级
-
-        Args:
-            channel: 通道类型
-            from_level: 源优先级
-            to_level: 目标优先级
-
-        Returns:
-            是否可以升级
-        """
-        pass
-
-    @abstractmethod
-    def should_trigger_itag(self, channel: str, direction: str) -> bool:
-        """
-        检查是否应该触发ITag
-
-        Args:
-            channel: 通道类型
-            direction: 方向("horizontal", "vertical")
-
-        Returns:
-            是否应该触发ITag
-        """
-        pass
-
-    def get_available_slot(self, channel: str, priority: PriorityLevel = PriorityLevel.T2) -> Optional[LinkSlot]:
+    def get_available_slot(self, channel: str, priority: BasicPriority = BasicPriority.LOW) -> Optional[LinkSlot]:
         """
         获取可用的slot
 
         Args:
             channel: 通道类型
-            priority: 优先级
+            priority: 基础优先级
 
         Returns:
             可用的slot，如果没有则返回None
         """
         channel_slots = self.slots[channel]
 
-        # 优先分配给高优先级
+        # 查找可用slots
         available_slots = [slot for slot in channel_slots if not slot.is_occupied]
 
         if not available_slots:
             return None
 
-        # 根据优先级和ITag状态选择最合适的slot
-        best_slot = self._select_best_slot(available_slots, priority)
-        return best_slot
-
-    def _select_best_slot(self, available_slots: List[LinkSlot], priority: PriorityLevel) -> LinkSlot:
-        """
-        从可用slots中选择最佳的slot
-
-        Args:
-            available_slots: 可用slot列表
-            priority: 请求的优先级
-
-        Returns:
-            最佳slot
-        """
-        # 简单实现：选择第一个可用的
-        # 子类可以重写实现更复杂的选择逻辑
+        # 简单选择第一个可用的，子类可以重写实现复杂逻辑
         return available_slots[0]
 
     def transmit_flit(self, flit: BaseFlit, channel: str, cycle: int) -> bool:
         """
-        传输flit
+        传输flit（基础实现）
 
         Args:
             flit: 要传输的flit
@@ -234,18 +185,14 @@ class BaseLink(ABC):
         Returns:
             是否成功传输
         """
-        # 获取flit的优先级（从slot层面确定）
-        priority = self._determine_flit_priority(flit, channel)
-
         # 获取可用slot
-        slot = self.get_available_slot(channel, priority)
+        slot = self.get_available_slot(channel)
         if slot is None:
             return False
 
         # 分配flit到slot
         if slot.assign_flit(flit):
             slot.cycle = cycle
-            slot.etag_priority = priority
 
             # 更新统计
             self.stats["flits_transmitted"][channel] += 1
@@ -255,26 +202,6 @@ class BaseLink(ABC):
             return True
 
         return False
-
-    def _determine_flit_priority(self, flit: BaseFlit, channel: str) -> PriorityLevel:
-        """
-        确定flit的优先级（在slot层面）
-
-        Args:
-            flit: flit对象
-            channel: 通道类型
-
-        Returns:
-            优先级级别
-        """
-        # 基础实现：根据通道类型确定默认优先级
-        # 子类可以重写实现更复杂的优先级逻辑
-        if channel == "req":
-            return PriorityLevel.T2  # 请求默认最低优先级
-        elif channel == "rsp":
-            return PriorityLevel.T1  # 响应默认中等优先级
-        else:  # data
-            return PriorityLevel.T1  # 数据默认中等优先级
 
     def update_congestion_state(self, cycle: int) -> None:
         """
@@ -305,34 +232,11 @@ class BaseLink(ABC):
             if slot.is_occupied:
                 slot.increment_wait()
 
-        # 检查是否需要ETag升级
-        self._check_etag_upgrade(channel, utilization, cycle)
+        # 更新拥塞状态
+        self.congestion_state[channel]["utilization"] = utilization
+        if utilization > 0.8:  # 高拥塞阈值
+            self.congestion_state[channel]["blocked_cycles"] += 1
 
-        # 检查是否需要ITag激活
-        self._check_itag_activation(channel, cycle)
-
-    @abstractmethod
-    def _check_etag_upgrade(self, channel: str, utilization: float, cycle: int) -> None:
-        """
-        检查ETag升级条件
-
-        Args:
-            channel: 通道类型
-            utilization: 利用率
-            cycle: 当前周期
-        """
-        pass
-
-    @abstractmethod
-    def _check_itag_activation(self, channel: str, cycle: int) -> None:
-        """
-        检查ITag激活条件
-
-        Args:
-            channel: 通道类型
-            cycle: 当前周期
-        """
-        pass
 
     def get_slot_status(self, channel: str) -> Dict[str, Any]:
         """
@@ -350,19 +254,10 @@ class BaseLink(ABC):
             "total_slots": len(channel_slots),
             "occupied_slots": sum(1 for slot in channel_slots if slot.is_occupied),
             "utilization": sum(1 for slot in channel_slots if slot.is_occupied) / len(channel_slots),
-            "etag_distribution": self._get_etag_distribution(channel_slots),
-            "itag_count": sum(1 for slot in channel_slots if slot.itag_active),
             "avg_wait_cycles": sum(slot.wait_cycles for slot in channel_slots) / len(channel_slots),
             "max_wait_cycles": max((slot.wait_cycles for slot in channel_slots), default=0),
         }
 
-    def _get_etag_distribution(self, slots: List[LinkSlot]) -> Dict[str, int]:
-        """获取ETag优先级分布"""
-        distribution = {"T0": 0, "T1": 0, "T2": 0}
-        for slot in slots:
-            if slot.is_occupied:
-                distribution[slot.etag_priority.value] += 1
-        return distribution
 
     def get_link_stats(self) -> Dict[str, Any]:
         """
@@ -386,10 +281,9 @@ class BaseLink(ABC):
         self.stats = {
             "flits_transmitted": {"req": 0, "rsp": 0, "data": 0},
             "slots_utilized": {"req": 0, "rsp": 0, "data": 0},
-            "etag_upgrades": {"T2_to_T1": 0, "T1_to_T0": 0},
-            "itag_activations": {"horizontal": 0, "vertical": 0},
             "congestion_cycles": 0,
             "total_wait_cycles": 0,
+            "blocked_transmissions": 0,
         }
 
     def step(self, cycle: int) -> None:

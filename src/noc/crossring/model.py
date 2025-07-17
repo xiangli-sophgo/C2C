@@ -18,7 +18,7 @@ from .config import CrossRingConfig, RoutingStrategy
 from .ip_interface import CrossRingIPInterface
 from .flit import CrossRingFlit, get_crossring_flit_pool_stats
 from .node import CrossRingNode
-from .crossring_link import CrossRingLink
+from .link import CrossRingLink
 from src.noc.utils.types import NodeId
 from src.noc.debug import RequestTracker, RequestState, FlitType
 from src.noc.base.model import BaseNoCModel
@@ -96,8 +96,8 @@ class CrossRingModel(BaseNoCModel):
         self._register_all_fifos_for_statistics()
 
         # 验证CrossRing网络初始化
-        if len(self.crossring_nodes) != self.config.NUM_NODES:
-            self.logger.error(f"CrossRing节点初始化不完整: 期望{self.config.NUM_NODES}，实际{len(self.crossring_nodes)}")
+        if len(self.crossring_nodes) != self.config.NUM_NODE:
+            self.logger.error(f"CrossRing节点初始化不完整: 期望{self.config.NUM_NODE}，实际{len(self.crossring_nodes)}")
             self.logger.error("debug: 当前crossring_nodes内容: {}".format(list(self.crossring_nodes.keys())))
             raise RuntimeError("CrossRing网络初始化失败")
 
@@ -258,7 +258,7 @@ class CrossRingModel(BaseNoCModel):
         # 导入CrossRingNode类
         from .node import CrossRingNode
 
-        for node_id in range(self.config.NUM_NODES):
+        for node_id in range(self.config.NUM_NODE):
             coordinates = self._get_node_coordinates(node_id)
 
             try:
@@ -282,7 +282,7 @@ class CrossRingModel(BaseNoCModel):
         """创建CrossRing链接"""
 
         # 导入必要的类
-        from .crossring_link import CrossRingLink
+        from .link import CrossRingLink
         from ..base.link import Direction
 
         # 获取slice配置
@@ -290,7 +290,7 @@ class CrossRingModel(BaseNoCModel):
         self_slices = getattr(self.config.basic_config, "SELF_LINK_SLICES", 2)
 
         link_count = 0
-        for node_id in range(self.config.NUM_NODES):
+        for node_id in range(self.config.NUM_NODE):
             # 获取节点的四个方向连接
             connections = self._get_ring_connections(node_id)
 
@@ -352,7 +352,7 @@ class CrossRingModel(BaseNoCModel):
             "topology_type": "CrossRing",
             "num_rows": self.config.NUM_ROW,
             "num_cols": self.config.NUM_COL,
-            "num_nodes": self.config.NUM_NODES,
+            "num_nodes": self.config.NUM_NODE,
             "total_links": len(self.crossring_links),
             "crossring_stats": self.crossring_stats.copy(),
         }
@@ -562,7 +562,7 @@ class CrossRingModel(BaseNoCModel):
         """连接不同链路之间的slice形成环路"""
         # 按照CrossRing规范，形成正确的单向环路连接
 
-        for node_id in range(self.config.NUM_NODES):
+        for node_id in range(self.config.NUM_NODE):
             connections = self._get_ring_connections(node_id)
 
             for direction_str, neighbor_id in connections.items():
@@ -937,7 +937,7 @@ class CrossRingModel(BaseNoCModel):
             "topology_type": "CrossRing",
             "num_row": self.config.NUM_ROW,
             "num_col": self.config.NUM_COL,
-            "num_nodes": self.config.NUM_NODES,
+            "num_nodes": self.config.NUM_NODE,
             "ring_buffer_depth": getattr(self.config, "RING_BUFFER_DEPTH", 4),
             "routing_strategy": self.config.routing_strategy.value if hasattr(self.config.routing_strategy, "value") else str(self.config.routing_strategy),
             "ip_interface_count": len(self.ip_interfaces),
@@ -1162,7 +1162,7 @@ class CrossRingModel(BaseNoCModel):
                         burst = int(burst)
 
                         # 验证节点范围
-                        if src >= self.config.NUM_NODES or dst >= self.config.NUM_NODES:
+                        if src >= self.config.NUM_NODE or dst >= self.config.NUM_NODE:
                             self.logger.warning(f"第{line_num}行节点范围无效（src={src}, dst={dst}），跳过")
                             failed_count += 1
                             continue
@@ -1484,7 +1484,7 @@ class CrossRingModel(BaseNoCModel):
 
         # 拓扑信息
         report.append(f"拓扑配置: {self.config.NUM_ROW}x{self.config.NUM_COL}")
-        report.append(f"总节点数: {self.config.NUM_NODES}")
+        report.append(f"总节点数: {self.config.NUM_NODE}")
         report.append("")
 
         # 基础指标
@@ -1737,7 +1737,7 @@ class CrossRingModel(BaseNoCModel):
             "topology_type": "CrossRing",
             "num_row": self.config.NUM_ROW,
             "num_col": self.config.NUM_COL,
-            "total_nodes": self.config.NUM_NODES,
+            "total_nodes": self.config.NUM_NODE,
             "ring_directions": ["TL", "TR", "TU", "TD"],
             "channels": ["req", "rsp", "data"],
             "routing_strategy": self.config.routing_strategy.value if hasattr(self.config.routing_strategy, "value") else str(self.config.routing_strategy),
@@ -1905,7 +1905,7 @@ class CrossRingModel(BaseNoCModel):
 
     def get_node_count(self) -> int:
         """获取节点数量（统一接口）"""
-        return self.config.NUM_NODES
+        return self.config.NUM_NODE
 
     # ========== 调试功能接口 ==========
 
@@ -1976,7 +1976,7 @@ class CrossRingModel(BaseNoCModel):
             "topology_type": "CrossRing",
             "num_row": self.config.NUM_ROW,
             "num_col": self.config.NUM_COL,
-            "total_nodes": self.config.NUM_NODES,
+            "total_nodes": self.config.NUM_NODE,
             "ring_directions": ["TL", "TR", "TU", "TD"],
             "channels": ["req", "rsp", "data"],
         }

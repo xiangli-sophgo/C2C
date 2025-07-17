@@ -922,7 +922,7 @@ class BaseNoCModel(ABC):
                         burst = int(burst)
                         
                         # 验证节点范围
-                        num_nodes = getattr(self.config, 'NUM_NODES', 0)
+                        num_nodes = getattr(self.config, 'NUM_NODE', 0)
                         if num_nodes > 0 and (src >= num_nodes or dst >= num_nodes):
                             self.logger.warning(f"第{line_num}行节点范围无效（src={src}, dst={dst}），跳过")
                             failed_count += 1

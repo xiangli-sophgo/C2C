@@ -11,17 +11,33 @@ CrossRing链路实现，继承BaseLink，实现CrossRing特有的ETag/ITag机制
 from typing import Dict, List, Any, Optional, Tuple
 import logging
 from dataclasses import dataclass
+from enum import Enum
 
-from ..base.link import BaseLink, LinkSlot, PriorityLevel, Direction
+from ..base.link import BaseLink, LinkSlot, BasicPriority, BasicDirection
 from ..base.flit import BaseFlit
 from .config import CrossRingConfig
 from .flit import CrossRingFlit
 
 
+class PriorityLevel(Enum):
+    """CrossRing特定的ETag优先级"""
+    T0 = "T0"  # 最高优先级
+    T1 = "T1"  # 中等优先级  
+    T2 = "T2"  # 最低优先级
+
+
+class Direction(Enum):
+    """CrossRing特定的传输方向"""
+    TR = "TR"  # 向右(To Right)
+    TL = "TL"  # 向左(To Left)
+    TU = "TU"  # 向上(To Up)
+    TD = "TD"  # 向下(To Down)
+
+
 @dataclass
-class CrossRingSlot:
+class CrossRingSlot(LinkSlot):
     """
-    CrossRing Slot实现
+    CrossRing Slot实现，继承LinkSlot
 
     Slot是环路上传输的基本载体，包含四部分：
     1. Valid位: 标记是否载有有效Flit
@@ -30,15 +46,9 @@ class CrossRingSlot:
     4. Flit: 实际传输的数据
     """
 
-    # 基础信息
-    slot_id: int
-    cycle: int
-    channel: str = "req"  # req/rsp/data
-
-    # Slot内容 (按Cross Ring Spec v2.0定义)
+    # CrossRing特有的槽位内容
     valid: bool = False  # Valid位
-    flit: Optional["CrossRingFlit"] = None  # Flit数据
-
+    
     # I-Tag信息 (注入预约机制)
     itag_reserved: bool = False  # 是否被预约
     itag_direction: Optional[str] = None  # 预约方向(TR/TL/TU/TD)
@@ -49,13 +59,20 @@ class CrossRingSlot:
     etag_priority: PriorityLevel = PriorityLevel.T2  # T0/T1/T2优先级
     etag_direction: Optional[str] = None  # 标记方向
 
-    # 等待计数器
-    wait_cycles: int = 0
+    # 额外的计数器
     starvation_counter: int = 0
+    
+    # 重写flit类型提示以支持CrossRingFlit
+    flit: Optional["CrossRingFlit"] = None
+
+    def __post_init__(self):
+        """初始化后处理"""
+        # 调用父类的post_init
+        super().__post_init__()
 
     @property
     def is_occupied(self) -> bool:
-        """检查slot是否被占用"""
+        """检查slot是否被占用 - CrossRing使用valid字段"""
         return self.valid and self.flit is not None
 
     @property
@@ -70,7 +87,7 @@ class CrossRingSlot:
 
     def assign_flit(self, flit: "CrossRingFlit") -> bool:
         """
-        分配Flit到空闲Slot
+        分配Flit到空闲Slot，重写父类方法以支持CrossRing特有逻辑
 
         Args:
             flit: 要分配的flit
@@ -81,6 +98,7 @@ class CrossRingSlot:
         if self.is_occupied:
             return False
 
+        # CrossRing特有的valid字段设置
         self.valid = True
         self.flit = flit
         self.wait_cycles = 0
@@ -93,7 +111,7 @@ class CrossRingSlot:
 
     def release_flit(self) -> Optional["CrossRingFlit"]:
         """
-        从Slot释放Flit
+        从Slot释放Flit，重写父类方法以支持CrossRing特有逻辑
 
         Returns:
             被释放的flit，如果没有则返回None
@@ -103,7 +121,7 @@ class CrossRingSlot:
 
         released_flit = self.flit
 
-        # 清空Slot
+        # 清空Slot - CrossRing特有的valid字段
         self.valid = False
         self.flit = None
         self.wait_cycles = 0
@@ -474,15 +492,15 @@ class RingSlice:
         self.stats["total_cycles"] = 0
 
 
-class CrossRingLink:
+class CrossRingLink(BaseLink):
     """
-    CrossRing链路类 - 按Cross Ring Spec v2.0重新设计
+    CrossRing链路类 - 继承BaseLink，实现CrossRing特定功能
 
-    简化职责：
+    职责：
     1. 管理Ring Slice链组成的链路
-    2. 提供标准的slot管理接口
-    3. 与CrossPoint协作，不直接处理复杂逻辑
-    4. 专注于基础的链路传输功能
+    2. 实现CrossRing特有的ETag/ITag机制
+    3. 提供CrossRing特定的slot管理和仲裁
+    4. 与CrossPoint协作处理复杂的anti-starvation逻辑
     """
 
     def __init__(self, link_id: str, source_node: int, dest_node: int, direction: Direction, config: CrossRingConfig, num_slices: int = 8, logger: Optional[logging.Logger] = None):
@@ -498,13 +516,13 @@ class CrossRingLink:
             num_slices: Ring Slice数量
             logger: 日志记录器
         """
-        self.link_id = link_id
-        self.source_node = source_node
-        self.dest_node = dest_node
+        # 调用父类构造函数
+        super().__init__(link_id, source_node, dest_node, num_slices, logger)
+        
+        # CrossRing特有属性
         self.direction = direction
         self.config = config
         self.num_slices = num_slices
-        self.logger = logger or logging.getLogger(__name__)
 
         # Ring Slice链 - 构成链路的基础单元
         self.ring_slices: Dict[str, List[RingSlice]] = {"req": [], "rsp": [], "data": []}
@@ -518,14 +536,12 @@ class CrossRingLink:
         # 初始化Slot池
         self._initialize_slot_pools()
 
-        # 统计信息
-        self.stats = {
-            "slots_transmitted": {"req": 0, "rsp": 0, "data": 0},
+        # 扩展父类统计信息，添加CrossRing特有的统计
+        self.stats.update({
             "slots_created": {"req": 0, "rsp": 0, "data": 0},
             "slots_destroyed": {"req": 0, "rsp": 0, "data": 0},
             "utilization": {"req": 0.0, "rsp": 0.0, "data": 0.0},
-            "total_cycles": 0,
-        }
+        })
 
         self.logger.info(f"CrossRingLink {link_id} 初始化完成: {source_node} -> {dest_node}, 方向: {direction.value}")
 
@@ -746,9 +762,13 @@ class CrossRingLink:
         }
 
     def reset_stats(self) -> None:
-        """重置统计信息"""
+        """重置统计信息，重写父类方法以添加CrossRing特有的重置"""
+        # 调用父类的reset_stats（如果有的话）
+        if hasattr(super(), 'reset_stats'):
+            super().reset_stats()
+        
+        # 重置CrossRing特有的统计
         for channel in ["req", "rsp", "data"]:
-            self.stats["slots_transmitted"][channel] = 0
             self.stats["slots_created"][channel] = 0
             self.stats["slots_destroyed"][channel] = 0
             self.stats["utilization"][channel] = 0.0
@@ -770,3 +790,94 @@ class CrossRingLink:
             CrossRingSlot列表
         """
         return self.slot_pools.get(channel, [])
+
+    # ========== BaseLink抽象方法实现 ==========
+    
+    def _get_link_direction(self) -> Direction:
+        """获取链路方向"""
+        return self.direction
+
+    def can_upgrade_etag(self, channel: str, from_level: PriorityLevel, to_level: PriorityLevel) -> bool:
+        """
+        检查是否可以升级ETag优先级
+
+        Args:
+            channel: 通道类型
+            from_level: 原优先级
+            to_level: 目标优先级
+
+        Returns:
+            是否可以升级
+        """
+        # CrossRing的ETag升级策略
+        utilization = self.stats.get("utilization", {}).get(channel, 0.0)
+        
+        if from_level == PriorityLevel.T2 and to_level == PriorityLevel.T1:
+            return utilization > 0.7  # 利用率超过70%可升级T1
+        elif from_level == PriorityLevel.T1 and to_level == PriorityLevel.T0:
+            return utilization > 0.9  # 利用率超过90%可升级T0
+        
+        return False
+
+    def should_trigger_itag(self, channel: str, direction: str) -> bool:
+        """
+        检查是否应该触发ITag
+
+        Args:
+            channel: 通道类型
+            direction: 方向
+
+        Returns:
+            是否应该触发ITag
+        """
+        # CrossRing的ITag触发策略
+        utilization = self.stats.get("utilization", {}).get(channel, 0.0)
+        return utilization > 0.8  # 利用率超过80%触发ITag
+
+    def _check_etag_upgrade(self, channel: str, utilization: float, cycle: int) -> None:
+        """
+        检查ETag升级条件
+
+        Args:
+            channel: 通道类型
+            utilization: 利用率
+            cycle: 当前周期
+        """
+        # 检查T2到T1升级
+        if utilization > 0.7:
+            slots = self.slot_pools.get(channel, [])
+            for slot in slots:
+                if slot.etag_priority == PriorityLevel.T2:
+                    slot.etag_priority = PriorityLevel.T1
+                    self.stats["etag_upgrades"]["T2_to_T1"] += 1
+
+        # 检查T1到T0升级
+        if utilization > 0.9:
+            slots = self.slot_pools.get(channel, [])
+            for slot in slots:
+                if slot.etag_priority == PriorityLevel.T1:
+                    slot.etag_priority = PriorityLevel.T0
+                    self.stats["etag_upgrades"]["T1_to_T0"] += 1
+
+    def _check_itag_activation(self, channel: str, cycle: int) -> None:
+        """
+        检查ITag激活条件
+
+        Args:
+            channel: 通道类型
+            cycle: 当前周期
+        """
+        utilization = self.stats.get("utilization", {}).get(channel, 0.0)
+        if utilization > 0.8:
+            direction_key = "horizontal" if self.direction in [Direction.TR, Direction.TL] else "vertical"
+            self.stats["itag_activations"][direction_key] += 1
+
+    def _process_slot_transmission(self, cycle: int) -> None:
+        """
+        处理slot传输逻辑
+
+        Args:
+            cycle: 当前周期
+        """
+        # 调用现有的step方法
+        self.step(cycle)

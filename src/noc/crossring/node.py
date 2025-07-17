@@ -15,10 +15,10 @@ from dataclasses import dataclass
 
 from src.noc.base.node import BaseNoCNode
 from src.noc.base.ip_interface import PipelinedFIFO
-from ..base.link import PriorityLevel
+from .link import PriorityLevel
 from .flit import CrossRingFlit
 from .config import CrossRingConfig, RoutingStrategy
-from .crossring_link import CrossRingSlot, RingSlice  # 导入新的类
+from .link import CrossRingSlot, RingSlice  # 导入新的类
 from .cross_point import CrossRingCrossPoint, CrossPointDirection
 
 
