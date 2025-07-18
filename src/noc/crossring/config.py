@@ -121,9 +121,9 @@ class TrackerConfiguration:
 class LatencyConfiguration:
     """延迟配置数据类。"""
 
-    DDR_R_LATENCY: int = 100
+    DDR_R_LATENCY: int = 0
     DDR_R_LATENCY_VAR: int = 0
-    DDR_W_LATENCY: int = 40
+    DDR_W_LATENCY: int = 0
     DDR_W_LATENCY_VAR: int = 0
     L2M_R_LATENCY: int = 12
     L2M_R_LATENCY_VAR: int = 0

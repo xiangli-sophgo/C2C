@@ -3,7 +3,7 @@ C2C 示例模块 - 芯片间通信框架示例代码
 包含各种使用示例和演示程序
 """
 
-__version__ = "1.0.0"
+__version__ = "1.2.0"
 __description__ = "C2C Framework Examples and Demos"
 
 # 示例文件列表

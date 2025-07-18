@@ -27,7 +27,7 @@ except ImportError:
     # 如果某些模块不存在，忽略错误
     pass
 
-__version__ = "1.0.0"
+__version__ = "1.2.0"
 
 __all__ = [
     # 基础类

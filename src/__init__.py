@@ -20,7 +20,7 @@ from .simulation.engine import C2CSimulationEngine
 from .simulation.fake_chip import FakeChip
 from .simulation.events import SimulationEvent, EventFactory
 
-__version__ = "1.0.0"
+__version__ = "1.2.0"
 
 __all__ = [
     "TopologyBuilder",

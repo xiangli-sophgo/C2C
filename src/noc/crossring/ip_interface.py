@@ -160,7 +160,7 @@ class CrossRingIPInterface(BaseIPInterface):
             node = self.model.crossring_nodes[self.node_id]
 
             # 注入到节点的对应IP的channel buffer
-            ip_key = f"{self.ip_type}_node{self.node_id}"
+            ip_key = self.ip_type
             if ip_key in node.ip_inject_channel_buffers:
                 channel_buffer = node.ip_inject_channel_buffers[ip_key][channel]
                 if channel_buffer.can_accept_input():
@@ -213,7 +213,7 @@ class CrossRingIPInterface(BaseIPInterface):
             node = self.model.crossring_nodes[self.node_id]
 
             # 从节点的对应IP的eject channel buffer获取flit
-            ip_key = f"{self.ip_type}_node{self.node_id}"
+            ip_key = self.ip_type
 
             if ip_key in node.ip_eject_channel_buffers:
                 eject_buffer = node.ip_eject_channel_buffers[ip_key][channel]
@@ -562,9 +562,13 @@ class CrossRingIPInterface(BaseIPInterface):
                 latency = self.config.latency_config.L2M_W_LATENCY
             
 
+            # 计算完整路径
+            path = self.model.topology.calculate_shortest_path(req.source, req.destination)
+            
             data_flit = create_crossring_flit(
                 source=req.source,
                 destination=req.destination,
+                path=path,
                 req_type=req.req_type,
                 packet_id=req.packet_id,
                 flit_id=i,
@@ -590,10 +594,14 @@ class CrossRingIPInterface(BaseIPInterface):
             else:
                 latency = self.config.latency_config.L2M_R_LATENCY
 
+            # 计算完整路径（SN到RN）
+            path = self.model.topology.calculate_shortest_path(req.destination, req.source)
+            
             # 读数据从SN返回到RN
             data_flit = create_crossring_flit(
                 source=req.destination,  # SN位置
                 destination=req.source,  # RN位置
+                path=path,
                 req_type=req.req_type,
                 packet_id=req.packet_id,
                 flit_id=i,
@@ -620,9 +628,13 @@ class CrossRingIPInterface(BaseIPInterface):
 
     def _create_negative_response(self, req: CrossRingFlit) -> None:
         """创建negative响应"""
+        # 计算完整路径（SN到RN）
+        path = self.model.topology.calculate_shortest_path(req.destination, req.source)
+        
         rsp = create_crossring_flit(
             source=req.destination,
             destination=req.source,
+            path=path,
             req_type=req.req_type,
             packet_id=req.packet_id,
             channel="rsp",
@@ -640,9 +652,13 @@ class CrossRingIPInterface(BaseIPInterface):
     def _create_datasend_response(self, req: CrossRingFlit) -> None:
         """创建datasend响应"""
         self.logger.info(f"🏭 SN端创建datasend响应: packet_id={req.packet_id}, 从节点{req.destination}发送到节点{req.source}")
+        # 计算完整路径（SN到RN）
+        path = self.model.topology.calculate_shortest_path(req.destination, req.source)
+        
         rsp = create_crossring_flit(
             source=req.destination,
             destination=req.source,
+            path=path,
             req_type=req.req_type,
             packet_id=req.packet_id,
             channel="rsp",
@@ -788,8 +804,11 @@ class CrossRingIPInterface(BaseIPInterface):
             if not self._allocate_rn_resources("read", burst_length):
                 return False
 
+            # 计算完整路径
+            path = self.model.topology.calculate_shortest_path(source, destination)
+            
             # 创建读请求flit
-            req_flit = create_crossring_flit(source, destination, [source, destination])
+            req_flit = create_crossring_flit(source, destination, path)
             req_flit.packet_id = packet_id
             req_flit.req_type = "read"
             req_flit.burst_length = burst_length
@@ -813,8 +832,11 @@ class CrossRingIPInterface(BaseIPInterface):
             if not self._allocate_rn_resources("write", burst_length):
                 return False
 
+            # 计算完整路径
+            path = self.model.topology.calculate_shortest_path(source, destination)
+            
             # 创建写请求flit
-            req_flit = create_crossring_flit(source, destination, [source, destination])
+            req_flit = create_crossring_flit(source, destination, path)
             req_flit.packet_id = packet_id
             req_flit.req_type = "write"
             req_flit.burst_length = burst_length
@@ -905,11 +927,13 @@ class CrossRingIPInterface(BaseIPInterface):
         if not packet_id:
             packet_id = f"{req_type}_{source}_{destination}_{self.current_cycle}"
 
-        print(f"🔍 inject_request调用: packet_id={packet_id}, source={source}, dest={destination}, req_type={req_type}")
 
         try:
+            # 计算完整路径
+            path = self.model.topology.calculate_shortest_path(source, destination)
+            
             # 创建CrossRing Flit
-            flit = create_crossring_flit(source=source, destination=destination, packet_id=packet_id, req_type=req_type, burst_length=burst_length, num_col=self.config.NUM_COL)
+            flit = create_crossring_flit(source=source, destination=destination, path=path, packet_id=packet_id, req_type=req_type, burst_length=burst_length, num_col=self.config.NUM_COL)
 
             # 设置IP类型信息
             flit.source_type = source_type if source_type else self.ip_type
@@ -965,7 +989,6 @@ class CrossRingIPInterface(BaseIPInterface):
             }
 
             self.logger.debug(f"请求已添加到pending_by_channel: {packet_id} ({req_type}: {source}->{destination})")
-            print(f"✅ inject_request成功: packet_id={packet_id}")
             return True
 
         except Exception as e:
@@ -1067,6 +1090,11 @@ class CrossRingIPInterface(BaseIPInterface):
         # if self._transfer_decisions["network_to_h2l"]["channel"] is not None:
         #     return
 
+        # 时钟域转换：IP内部处理频率是1GHz，网络频率是2GHz
+        # 只有在偶数周期才能处理H2L到completion的传输
+        if current_cycle % self.clock_ratio != 0:
+            return
+
         # 按优先级顺序检查：req > rsp > data
         for channel in ["req", "rsp", "data"]:
             if self.h2l_fifos[channel].valid_signal():
@@ -1081,7 +1109,7 @@ class CrossRingIPInterface(BaseIPInterface):
         # 获取对应的节点
         if self.node_id in self.model.crossring_nodes:
             node = self.model.crossring_nodes[self.node_id]
-            ip_key = f"{self.ip_type}_node{self.node_id}"
+            ip_key = self.ip_type
 
             if ip_key in node.ip_inject_channel_buffers:
                 inject_buffer = node.ip_inject_channel_buffers[ip_key][channel]
@@ -1093,7 +1121,7 @@ class CrossRingIPInterface(BaseIPInterface):
         # 获取对应的节点
         if self.node_id in self.model.crossring_nodes:
             node = self.model.crossring_nodes[self.node_id]
-            ip_key = f"{self.ip_type}_node{self.node_id}"
+            ip_key = self.ip_type
 
             if ip_key in node.ip_eject_channel_buffers:
                 eject_buffer = node.ip_eject_channel_buffers[ip_key][channel]
@@ -1188,6 +1216,9 @@ class CrossRingIPInterface(BaseIPInterface):
             # 从h2l FIFO读取并处理completion
             self.h2l_fifos[channel].read_output()
 
+            # 更新flit_position表示进入IP内部处理
+            flit.flit_position = "IP"
+
             # 根据通道类型处理
             if channel == "req":
                 self._handle_received_request(flit)
@@ -1201,7 +1232,7 @@ class CrossRingIPInterface(BaseIPInterface):
         # 获取对应的节点
         if self.node_id in self.model.crossring_nodes:
             node = self.model.crossring_nodes[self.node_id]
-            ip_key = f"{self.ip_type}_node{self.node_id}"
+            ip_key = self.ip_type
 
             if ip_key in node.ip_inject_channel_buffers:
                 inject_buffer = node.ip_inject_channel_buffers[ip_key][channel]

@@ -74,15 +74,20 @@ class CrossRingTopology(BaseNoCTopology):
         # 建立节点位置映射
         self._build_node_positions()
 
+        # 建立路由表
+        self.routing_table = {}  # routing_table[src][dst] = [path_of_node_ids]
+        self._build_routing_table()
+
         self._logger.info("CrossRing拓扑构建完成")
 
     def _build_node_positions(self) -> None:
-        """建立节点位置映射。"""
+        """建立节点位置映射。使用直角坐标系，原点在左下角。"""
         self._node_positions.clear()
 
         for node_id in range(self.NUM_NODE):
-            row, col = divmod(node_id, self.NUM_COL)
-            self._node_positions[node_id] = (row, col)
+            col = node_id % self.NUM_COL  # x坐标：水平方向，从左到右
+            row = self.NUM_ROW - 1 - (node_id // self.NUM_COL)  # y坐标：垂直方向，从下到上
+            self._node_positions[node_id] = (col, row)  # (x, y)
 
     def get_neighbors(self, node_id: NodeId) -> List[NodeId]:
         """
@@ -108,13 +113,13 @@ class CrossRingTopology(BaseNoCTopology):
 
     def get_node_position(self, node_id: NodeId) -> Position:
         """
-        获取节点的物理位置坐标。
+        获取节点的物理位置坐标。使用直角坐标系，原点在左下角。
 
         Args:
             node_id: 节点ID
 
         Returns:
-            节点位置坐标 (row, col)
+            节点位置坐标 (x, y)，其中x是水平方向，y是垂直方向
         """
         if not (0 <= node_id < self.NUM_NODE):
             raise ValueError(f"节点ID {node_id} 超出范围 [0, {self.NUM_NODE-1}]")
@@ -284,3 +289,119 @@ class CrossRingTopology(BaseNoCTopology):
     def __repr__(self) -> str:
         """详细字符串表示。"""
         return f"CrossRingTopology(rows={self.NUM_ROW}, cols={self.NUM_COL}, " f"nodes={self.NUM_NODE}, routing={self.routing_strategy.value})"
+
+    def _build_routing_table(self) -> None:
+        """构建路由表：预计算所有节点对的完整路径"""
+        # 从配置中获取路由策略，默认为XY
+        routing_strategy = getattr(self.crossring_config, "ROUTING_STRATEGY", "XY")
+        if hasattr(routing_strategy, "value"):
+            routing_strategy = routing_strategy.value
+        
+        # 确保路由策略是字符串
+        if routing_strategy not in ["XY", "YX"]:
+            routing_strategy = "XY"  # 默认为XY路由
+        
+        for src in range(self.NUM_NODE):
+            self.routing_table[src] = {}
+            for dst in range(self.NUM_NODE):
+                if src == dst:
+                    self.routing_table[src][dst] = [src]  # 自己到自己
+                else:
+                    # 使用路由策略计算路径
+                    path = self._calculate_path(src, dst, routing_strategy)
+                    self.routing_table[src][dst] = path
+
+    def _calculate_path(self, src: NodeId, dst: NodeId, strategy: str) -> List[NodeId]:
+        """根据路由策略计算路径"""
+        src_col, src_row = self.get_node_position(src)
+        dst_col, dst_row = self.get_node_position(dst)
+        
+        path = [src]
+        current_col, current_row = src_col, src_row
+        
+        if strategy == "XY":
+            # 先水平移动
+            while current_col != dst_col:
+                if current_col < dst_col:
+                    current_col += 1
+                else:
+                    current_col -= 1
+                node_id = self._position_to_node_id(current_col, current_row)
+                path.append(node_id)
+            
+            # 再垂直移动
+            while current_row != dst_row:
+                if current_row < dst_row:
+                    current_row += 1
+                else:
+                    current_row -= 1
+                node_id = self._position_to_node_id(current_col, current_row)
+                path.append(node_id)
+        
+        elif strategy == "YX":
+            # 先垂直移动
+            while current_row != dst_row:
+                if current_row < dst_row:
+                    current_row += 1
+                else:
+                    current_row -= 1
+                node_id = self._position_to_node_id(current_col, current_row)
+                path.append(node_id)
+            
+            # 再水平移动
+            while current_col != dst_col:
+                if current_col < dst_col:
+                    current_col += 1
+                else:
+                    current_col -= 1
+                node_id = self._position_to_node_id(current_col, current_row)
+                path.append(node_id)
+        return path
+
+    def _position_to_node_id(self, col: int, row: int) -> NodeId:
+        """将坐标转换为节点ID"""
+        # 根据CrossRing的坐标系统
+        actual_row = self.NUM_ROW - 1 - row  # 转换回原始行编号
+        return actual_row * self.NUM_COL + col
+
+    def get_routing_path(self, src: NodeId, dst: NodeId) -> List[NodeId]:
+        """获取从src到dst的完整路径"""
+        return self.routing_table[src][dst]
+
+    def get_next_direction(self, src: NodeId, dst: NodeId) -> str:
+        """获取从src到dst的下一跳方向"""
+        path = self.routing_table[src][dst]
+        
+        if len(path) <= 1:
+            return "EQ"  # 已到达目标
+        
+        next_node = path[1]  # 下一跳节点
+        return self._get_direction_to_neighbor(src, next_node)
+
+    def _get_direction_to_neighbor(self, src: NodeId, dst: NodeId) -> str:
+        """计算从src到相邻节点dst的方向"""
+        src_col, src_row = self.get_node_position(src)
+        dst_col, dst_row = self.get_node_position(dst)
+        
+        if dst_col > src_col:
+            return "TR"  # 向右
+        elif dst_col < src_col:
+            return "TL"  # 向左
+        elif dst_row > src_row:
+            return "TU"  # 向上
+        elif dst_row < src_row:
+            return "TD"  # 向下
+        else:
+            return "EQ"  # 同一位置
+
+    def print_routing_table(self):
+        """打印3x3路由表 - 显示完整路径"""
+        print("=== CrossRing 3x3 路由表 ===")
+        print("格式: src->dst: [完整路径]")
+        
+        for src in range(self.NUM_NODE):
+            for dst in range(self.NUM_NODE):
+                if src != dst:
+                    path = self.routing_table[src][dst]
+                    path_str = "->".join(map(str, path))
+                    print(f"{src}到{dst}: {path_str}")

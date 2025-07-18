@@ -19,7 +19,7 @@ from ..config import CrossRingConfig, RoutingStrategy
 class InjectQueue:
     """注入队列管理类。"""
     
-    def __init__(self, node_id: int, coordinates: Tuple[int, int], config: CrossRingConfig, logger: logging.Logger):
+    def __init__(self, node_id: int, coordinates: Tuple[int, int], config: CrossRingConfig, logger: logging.Logger, topology=None):
         """
         初始化注入队列管理器。
         
@@ -28,11 +28,13 @@ class InjectQueue:
             coordinates: 节点坐标
             config: CrossRing配置
             logger: 日志记录器
+            topology: 拓扑对象（用于路由表查询）
         """
         self.node_id = node_id
         self.coordinates = coordinates
         self.config = config
         self.logger = logger
+        self.topology = topology
         
         # 获取FIFO配置
         self.iq_ch_depth = getattr(config, "IQ_CH_DEPTH", 10)
@@ -213,7 +215,24 @@ class InjectQueue:
                 
     def _calculate_routing_direction(self, flit: CrossRingFlit) -> str:
         """
-        根据配置的路由策略计算flit的路由方向。
+        使用预计算的路由表获取flit的路由方向。
+        
+        Args:
+            flit: 要路由的flit
+            
+        Returns:
+            路由方向（"TR", "TL", "TU", "TD", "EQ"）
+        """
+        # 如果有topology对象，使用路由表
+        if self.topology and hasattr(self.topology, 'routing_table'):
+            return self.topology.get_next_direction(self.node_id, flit.destination)
+        
+        # 回退到原始的路由计算方法
+        return self._calculate_routing_direction_fallback(flit)
+    
+    def _calculate_routing_direction_fallback(self, flit: CrossRingFlit) -> str:
+        """
+        回退路由计算方法（当路由表不可用时）。
         
         Args:
             flit: 要路由的flit
@@ -223,7 +242,7 @@ class InjectQueue:
         """
         # 获取目标坐标
         if hasattr(flit, "dest_coordinates"):
-            dest_row, dest_col = flit.dest_coordinates
+            dest_col, dest_row = flit.dest_coordinates  # (x, y) -> (col, row)
         elif hasattr(flit, "dest_xid") and hasattr(flit, "dest_yid"):
             dest_col, dest_row = flit.dest_xid, flit.dest_yid
         else:
@@ -232,7 +251,7 @@ class InjectQueue:
             dest_col = flit.destination % num_col
             dest_row = flit.destination // num_col
             
-        curr_row, curr_col = self.coordinates
+        curr_col, curr_row = self.coordinates  # self.coordinates是(x, y)格式，即(col, row)
         
         # 如果已经到达目标位置
         if dest_row == curr_row and dest_col == curr_col:

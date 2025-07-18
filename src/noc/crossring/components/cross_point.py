@@ -171,7 +171,6 @@ class CrossRingTagManager:
         }
 
         # E-Tag配置参数
-        # TR和TD的T1最大值应该等于TL和TU的T0容量，而不是无穷大
         tl_t0_capacity = getattr(config.fifo_config, "RB_IN_DEPTH", 16)  # TL方向T0容量
         tu_t0_capacity = getattr(config.fifo_config, "EQ_IN_DEPTH", 16)  # TU方向T0容量
 
@@ -182,7 +181,12 @@ class CrossRingTagManager:
                 "can_upgrade_to_t0": True,
                 "has_dedicated_entries": True,
             },
-            "TR": {"t2_ue_max": getattr(config.tag_config, "TR_ETAG_T2_UE_MAX", 12), "t1_ue_max": tl_t0_capacity, "can_upgrade_to_t0": False, "has_dedicated_entries": False},
+            "TR": {
+                "t2_ue_max": getattr(config.tag_config, "TR_ETAG_T2_UE_MAX", 12),
+                "t1_ue_max": tl_t0_capacity,
+                "can_upgrade_to_t0": False,
+                "has_dedicated_entries": False,
+            },
             "TU": {
                 "t2_ue_max": getattr(config.tag_config, "TU_ETAG_T2_UE_MAX", 8),
                 "t1_ue_max": getattr(config.tag_config, "TU_ETAG_T1_UE_MAX", 15),
@@ -325,9 +329,7 @@ class CrossRingTagManager:
             return False
 
         # 激活I-Tag预约
-        self.itag_states[channel][direction] = ITagState(
-            active=True, reserved_slot_id=reserved_slot.slot_id, reserver_node_id=self.node_id, trigger_cycle=cycle, wait_cycles=0, direction=direction
-        )
+        self.itag_states[channel][direction] = ITagState(active=True, reserved_slot_id=reserved_slot.slot_id, reserver_node_id=self.node_id, trigger_cycle=cycle, wait_cycles=0, direction=direction)
 
         # 在slot上设置预约标记
         reserved_slot.reserve_itag(self.node_id, direction)
@@ -764,8 +766,7 @@ class CrossRingTagManager:
             },
             "etag_states": {
                 channel: {
-                    sub_dir: {"marked": state.marked, "priority": state.priority.value if state.priority else None, "failed_attempts": state.failed_attempts}
-                    for sub_dir, state in sub_dirs.items()
+                    sub_dir: {"marked": state.marked, "priority": state.priority.value if state.priority else None, "failed_attempts": state.failed_attempts} for sub_dir, state in sub_dirs.items()
                 }
                 for channel, sub_dirs in self.etag_states.items()
             },
@@ -803,7 +804,7 @@ class CrossRingCrossPoint:
         direction: CrossPointDirection,
         config: CrossRingConfig,
         coordinates: Tuple[int, int] = None,
-        parent_node = None,
+        parent_node=None,
         logger: Optional[logging.Logger] = None,
     ):
         """
@@ -1002,15 +1003,21 @@ class CrossRingCrossPoint:
         if not self.parent_node:
             return False, ""
 
-        # 获取坐标信息
+        # 首先检查是否到达最终目的地
+        if hasattr(flit, "should_eject_at_node") and flit.should_eject_at_node(self.parent_node.node_id):
+            # 根据CrossPoint方向选择下环方式
+            if self.direction == CrossPointDirection.HORIZONTAL:
+                return True, "RB"  # 横向环通过RB下环
+            else:
+                return True, "EQ"  # 纵向环直接下环
+        
+        # 获取坐标信息（直角坐标系，原点在左下角）
         if hasattr(flit, "dest_coordinates"):
             dest_x, dest_y = flit.dest_coordinates
         else:
             # 没有坐标信息，使用节点ID判断
-            is_local = (hasattr(flit, "destination") and flit.destination == self.parent_node.node_id) or (
-                hasattr(flit, "dest_node_id") and flit.dest_node_id == self.parent_node.node_id
-            )
-            return (is_local, "IP") if is_local else (False, "")
+            is_local = (hasattr(flit, "destination") and flit.destination == self.parent_node.node_id) or (hasattr(flit, "dest_node_id") and flit.dest_node_id == self.parent_node.node_id)
+            return (is_local, "EQ") if is_local else (False, "")
 
         curr_x, curr_y = self.parent_node.coordinates
 
@@ -1022,22 +1029,46 @@ class CrossRingCrossPoint:
         # 根据CrossPoint方向、路由策略和维度匹配判断下环策略
         if current_direction:
             if self.direction == CrossPointDirection.HORIZONTAL and current_direction in ["TR", "TL"]:
-                # 水平CrossPoint: X维度到达时判断下环目标
-                if dest_x == curr_x:
-                    # XY路由：水平环必须通过RB下环
+                # 水平CrossPoint: 处理水平环上的flit（x方向移动）
+                if dest_x == curr_x and dest_y == curr_y:
+                    # 到达目标节点，横向环需要通过RB下环到IP
+                    return True, "RB"
+                elif dest_y == curr_y and dest_x != curr_x:
+                    # Y维度匹配但X维度不匹配，继续在水平环传输
+                    return False, ""
+                elif dest_y != curr_y:
+                    # Y维度不匹配，需要维度转换
                     if routing_strategy == "XY":
-                        return True, "RB"  # XY路由水平环必须走RB
-                    else:  # YX路由：水平环可以直接下环到EQ
-                        return True, "EQ" if dest_y == curr_y else "RB"
+                        # XY路由：先完成X维度，再转换到Y维度
+                        if dest_x == curr_x:
+                            return True, "RB"  # X维度已完成，转换到垂直环
+                        else:
+                            return False, ""  # X维度未完成，继续在水平环传输
+                    else:  # YX路由
+                        return True, "RB"  # YX路由需要通过RB转换到垂直环
+                # 默认情况：继续在水平环传输
+                return False, ""
 
             elif self.direction == CrossPointDirection.VERTICAL and current_direction in ["TU", "TD"]:
-                # 垂直CrossPoint: Y维度到达时判断下环目标
-                if dest_y == curr_y:
-                    # XY路由：垂直环可以通过EQ下环，YX路由：垂直环只能通过RB下环
+                # 垂直CrossPoint: 处理垂直环上的flit（y方向移动）
+                if dest_y == curr_y and dest_x == curr_x:
+                    # 到达目标节点，纵向环直接下环到IP
+                    return True, "EQ"
+                elif dest_x == curr_x and dest_y != curr_y:
+                    # X维度匹配但Y维度不匹配，继续在垂直环传输
+                    return False, ""
+                elif dest_x != curr_x:
+                    # X维度不匹配，需要维度转换
                     if routing_strategy == "YX":
-                        return True, "RB"  # YX路由垂直环必须走RB
-                    else:  # XY或其他路由
-                        return True, "EQ" if dest_x == curr_x else "RB"
+                        # YX路由：先完成Y维度，再转换到X维度
+                        if dest_y == curr_y:
+                            return True, "RB"  # Y维度已完成，转换到水平环
+                        else:
+                            return False, ""  # Y维度未完成，继续在垂直环传输
+                    else:  # XY路由
+                        return True, "RB"  # XY路由需要通过RB转换到水平环
+                # 默认情况：继续在垂直环传输
+                return False, ""
 
         return False, ""
 
@@ -1252,9 +1283,7 @@ class CrossRingCrossPoint:
                 if self.parent_node:
                     ring_bridge_flit = self.parent_node.get_ring_bridge_output_flit(direction, channel)
                     if ring_bridge_flit and self.can_inject_flit(direction, channel):
-                        self._injection_transfer_plan.append(
-                            {"type": "ring_bridge_reinject", "direction": direction, "channel": channel, "flit": ring_bridge_flit, "priority": "high"}
-                        )
+                        self._injection_transfer_plan.append({"type": "ring_bridge_reinject", "direction": direction, "channel": channel, "flit": ring_bridge_flit, "priority": "high"})
 
         # 然后处理正常的inject_direction_fifos（FIFO流水线逻辑）
         for direction in self.managed_directions:
@@ -1263,9 +1292,7 @@ class CrossRingCrossPoint:
                     direction_fifo = node_inject_fifos[channel][direction]
                     # 只有在FIFO有数据且环路可以接受时才计划传输
                     if direction_fifo.valid_signal() and self.can_inject_flit(direction, channel):
-                        self._injection_transfer_plan.append(
-                            {"type": "fifo_pipeline_read", "direction": direction, "channel": channel, "source_fifo": direction_fifo, "priority": "normal"}
-                        )
+                        self._injection_transfer_plan.append({"type": "fifo_pipeline_read", "direction": direction, "channel": channel, "source_fifo": direction_fifo, "priority": "normal"})
 
         # 更新等待状态（不执行传输）
         for channel in ["req", "rsp", "data"]:
@@ -1285,9 +1312,7 @@ class CrossRingCrossPoint:
                     self.logger.debug(f"CrossPoint {self.crosspoint_id} 成功下环到ring_bridge: {transfer['direction']} {transfer['channel']}")
 
             elif transfer["type"] == "to_eject_fifo":
-                ejected_flit = self.try_eject_flit(
-                    transfer["slot"], transfer["channel"], len(transfer["target_fifo"].internal_queue), transfer["target_fifo"].internal_queue.maxlen
-                )
+                ejected_flit = self.try_eject_flit(transfer["slot"], transfer["channel"], len(transfer["target_fifo"].internal_queue), transfer["target_fifo"].internal_queue.maxlen)
                 if ejected_flit and transfer["target_fifo"].write_input(ejected_flit):
                     ejected_flit.flit_position = f"EQ_{transfer['direction']}"
                     self.logger.debug(f"CrossPoint {self.crosspoint_id} 成功下环到EQ: {transfer['direction']} {transfer['channel']}")

@@ -29,14 +29,14 @@ __author__ = "C2C Mesh Team"
 __all__ = [
     # 核心类
     "MeshConfig",
-    "MeshConfiguration", 
+    "MeshConfiguration",
     "MeshTopology",
     "MeshModel",
     "MeshPacket",
     "MeshRouter",
     # 便捷函数
     "create_mesh_config_2x2",
-    "create_mesh_config_4x4", 
+    "create_mesh_config_4x4",
     "create_mesh_config_8x8",
     "create_mesh_config_custom",
 ]
@@ -49,7 +49,7 @@ logger.info(f"Mesh NoC模块加载完成 (v{__version__})")
 print(f"Mesh NoC模块已加载 - 版本 {__version__}")
 print("支持的功能:")
 print("  - 2D Mesh拓扑")
-print("  - XY路由算法") 
+print("  - XY路由算法")
 print("  - 最短路径路由")
 print("  - 虚拟通道")
 print("  - 性能监控")

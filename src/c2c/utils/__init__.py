@@ -12,7 +12,7 @@ from src.c2c.utils.exceptions import (
 )
 
 
-__version__ = "1.0.0"
+__version__ = "1.2.0"
 
 __all__ = [
     # 异常类

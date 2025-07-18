@@ -29,17 +29,18 @@ class CrossRingNode:
     简化的组件化设计，主要负责协调各个组件。
     """
 
-    def __init__(self, node_id: int, coordinates: Tuple[int, int], config: CrossRingConfig, logger: logging.Logger):
+    def __init__(self, node_id: int, coordinates: Tuple[int, int], config: CrossRingConfig, logger: logging.Logger, topology=None):
         """初始化CrossRing节点。"""
         self.node_id = node_id
         self.coordinates = coordinates
         self.config = config
         self.logger = logger
+        self.topology = topology
 
         # 初始化组件
-        self.inject_queue = InjectQueue(node_id, coordinates, config, logger)
+        self.inject_queue = InjectQueue(node_id, coordinates, config, logger, topology=topology)
         self.eject_queue = EjectQueue(node_id, coordinates, config, logger)
-        self.ring_bridge = RingBridge(node_id, coordinates, config, logger)
+        self.ring_bridge = RingBridge(node_id, coordinates, config, logger, topology=topology)
 
         # 初始化CrossPoint实例
         self.horizontal_crosspoint = CrossRingCrossPoint(

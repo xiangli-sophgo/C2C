@@ -34,8 +34,8 @@ from .link import CrossRingSlot, RingSlice
 from .components.cross_point import CrossRingTagManager, CrossRingCrossPoint, CrossPointDirection
 
 # 版本信息
-__version__ = "1.0.0"
-__author__ = "C2C CrossRing Team"
+__version__ = "1.3.0"
+__author__ = "xiang.li@sophgo.com"
 
 # 主要类导出
 __all__ = [
@@ -55,7 +55,7 @@ __all__ = [
     "CrossRingModel",
     # CrossRing组件
     "CrossRingSlot",
-    "RingSlice", 
+    "RingSlice",
     "CrossRingCrossPoint",
     "CrossRingTagManager",
     # 便捷函数
@@ -84,13 +84,9 @@ def quick_start_simulation(config_name: str = "test", max_cycles: int = 10000, n
 
     # 创建模型
     model = CrossRingModel(config)
-    
+
     # 简化的测试结果
-    return {
-        "config": config.config_name,
-        "topology": f"{config.NUM_ROW}x{config.NUM_COL}",
-        "status": "架构重构完成"
-    }
+    return {"config": config.config_name, "topology": f"{config.NUM_ROW}x{config.NUM_COL}", "status": "架构重构完成"}
 
 
 def get_module_info() -> dict:

@@ -130,18 +130,29 @@ class CrossRingFlit(BaseFlit):
         # CrossRing的有效性检查需要考虑环路结构
         # 这里提供简化版本
         return next_node in self.path
+    
+    def is_next_hop_destination(self, next_node: NodeId) -> bool:
+        """检查下一跳是否是最终目的地"""
+        return next_node == self.destination
+    
+    def should_eject_at_node(self, current_node: NodeId) -> bool:
+        """检查是否应该在当前节点下环（到达目标节点）"""
+        return current_node == self.destination
 
     # ========== CrossRing特有方法 ==========
 
-    def set_crossring_coordinates(self, num_col: int) -> None:
-        """设置CrossRing坐标信息"""
+    def set_crossring_coordinates(self, num_col: int, num_row: int = 3) -> None:
+        """设置CrossRing坐标信息。使用直角坐标系，原点在左下角。"""
         self._num_col = num_col
-        self.dest_xid = self.destination % num_col
-        self.dest_yid = self.destination // num_col
+        self.dest_xid = self.destination % num_col  # x坐标：水平方向
+        self.dest_yid = self.destination // num_col  # 这是原始row，需要转换
+        
+        # 计算实际的y坐标（直角坐标系）
+        dest_y = num_row - 1 - self.dest_yid  # y坐标：垂直方向，从下到上
 
         # 设置dest_coordinates属性（用于路由计算）
-        # 修复：使用(row, col)格式，与topology保持一致
-        self.dest_coordinates = (self.dest_yid, self.dest_xid)
+        # 使用(x, y)格式，与topology保持一致
+        self.dest_coordinates = (self.dest_xid, dest_y)
 
         # 设置源坐标到custom_fields
         src_x = self.source % num_col
@@ -398,7 +409,7 @@ def create_crossring_flit(source: NodeId, destination: NodeId, path: List[NodeId
 
     flit = CrossRingFlit(source=source, destination=destination, path=path, **kwargs)
 
-    flit.set_crossring_coordinates(num_col)
+    flit.set_crossring_coordinates(num_col, num_row=3)
     return flit
 
 
@@ -431,7 +442,7 @@ def create_crossring_flit(source: NodeId, destination: NodeId, path: Optional[Li
     flit = _global_crossring_flit_pool.get_flit(source=source, destination=destination, path=path, **kwargs)
 
     # 设置CrossRing坐标信息
-    flit.set_crossring_coordinates(num_col)
+    flit.set_crossring_coordinates(num_col, num_row=3)
 
     return flit
 

@@ -1,6 +1,7 @@
 """
-CrossRing一体化分析器
-包含带宽、延迟、绕环和Tag数据分析，以及图表生成功能
+NoC结果分析器
+通用的NoC性能分析工具，包含带宽、延迟、流量分析等功能
+支持多种NoC拓扑（CrossRing、Mesh等）
 """
 
 from typing import Dict, List, Optional, Any
@@ -61,8 +62,8 @@ class WorkingInterval:
         return self.total_bytes / self.duration if self.duration > 0 else 0.0
 
 
-class CrossRingAnalyzer:
-    """CrossRing一体化分析器"""
+class ResultAnalyzer:
+    """通用NoC结果分析器"""
 
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -84,8 +85,8 @@ class CrossRingAnalyzer:
             # 使用整数除法，与老版本保持一致
             start_time = lifecycle.created_cycle // network_frequency
             end_time = lifecycle.completed_cycle // network_frequency
-            rn_end_time = end_time  # CrossRing简化处理
-            sn_end_time = end_time  # CrossRing简化处理
+            rn_end_time = end_time  # 简化处理
+            sn_end_time = end_time  # 简化处理
 
             # 计算延迟（按照老版本方式）
             total_latency = lifecycle.completed_cycle - lifecycle.created_cycle
@@ -347,7 +348,7 @@ class CrossRingAnalyzer:
             "绕环统计": {"总绕环次数": 0, "平均绕环距离": 0},
         }
 
-        # 从CrossRing节点中收集Tag统计数据
+        # 从NoC节点中收集Tag统计数据
         total_itag_triggers = 0
         total_etag_upgrades = 0
         total_ring_hops = 0
@@ -398,7 +399,7 @@ class CrossRingAnalyzer:
 
             ax.set_xlabel("时间 (μs)")
             ax.set_ylabel("带宽 (GB/s)")
-            ax.set_title("CrossRing 带宽曲线图")
+            ax.set_title("NoC 带宽曲线图")
             ax.legend()
             ax.grid(True, alpha=0.3)
 
@@ -574,14 +575,14 @@ class CrossRingAnalyzer:
         
         return metrics
 
-    def analyze_crossring_results(self, request_tracker, config, model, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True) -> Dict[str, Any]:
+    def analyze_noc_results(self, request_tracker, config, model, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True) -> Dict[str, Any]:
         """
-        CrossRing仿真结果完整分析
+        NoC仿真结果完整分析
 
         Args:
             request_tracker: RequestTracker实例
-            config: CrossRing配置
-            model: CrossRing模型实例
+            config: NoC配置
+            model: NoC模型实例
             results: 仿真基础结果
             enable_visualization: 是否生成图表
             save_results: 是否保存结果文件

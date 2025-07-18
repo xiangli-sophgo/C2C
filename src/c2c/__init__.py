@@ -23,7 +23,7 @@ from .protocol.router import Router
 
 from .utils.exceptions import *
 
-__version__ = "1.0.0"
+__version__ = "1.2.0"
 __author__ = "C2C Development Team"
 
 __all__ = [

@@ -24,7 +24,7 @@ from .link import CrossRingLink
 from src.noc.utils.types import NodeId
 from src.noc.debug import RequestTracker, RequestState, FlitType
 from src.noc.base.model import BaseNoCModel
-from src.noc.analysis.crossring_analyzer import CrossRingAnalyzer
+from src.noc.analysis.result_analyzer import ResultAnalyzer
 from src.noc.analysis.fifo_analyzer import FIFOStatsCollector
 
 
@@ -127,7 +127,7 @@ class CrossRingModel(BaseNoCModel):
 
         # 检查所有要跟踪的packet_ids，使用base class的trace_packets
         trace_packets = self.trace_packets if self.trace_packets else self.debug_packet_ids
-        
+
         for packet_id in list(trace_packets):
             if self._should_debug_packet(packet_id):
                 # 获取lifecycle - 支持整数和字符串形式的packet_id
@@ -140,25 +140,26 @@ class CrossRingModel(BaseNoCModel):
                     lifecycle = self.request_tracker.active_requests.get(int_packet_id)
                     if not lifecycle:
                         lifecycle = self.request_tracker.completed_requests.get(int_packet_id)
-                # 如果整数形式找不到，尝试字符串形式  
+                # 如果整数形式找不到，尝试字符串形式
                 elif not lifecycle and isinstance(packet_id, int):
                     str_packet_id = str(packet_id)
                     lifecycle = self.request_tracker.active_requests.get(str_packet_id)
                     if not lifecycle:
                         lifecycle = self.request_tracker.completed_requests.get(str_packet_id)
-                
+
                 if lifecycle:
                     # 简化条件：只要有flit就打印，或者状态变化就打印
                     total_flits = len(lifecycle.request_flits) + len(lifecycle.response_flits) + len(lifecycle.data_flits)
                     should_print = total_flits > 0 or lifecycle.current_state != RequestState.CREATED or self.request_tracker.should_print_debug(packet_id)
 
                     if should_print:
-                        print(f"🔍 周期{self.cycle}: packet_id={packet_id}")
-
+                        print(f"周期{self.cycle}: ")
+                        print(f" ", end="")
                         # 打印所有flit的位置
                         all_flits = lifecycle.request_flits + lifecycle.response_flits + lifecycle.data_flits
                         for flit in all_flits:
-                            print(f"    {flit}")
+                            print(f"{flit}", end=" | ")
+                        print("")
 
                     # 如果完成，从跟踪列表中移除
                     if lifecycle.current_state.value == "completed":
@@ -173,7 +174,7 @@ class CrossRingModel(BaseNoCModel):
         Args:
             node_id: 节点ID
             ip_type: IP类型
-            key: IP接口键名 (可选，默认为 {ip_type}_node{node_id})
+            key: IP接口键名
 
         Returns:
             创建成功返回True，失败返回False
@@ -183,7 +184,7 @@ class CrossRingModel(BaseNoCModel):
             return False
 
         if key is None:
-            key = f"{ip_type}_node{node_id}"
+            key = ip_type
 
         try:
             ip_interface = CrossRingIPInterface(config=self.config, ip_type=ip_type, node_id=node_id, model=self)
@@ -242,7 +243,7 @@ class CrossRingModel(BaseNoCModel):
                 self.logger.warning(f"无效的IP类型: {ip_type} for node {node_id}")
                 continue
 
-            key = f"{ip_type}_node{node_id}"
+            key = ip_type
             try:
                 ip_interface = CrossRingIPInterface(config=self.config, ip_type=ip_type, node_id=node_id, model=self)
                 self.ip_interfaces[key] = ip_interface
@@ -288,7 +289,7 @@ class CrossRingModel(BaseNoCModel):
             coordinates = self._get_node_coordinates(node_id)
 
             try:
-                node = CrossRingNode(node_id=node_id, coordinates=coordinates, config=self.config, logger=self.logger)
+                node = CrossRingNode(node_id=node_id, coordinates=coordinates, config=self.config, logger=self.logger, topology=self.topology)
                 self.crossring_nodes[node_id] = node
             except Exception as e:
                 import traceback
@@ -823,21 +824,21 @@ class CrossRingModel(BaseNoCModel):
                 req = ready_requests[0]
                 cycle, src, src_type, dst, dst_type, op, burst, traffic_id = req
                 # print(f"  - 解析请求: src={src}, src_type={src_type}, dst={dst}, dst_type={dst_type}")
-                
+
                 # 检查源节点的IP接口
                 source_ip = self._find_ip_interface_for_request(src, "read" if op.upper() == "R" else "write", src_type)
                 # print(f"  - 源节点{src}的IP接口: {source_ip}")
                 # if source_ip:
-                    # print(f"    IP类型: {source_ip.ip_type}, 节点: {source_ip.node_id}")
+                # print(f"    IP类型: {source_ip.ip_type}, 节点: {source_ip.node_id}")
                 # else:
-                    # print(f"    ❌ 未找到源节点{src}的IP接口")
-                    # print(f"    可用IP接口: {list(self._ip_registry.keys())}")
-                
+                # print(f"    ❌ 未找到源节点{src}的IP接口")
+                # print(f"    可用IP接口: {list(self._ip_registry.keys())}")
+
                 injected = self._inject_traffic_requests(ready_requests)
                 # if injected > 0:
-                    # print(f"🎯 周期{self.cycle}: 从traffic文件注入了{injected}个请求")
+                # print(f"🎯 周期{self.cycle}: 从traffic文件注入了{injected}个请求")
                 # else:
-                    # print(f"❌ 周期{self.cycle}: 注入失败，ready_requests={len(ready_requests)}, injected={injected}")
+                # print(f"❌ 周期{self.cycle}: 注入失败，ready_requests={len(ready_requests)}, injected={injected}")
 
         # 阶段0.5：预更新阶段 - 更新所有FIFO状态，使新写入的数据立即反映在valid/ready信号中
         self._step_pre_update_phase()
@@ -973,7 +974,7 @@ class CrossRingModel(BaseNoCModel):
         """
         if ip_type:
             # 精确匹配指定IP类型
-            target_key = f"{ip_type}_node{node_id}"
+            target_key = ip_type
             if target_key in self._ip_registry:
                 return self._ip_registry[target_key]
 
@@ -1099,8 +1100,8 @@ class CrossRingModel(BaseNoCModel):
         Returns:
             详细的分析结果
         """
-        analyzer = CrossRingAnalyzer()
-        return analyzer.analyze_crossring_results(self.request_tracker, self.config, self, results, enable_visualization, save_results)  # 传入模型实例用于Tag数据分析
+        analyzer = ResultAnalyzer()
+        return analyzer.analyze_noc_results(self.request_tracker, self.config, self, results, enable_visualization, save_results)  # 传入模型实例用于Tag数据分析
 
     def _analyze_ip_interfaces(self, ip_stats: Dict[str, Any]) -> Dict[str, Any]:
         """分析IP接口统计"""

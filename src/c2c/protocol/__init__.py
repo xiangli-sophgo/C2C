@@ -39,7 +39,7 @@ from .transaction_manager import TransactionManager
 # 导入内存类型
 from .memory_types import MemoryType
 
-__version__ = "1.0.0"
+__version__ = "1.2.0"
 
 __all__ = [
     # 基础协议

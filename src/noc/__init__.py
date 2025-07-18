@@ -93,7 +93,7 @@ from .utils.factory import (
 )
 
 # 版本信息
-__version__ = "1.0.0"
+__version__ = "1.2.0"
 __author__ = "NoC Development Team"
 __description__ = "NoC抽象层 - 统一的片内网络拓扑框架"
 

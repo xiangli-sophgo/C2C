@@ -6,7 +6,7 @@ A comprehensive framework for modeling SG2260E chip-to-chip communication topolo
 Supports various interconnect topologies including cascade, switch-based, tree, and torus configurations.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.2.0"
 __author__ = "C2C Development Team"
 __email__ = "contact@c2c-topology.com"
 __description__ = "A topology modeling framework for SG2260E chip-to-chip communication"

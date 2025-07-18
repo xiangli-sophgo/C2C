@@ -19,7 +19,7 @@ logging.disable(logging.CRITICAL)
 def track_request_smart():
     """使用新的全局调试控制跟踪请求"""
     # 创建2x2配置 - 使用小规模拓扑减少输出
-    config = CrossRingConfig.create_custom_config(num_row=2, num_col=2)
+    config = CrossRingConfig.create_custom_config(num_row=3, num_col=3)
 
     traffic_file = Path(__file__).parent.parent.parent / "traffic_data" / "sample_traffic.txt"
     if not traffic_file.exists():
@@ -33,10 +33,7 @@ def track_request_smart():
     with contextlib.redirect_stdout(io.StringIO()):
         model = CrossRingModel(config, traffic_file_path=str(traffic_file))
 
-        # 手动连接IP接口（避免initialize_network的问题）
-        if hasattr(model, "crossring_nodes") and 0 in model.crossring_nodes and 1 in model.crossring_nodes:
-            model.crossring_nodes[0].connect_ip("gdma_0_node0")
-            model.crossring_nodes[1].connect_ip("ddr_1_node1")
+        # IP接口应该由模型自动创建并连接
 
     # 2. 设置TrafficScheduler并注入流量
     traffic_filename = traffic_file.name
@@ -59,33 +56,12 @@ def track_request_smart():
 
     print(f"✅ 成功设置TrafficScheduler，准备处理请求")
 
-    # 在cycle-accurate模式下，packet_id从pending_file_requests获取
-    # 运行几个周期让请求被实际注入
-    print("⏳ 运行仿真等待请求注入...")
-    for i in range(10):
-        print(f"  周期{model.cycle + 1}: 开始step...")
-        model.step()
-        print(f"  周期{model.cycle}: step完成, active_requests: {len(model.request_tracker.active_requests)}")
-        if model.request_tracker.active_requests:
-            break
-
-    # 获取实际注入的packet_id列表
-    active_packet_ids = list(model.request_tracker.active_requests.keys())
-    if not active_packet_ids:
-        print("❌ 没有活跃的请求被注入")
-        return False
-
-    print(f"📝 活跃的packet_id: {active_packet_ids}")
-
-    # 跟踪第一个packet_id
-    packet_id = active_packet_ids[0]
-
-    # 跟踪所有活跃的packet_id，包括可能的数据flit格式
-    all_packets = active_packet_ids
+    # 跟踪的packet_id
+    packet_id = 1
 
     # 启用全局调试模式，跟踪实际的packet_id
     # enable_debug方法签名: enable_debug(level: int = 1, trace_packets: List[str] = None, sleep_time: float = 0.0)
-    model.enable_debug(level=2, trace_packets=[str(packet_id)], sleep_time=0.5)
+    model.enable_debug(level=2, trace_packets=[str(packet_id)], sleep_time=0.1)
 
     print("-" * 60)
 
@@ -102,18 +78,43 @@ def track_request_smart():
     # 禁用调试模式
     model.disable_debug()
 
-    # 导出FIFO统计信息
+    # 执行结果分析
     print("-" * 60)
-    print("📊 导出FIFO统计信息...")
+    print("📊 开始结果分析...")
 
-    # 导出CSV文件
-    csv_path = model.export_fifo_statistics()
-    print(f"✅ FIFO统计信息已导出到: {csv_path}")
+    # 导入结果分析器
+    from src.noc.analysis.result_analyzer import ResultAnalyzer
 
-    # 显示统计摘要
-    summary = model.get_fifo_statistics_summary()
-    print("\n📈 FIFO统计摘要:")
-    print(summary)
+    # 创建分析器实例
+    analyzer = ResultAnalyzer()
+
+    # 执行分析
+    results = {"simulation_time": model.cycle, "total_requests": len(model.request_tracker.completed_requests), "topology": "CrossRing"}
+
+    analysis = analyzer.analyze_noc_results(request_tracker=model.request_tracker, config=model.config, model=model, results=results, enable_visualization=True, save_results=True)
+
+    # 显示分析结果摘要
+    print("\n📈 分析结果摘要:")
+    print("=" * 60)
+
+    if "带宽指标" in analysis:
+        bw_metrics = analysis["带宽指标"]
+        print(f"平均带宽: {bw_metrics.get('平均带宽', 'N/A')}")
+        print(f"峰值带宽: {bw_metrics.get('峰值带宽', 'N/A')}")
+        print(f"总传输量: {bw_metrics.get('总传输量', 'N/A')}")
+
+    if "延迟指标" in analysis:
+        lat_metrics = analysis["延迟指标"]
+        print(f"平均延迟: {lat_metrics.get('平均延迟', 'N/A')}")
+        print(f"最大延迟: {lat_metrics.get('最大延迟', 'N/A')}")
+        print(f"最小延迟: {lat_metrics.get('最小延迟', 'N/A')}")
+
+    if "输出文件" in analysis:
+        output_info = analysis["输出文件"]
+        print(f"分析结果已保存到: {output_info.get('分析结果文件', 'N/A')}")
+
+    print("=" * 60)
+    print("✅ 结果分析完成！")
 
 
 if __name__ == "__main__":
