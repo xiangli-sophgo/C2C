@@ -151,7 +151,7 @@ class CrossRingConfig(BaseNoCConfig):
         super().__init__(TopologyType.CROSSRING)
 
         # 基本拓扑参数
-        self.config_name = config_name
+        self.CONFIG_NAME = config_name
         self.NUM_COL = num_col
         self.NUM_ROW = num_row
         self.NUM_NODE = num_col * num_row
@@ -168,11 +168,11 @@ class CrossRingConfig(BaseNoCConfig):
         self.latency_config = LatencyConfiguration()
 
         # 路由策略属性
-        self.routing_strategy = RoutingStrategy(self.basic_config.ROUTING_STRATEGY)
-        self.arbitration_timeout = getattr(self.basic_config, "ARBITRATION_TIMEOUT", 10)
+        self.ROUTING_STRATEGY = RoutingStrategy(self.basic_config.ROUTING_STRATEGY)
+        self.ARBITRATION_TIMEOUT = getattr(self.basic_config, "ARBITRATION_TIMEOUT", 10)
 
         # 通道规格
-        self.channel_spec = {
+        self.CHANNEL_SPEC = {
             "gdma": 2,
             "sdma": 2,
             "cdma": 2,
@@ -181,10 +181,10 @@ class CrossRingConfig(BaseNoCConfig):
         }
 
         # Ring网络缓冲区深度配置
-        self.inject_buffer_depth = self.basic_config.INJECT_BUFFER_DEPTH
-        self.eject_buffer_depth = self.basic_config.EJECT_BUFFER_DEPTH
-        self.crosspoint_buffer_depth = self.basic_config.CROSSPOINT_BUFFER_DEPTH
-        self.slice_per_link = self.basic_config.SLICE_PER_LINK
+        self.INJECT_BUFFER_DEPTH = self.basic_config.INJECT_BUFFER_DEPTH
+        self.EJECT_BUFFER_DEPTH = self.basic_config.EJECT_BUFFER_DEPTH
+        self.CROSSPOINT_BUFFER_DEPTH = self.basic_config.CROSSPOINT_BUFFER_DEPTH
+        self.SLICE_PER_LINK = self.basic_config.SLICE_PER_LINK
 
         # 自动生成相关配置
         self._generate_derived_config()
@@ -197,26 +197,26 @@ class CrossRingConfig(BaseNoCConfig):
         # 安全地获取tracker配置
         if hasattr(self.tracker_config, "RN_R_TRACKER_OSTD"):
             # 计算缓冲区大小
-            self.rn_rdb_size = self.tracker_config.RN_R_TRACKER_OSTD * self.basic_config.BURST
-            self.rn_wdb_size = self.tracker_config.RN_W_TRACKER_OSTD * self.basic_config.BURST
-            self.sn_ddr_rdb_size = self.tracker_config.SN_DDR_R_TRACKER_OSTD * self.basic_config.BURST
-            self.sn_ddr_wdb_size = self.tracker_config.SN_DDR_W_TRACKER_OSTD * self.basic_config.BURST
-            self.sn_l2m_rdb_size = self.tracker_config.SN_L2M_R_TRACKER_OSTD * self.basic_config.BURST
-            self.sn_l2m_wdb_size = self.tracker_config.SN_L2M_W_TRACKER_OSTD * self.basic_config.BURST
+            self.RN_RDB_SIZE = self.tracker_config.RN_R_TRACKER_OSTD * self.basic_config.BURST
+            self.RN_WDB_SIZE = self.tracker_config.RN_W_TRACKER_OSTD * self.basic_config.BURST
+            self.SN_DDR_RDB_SIZE = self.tracker_config.SN_DDR_R_TRACKER_OSTD * self.basic_config.BURST
+            self.SN_DDR_WDB_SIZE = self.tracker_config.SN_DDR_W_TRACKER_OSTD * self.basic_config.BURST
+            self.SN_L2M_RDB_SIZE = self.tracker_config.SN_L2M_R_TRACKER_OSTD * self.basic_config.BURST
+            self.SN_L2M_WDB_SIZE = self.tracker_config.SN_L2M_W_TRACKER_OSTD * self.basic_config.BURST
         else:
             # 如果tracker_config是字典或未初始化，使用默认值
             tracker = TrackerConfiguration()
-            self.rn_rdb_size = tracker.RN_R_TRACKER_OSTD * self.basic_config.BURST
-            self.rn_wdb_size = tracker.RN_W_TRACKER_OSTD * self.basic_config.BURST
-            self.sn_ddr_rdb_size = tracker.SN_DDR_R_TRACKER_OSTD * self.basic_config.BURST
-            self.sn_ddr_wdb_size = tracker.SN_DDR_W_TRACKER_OSTD * self.basic_config.BURST
-            self.sn_l2m_rdb_size = tracker.SN_L2M_R_TRACKER_OSTD * self.basic_config.BURST
-            self.sn_l2m_wdb_size = tracker.SN_L2M_W_TRACKER_OSTD * self.basic_config.BURST
+            self.RN_RDB_SIZE = tracker.RN_R_TRACKER_OSTD * self.basic_config.BURST
+            self.RN_WDB_SIZE = tracker.RN_W_TRACKER_OSTD * self.basic_config.BURST
+            self.SN_DDR_RDB_SIZE = tracker.SN_DDR_R_TRACKER_OSTD * self.basic_config.BURST
+            self.SN_DDR_WDB_SIZE = tracker.SN_DDR_W_TRACKER_OSTD * self.basic_config.BURST
+            self.SN_L2M_RDB_SIZE = tracker.SN_L2M_R_TRACKER_OSTD * self.basic_config.BURST
+            self.SN_L2M_WDB_SIZE = tracker.SN_L2M_W_TRACKER_OSTD * self.basic_config.BURST
 
         # 生成通道名称列表
         self.ch_name_list = []
-        for key in self.channel_spec:
-            for idx in range(self.channel_spec[key]):
+        for key in self.CHANNEL_SPEC:
+            for idx in range(self.CHANNEL_SPEC[key]):
                 self.ch_name_list.append(f"{key}_{idx}")
 
     def _generate_ip_positions(self) -> None:
@@ -328,16 +328,16 @@ class CrossRingConfig(BaseNoCConfig):
             if tracker.SN_DDR_R_TRACKER_OSTD <= 0 or tracker.SN_L2M_R_TRACKER_OSTD <= 0:
                 errors.append(f"SN Tracker OSTD必须为正数 (SN_DDR_R_TRACKER_OSTD={tracker.SN_DDR_R_TRACKER_OSTD}, SN_L2M_R_TRACKER_OSTD={tracker.SN_L2M_R_TRACKER_OSTD})")
             # 缓冲区大小一致性验证
-            if hasattr(self, "rn_rdb_size") and self.rn_rdb_size != tracker.RN_R_TRACKER_OSTD * self.basic_config.BURST:
-                errors.append(f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (rn_rdb_size={self.rn_rdb_size}, RN_R_TRACKER_OSTD={tracker.RN_R_TRACKER_OSTD}, BURST={self.basic_config.BURST})")
+            if hasattr(self, "RN_RDB_SIZE") and self.RN_RDB_SIZE != tracker.RN_R_TRACKER_OSTD * self.basic_config.BURST:
+                errors.append(f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (RN_RDB_SIZE={self.RN_RDB_SIZE}, RN_R_TRACKER_OSTD={tracker.RN_R_TRACKER_OSTD}, BURST={self.basic_config.BURST})")
         elif isinstance(tracker, dict):
             rn_r_ostd = tracker.get("RN_R_TRACKER_OSTD", 64)
             rn_w_ostd = tracker.get("RN_W_TRACKER_OSTD", 32)
             if rn_r_ostd <= 0 or rn_w_ostd <= 0:
                 errors.append(f"RN Tracker OSTD必须为正数 (RN_R_TRACKER_OSTD={rn_r_ostd}, RN_W_TRACKER_OSTD={rn_w_ostd})")
             # 缓冲区大小一致性验证
-            if hasattr(self, "rn_rdb_size") and self.rn_rdb_size != rn_r_ostd * self.basic_config.BURST:
-                errors.append(f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (rn_rdb_size={self.rn_rdb_size}, RN_R_TRACKER_OSTD={rn_r_ostd}, BURST={self.basic_config.BURST})")
+            if hasattr(self, "RN_RDB_SIZE") and self.RN_RDB_SIZE != rn_r_ostd * self.basic_config.BURST:
+                errors.append(f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (RN_RDB_SIZE={self.RN_RDB_SIZE}, RN_R_TRACKER_OSTD={rn_r_ostd}, BURST={self.basic_config.BURST})")
 
         # IP配置验证 - 安全地访问属性
         ip_cfg = self.ip_config
@@ -381,7 +381,7 @@ class CrossRingConfig(BaseNoCConfig):
             "num_ip": self.NUM_IP,
             "num_rn": self.NUM_RN,
             "num_sn": self.NUM_SN,
-            "channel_spec": self.channel_spec,
+            "channel_spec": self.CHANNEL_SPEC,
             "ch_name_list": self.ch_name_list,
             "ip_positions": {
                 "ddr": self.ddr_send_position_list,
@@ -418,9 +418,9 @@ class CrossRingConfig(BaseNoCConfig):
             if hasattr(self.basic_config, key):
                 setattr(self.basic_config, key, value)
 
-        # 如果更新了路由策略，需要重新设置routing_strategy属性
-        if "routing_strategy" in kwargs:
-            self.routing_strategy = RoutingStrategy(self.basic_config.routing_strategy)
+        # 如果更新了路由策略，需要重新设置ROUTING_STRATEGY属性
+        if "ROUTING_STRATEGY" in kwargs:
+            self.ROUTING_STRATEGY = RoutingStrategy(self.basic_config.ROUTING_STRATEGY)
 
     def update_ip_config(self, **kwargs) -> None:
         """
@@ -467,7 +467,7 @@ class CrossRingConfig(BaseNoCConfig):
 
         # 更新配置
         self.basic_config.ROUTING_STRATEGY = strategy
-        self.routing_strategy = strategy_enum
+        self.ROUTING_STRATEGY = strategy_enum
 
     def get_routing_strategy(self) -> str:
         """
@@ -476,7 +476,7 @@ class CrossRingConfig(BaseNoCConfig):
         Returns:
             当前路由策略字符串
         """
-        return self.routing_strategy.value
+        return self.ROUTING_STRATEGY.value
 
     def set_preset_configuration(self, preset: str) -> None:
         """
@@ -529,7 +529,7 @@ class CrossRingConfig(BaseNoCConfig):
 
         # 添加CrossRing特有参数
         crossring_dict = {
-            "config_name": self.config_name,
+            "config_name": self.CONFIG_NAME,
             "num_col": self.NUM_COL,
             "num_row": self.NUM_ROW,
             "num_ip": self.NUM_IP,
@@ -542,7 +542,7 @@ class CrossRingConfig(BaseNoCConfig):
             "tracker_config": self.tracker_config.__dict__,
             "latency_config": self.latency_config.__dict__,
             # 其他参数
-            "channel_spec": self.channel_spec,
+            "channel_spec": self.CHANNEL_SPEC,
             "ch_name_list": self.ch_name_list,
             "ip_positions": {
                 "ddr": self.ddr_send_position_list,
@@ -568,7 +568,7 @@ class CrossRingConfig(BaseNoCConfig):
 
         # 加载CrossRing特有参数
         if "config_name" in config_dict:
-            self.config_name = config_dict["config_name"]
+            self.CONFIG_NAME = config_dict["config_name"]
         if "num_col" in config_dict:
             self.NUM_COL = config_dict["num_col"]
         if "num_row" in config_dict:
@@ -635,7 +635,7 @@ class CrossRingConfig(BaseNoCConfig):
 
         # 加载其他参数
         if "channel_spec" in config_dict:
-            self.channel_spec = config_dict["channel_spec"]
+            self.CHANNEL_SPEC = config_dict["channel_spec"]
         if "ch_name_list" in config_dict:
             self.ch_name_list = config_dict["ch_name_list"]
 
@@ -765,19 +765,19 @@ class CrossRingConfig(BaseNoCConfig):
             "rn_resources": {
                 "read_tracker_count": self.tracker_config.RN_R_TRACKER_OSTD,
                 "write_tracker_count": self.tracker_config.RN_W_TRACKER_OSTD,
-                "rdb_size": self.rn_rdb_size,
-                "wdb_size": self.rn_wdb_size,
+                "rdb_size": self.RN_RDB_SIZE,
+                "wdb_size": self.RN_WDB_SIZE,
             },
             "sn_resources": {
                 "ddr": {
                     "read_tracker_count": self.tracker_config.SN_DDR_R_TRACKER_OSTD,
                     "write_tracker_count": self.tracker_config.SN_DDR_W_TRACKER_OSTD,
-                    "wdb_size": self.sn_ddr_wdb_size,
+                    "wdb_size": self.SN_DDR_WDB_SIZE,
                 },
                 "l2m": {
                     "read_tracker_count": self.tracker_config.SN_L2M_R_TRACKER_OSTD,
                     "write_tracker_count": self.tracker_config.SN_L2M_W_TRACKER_OSTD,
-                    "wdb_size": self.sn_l2m_wdb_size,
+                    "wdb_size": self.SN_L2M_WDB_SIZE,
                 },
                 "tracker_release_latency": self.tracker_config.SN_TRACKER_RELEASE_LATENCY,
             },

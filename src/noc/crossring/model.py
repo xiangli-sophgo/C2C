@@ -13,6 +13,7 @@ from collections import defaultdict
 import time
 from enum import Enum
 import numpy as np
+import re
 
 from .config import CrossRingConfig, RoutingStrategy
 from .topology import CrossRingTopology
@@ -1208,7 +1209,6 @@ class CrossRingModel(BaseNoCModel):
         ip_id_lower = ip_id.lower()
         if "gdma" in ip_id_lower:
             # 提取gdma后的数字，如gdma_0 -> G0
-            import re
 
             match = re.search(r"gdma[_\-]?(\d+)", ip_id_lower)
             if match:

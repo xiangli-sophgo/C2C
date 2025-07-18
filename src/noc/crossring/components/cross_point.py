@@ -11,11 +11,11 @@ import logging
 from enum import Enum
 from dataclasses import dataclass
 
-from .link import PriorityLevel
-from .flit import CrossRingFlit
-from .link import CrossRingSlot, RingSlice
-from .config import CrossRingConfig
-from ..base.link import BasicDirection
+from ..link import PriorityLevel
+from ..flit import CrossRingFlit
+from ..link import CrossRingSlot, RingSlice
+from ..config import CrossRingConfig
+from ...base.link import BasicDirection
 
 # from .node import CrossRingNode
 

@@ -32,9 +32,9 @@ def track_request_smart():
 
     with contextlib.redirect_stdout(io.StringIO()):
         model = CrossRingModel(config, traffic_file_path=str(traffic_file))
-        
+
         # 手动连接IP接口（避免initialize_network的问题）
-        if hasattr(model, 'crossring_nodes') and 0 in model.crossring_nodes and 1 in model.crossring_nodes:
+        if hasattr(model, "crossring_nodes") and 0 in model.crossring_nodes and 1 in model.crossring_nodes:
             model.crossring_nodes[0].connect_ip("gdma_0_node0")
             model.crossring_nodes[1].connect_ip("ddr_1_node1")
 
@@ -90,7 +90,7 @@ def track_request_smart():
     print("-" * 60)
 
     # 运行仿真 - 调试信息由模型的全局调试控制自动处理
-    for cycle in range(1000):
+    for cycle in range(200):
         model.step()
 
         # 检查是否完成

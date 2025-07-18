@@ -51,22 +51,22 @@ class CrossRingIPInterface(BaseIPInterface):
 
         # RN Data Buffer
         self.rn_rdb = {}  # 读数据缓冲 {packet_id: [flits]}
-        self.rn_rdb_count = config.rn_rdb_size
+        self.rn_rdb_count = config.RN_RDB_SIZE
         self.rn_rdb_reserve = 0  # 预留数量用于重试
 
         self.rn_wdb = {}  # 写数据缓冲 {packet_id: [flits]}
-        self.rn_wdb_count = config.rn_wdb_size
+        self.rn_wdb_count = config.RN_WDB_SIZE
 
         # ========== SN资源管理 ==========
         self.sn_tracker = []
 
         # 根据IP类型设置SN tracker数量
         if ip_type.startswith("ddr"):
-            self.sn_tracker_count = {"ro": config.tracker_config.sn_ddr_r_tracker_ostd, "share": config.tracker_config.sn_ddr_w_tracker_ostd}  # 读专用  # 写共享
-            self.sn_wdb_count = config.sn_ddr_wdb_size
+            self.sn_tracker_count = {"ro": config.tracker_config.SN_DDR_R_TRACKER_OSTD, "share": config.tracker_config.SN_DDR_W_TRACKER_OSTD}  # 读专用  # 写共享
+            self.sn_wdb_count = config.SN_DDR_WDB_SIZE
         elif ip_type.startswith("l2m"):
-            self.sn_tracker_count = {"ro": config.tracker_config.sn_l2m_r_tracker_ostd, "share": config.tracker_config.sn_l2m_w_tracker_ostd}
-            self.sn_wdb_count = config.sn_l2m_wdb_size
+            self.sn_tracker_count = {"ro": config.tracker_config.SN_L2M_R_TRACKER_OSTD, "share": config.tracker_config.SN_L2M_W_TRACKER_OSTD}
+            self.sn_wdb_count = config.SN_L2M_WDB_SIZE
         else:
             # DMA类IP通常不作为SN
             self.sn_tracker_count = {"ro": 0, "share": 0}
@@ -413,7 +413,7 @@ class CrossRingIPInterface(BaseIPInterface):
                 req = self._find_sn_tracker_by_packet_id(flit.packet_id)
                 if req:
                     # 设置延迟释放时间
-                    release_time = self.current_cycle + self.config.tracker_config.sn_tracker_release_latency
+                    release_time = self.current_cycle + self.config.tracker_config.SN_TRACKER_RELEASE_LATENCY
 
                     # 设置完成时间戳
                     first_flit = self.sn_wdb[flit.packet_id][0]
@@ -423,7 +423,7 @@ class CrossRingIPInterface(BaseIPInterface):
                         f.data_received_complete_cycle = self.current_cycle
                         f.cmd_latency = f.cmd_received_by_cake0_cycle - f.cmd_entry_noc_from_cake0_cycle
                         f.data_latency = f.data_received_complete_cycle - first_flit.data_entry_noc_from_cake0_cycle
-                        f.transaction_latency = f.data_received_complete_cycle + self.config.tracker_config.sn_tracker_release_latency - f.cmd_entry_cake0_cycle
+                        f.transaction_latency = f.data_received_complete_cycle + self.config.tracker_config.SN_TRACKER_RELEASE_LATENCY - f.cmd_entry_cake0_cycle
 
                     # **关键修复：通知RequestTracker写请求已完成（SN收到全部数据）**
                     self._notify_request_completion(req)
@@ -557,9 +557,9 @@ class CrossRingIPInterface(BaseIPInterface):
         for i in range(req.burst_length):
             # 计算发送延迟
             if req.destination_type and req.destination_type.startswith("ddr"):
-                latency = self.config.latency_config.ddr_w_latency
+                latency = self.config.latency_config.DDR_W_LATENCY
             else:
-                latency = self.config.latency_config.l2m_w_latency
+                latency = self.config.latency_config.L2M_W_LATENCY
             
 
             data_flit = create_crossring_flit(
@@ -586,9 +586,9 @@ class CrossRingIPInterface(BaseIPInterface):
         for i in range(req.burst_length):
             # 计算发送延迟
             if req.destination_type and req.destination_type.startswith("ddr"):
-                latency = self.config.latency_config.ddr_r_latency
+                latency = self.config.latency_config.DDR_R_LATENCY
             else:
-                latency = self.config.latency_config.l2m_r_latency
+                latency = self.config.latency_config.L2M_R_LATENCY
 
             # 读数据从SN返回到RN
             data_flit = create_crossring_flit(
@@ -871,7 +871,7 @@ class CrossRingIPInterface(BaseIPInterface):
         """将flit注入到网络"""
         try:
             # 添加到注入FIFO
-            if len(self.inject_fifos[flit.channel]) < self.config.inject_buffer_depth:
+            if len(self.inject_fifos[flit.channel]) < self.config.INJECT_BUFFER_DEPTH:
                 self.inject_fifos[flit.channel].append(flit)
                 flit.departure_cycle = self.current_cycle
                 return True
@@ -1052,7 +1052,14 @@ class CrossRingIPInterface(BaseIPInterface):
                 if flit:
                     self._transfer_decisions["network_to_h2l"]["channel"] = channel
                     self._transfer_decisions["network_to_h2l"]["flit"] = flit
+                    # 调试日志
+                    if hasattr(flit, "packet_id") and flit.packet_id == "1":
+                        self.logger.info(f"🎯 IP {self.ip_type} 在周期{current_cycle}准备从EQ_CH接收flit (packet_id={flit.packet_id})")
                     return
+            else:
+                # 调试：检查为什么h2l FIFO没有ready
+                if channel == "req" and self.node_id == 1:
+                    self.logger.debug(f"IP {self.ip_type} h2l_{channel} not ready: len={len(self.h2l_fifos[channel])}, valid={self.h2l_fifos[channel].valid_signal()}")
 
     def _compute_h2l_to_completion_decision(self, current_cycle: int) -> None:
         """计算h2l到completion的传输决策"""
@@ -1092,6 +1099,11 @@ class CrossRingIPInterface(BaseIPInterface):
                 eject_buffer = node.ip_eject_channel_buffers[ip_key][channel]
                 if eject_buffer.valid_signal():
                     return eject_buffer.peek_output()
+                elif channel == "req" and self.node_id == 1:
+                    # 调试：为什么eject buffer没有valid
+                    self.logger.debug(f"IP {self.ip_type} eject_buffer[{channel}] not valid, buffer内容: {len(eject_buffer)} items")
+            else:
+                self.logger.warning(f"IP {self.ip_type} 找不到eject buffer key: {ip_key}, 可用keys: {list(node.ip_eject_channel_buffers.keys())}")
         return None
 
     def _process_pending_to_l2h(self, current_cycle: int) -> bool:
@@ -1162,12 +1174,11 @@ class CrossRingIPInterface(BaseIPInterface):
         # 3. 执行network到h2l的传输
         if self._transfer_decisions["network_to_h2l"]["channel"]:
             channel = self._transfer_decisions["network_to_h2l"]["channel"]
-            flit = self._transfer_decisions["network_to_h2l"]["flit"]
-
-            # 从network eject并写入h2l FIFO
-            self._eject_from_topology_network(channel)  # 这会执行实际的read
-            flit.flit_position = "H2L"
-            self.h2l_fifos[channel].write_input(flit)
+            # 不使用compute阶段peek的flit，而是使用实际read返回的flit
+            ejected_flit = self._eject_from_topology_network(channel)  # 这会执行实际的read
+            if ejected_flit:
+                ejected_flit.flit_position = "H2L"
+                self.h2l_fifos[channel].write_input(ejected_flit)
 
         # 4. 执行h2l到completion的传输
         if self._transfer_decisions["h2l_to_completion"]["channel"]:
