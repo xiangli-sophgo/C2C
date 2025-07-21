@@ -182,6 +182,12 @@ class CrossRingNode:
         """获取CrossPoint状态信息。"""
         return {"horizontal": self.horizontal_crosspoint.get_crosspoint_status(), "vertical": self.vertical_crosspoint.get_crosspoint_status()}
 
+    def enable_crosspoint_injection_debug(self, enabled: bool = True) -> None:
+        """启用或禁用CrossPoint注入调试输出"""
+        self.horizontal_crosspoint.enable_injection_debug(enabled)
+        self.vertical_crosspoint.enable_injection_debug(enabled)
+        self.logger.debug(f"Node {self.node_id} CrossPoint注入调试模式: {'启用' if enabled else '禁用'}")
+
     def get_stats(self) -> Dict[str, Any]:
         """获取节点统计信息。"""
         return {

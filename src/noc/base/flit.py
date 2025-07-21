@@ -503,9 +503,9 @@ class BaseFlit(ABC):
         status_str = "".join(status) if status else "N"
 
         return (
-            f"{self.packet_id}.{self.flit_id}, "
+            f"{self.flit_type.upper()},{self.packet_id}.{self.flit_id}, "
             f"{self.source}{self.source_type[0]}{self.source_type[-1]}->{self.destination}{self.destination_type[0]}{self.destination_type[-1]}@{self.current_position}, "
-            f"{self.flit_type}, {status_str}"
+            f"{status_str}"
         )
 
 
@@ -555,8 +555,6 @@ class FlitPool:
         """获取池统计信息"""
         with self._lock:
             return {"pool_size": len(self._pool), "created_count": self._created_count, "flit_type": self.flit_class.__name__}
-
-
 
 
 # 工厂函数

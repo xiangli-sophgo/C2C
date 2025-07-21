@@ -127,6 +127,12 @@ class CrossRingModel(BaseNoCModel):
 
         # 检查所有要跟踪的packet_ids，使用base class的trace_packets
         trace_packets = self.trace_packets if self.trace_packets else self.debug_packet_ids
+        
+        # 用于跟踪是否有任何信息需要打印
+        printed_info = False
+        cycle_header_printed = False
+        completed_packets = set()
+        flits_to_print = []
 
         for packet_id in list(trace_packets):
             if self._should_debug_packet(packet_id):
@@ -153,19 +159,46 @@ class CrossRingModel(BaseNoCModel):
                     should_print = total_flits > 0 or lifecycle.current_state != RequestState.CREATED or self.request_tracker.should_print_debug(packet_id)
 
                     if should_print:
-                        print(f"周期{self.cycle}: ")
-                        print(f" ", end="")
-                        # 打印所有flit的位置
+                        # 收集本周期要打印的flit
                         all_flits = lifecycle.request_flits + lifecycle.response_flits + lifecycle.data_flits
-                        for flit in all_flits:
-                            print(f"{flit}", end=" | ")
-                        print("")
+                        flits_to_print.extend(all_flits)
+                        printed_info = True
 
-                    # 如果完成，从跟踪列表中移除
+                    # 如果完成，标记为已完成
                     if lifecycle.current_state.value == "completed":
+                        if not cycle_header_printed:
+                            print(f"周期{self.cycle}: ")
+                            cycle_header_printed = True
                         print(f"✅ 请求{packet_id}已完成，停止跟踪")
-                        self.debug_packet_ids.discard(packet_id)
-                        self.trace_packets.discard(packet_id)
+                        completed_packets.add(packet_id)
+                        printed_info = True
+
+        # 如果有flit要打印，统一打印在一行
+        if flits_to_print:
+            if not cycle_header_printed:
+                print(f"周期{self.cycle}: ")
+                cycle_header_printed = True
+            print(f" ", end="")
+            for flit in flits_to_print:
+                print(f"{flit}", end=" | ")
+            print("")
+
+        # 从跟踪列表中移除已完成的请求
+        for packet_id in completed_packets:
+            self.debug_packet_ids.discard(packet_id)
+            self.trace_packets.discard(packet_id)
+
+        # 检查是否所有跟踪的请求都已完成
+        remaining_packets = len(self.trace_packets) + len(self.debug_packet_ids)
+        if remaining_packets == 0 and self.debug_enabled:
+            print(f"🎯 所有跟踪请求已完成，自动关闭debug模式")
+            self.disable_debug()
+            return
+
+        # 只有在实际打印了信息时才执行sleep
+        if printed_info and self.debug_config["sleep_time"] > 0:
+            import time
+            time.sleep(self.debug_config["sleep_time"])
 
     def _create_ip_interface(self, node_id: int, ip_type: str, key: str = None) -> bool:
         """
@@ -817,21 +850,20 @@ class CrossRingModel(BaseNoCModel):
         if self.cycle % self.debug_config["log_interval"] == 0:
             self._log_periodic_status()
 
-        # Debug模式下的休眠功能
-        if self.debug_enabled and self.debug_config["sleep_time"] > 0:
-            time.sleep(self.debug_config["sleep_time"])
+        # Debug休眠已移至_print_debug_info中，只有在打印信息时才执行
 
     def _step_topology_network_update(self) -> None:
         """CrossRing网络组件更新阶段"""
-        # 所有CrossRing节点更新阶段
-        for node_id, node in self.nodes.items():
-            if hasattr(node, "step_update_phase"):
-                node.step_update_phase(self.cycle)
-
-        # 所有CrossRing链路传输阶段
+        # 先执行所有CrossRing链路传输阶段（slice移动）
+        # 这样就能为注入腾出departure slice的空间
         for link_id, link in self.links.items():
             if hasattr(link, "step_transmission"):
                 link.step_transmission(self.cycle)
+
+        # 然后执行所有CrossRing节点更新阶段（包括CrossPoint注入）
+        for node_id, node in self.nodes.items():
+            if hasattr(node, "step_update_phase"):
+                node.step_update_phase(self.cycle)
 
     def get_congestion_statistics(self) -> Dict[str, Any]:
         """获取拥塞统计信息"""
@@ -894,6 +926,16 @@ class CrossRingModel(BaseNoCModel):
                 "write_retries": ip_interface.write_retry_num_stat,
             }
         return status
+
+    def enable_debug(self, level: int = 1, trace_packets: List[str] = None, sleep_time: float = 0.0) -> None:
+        """启用调试模式（CrossRing扩展版本）"""
+        # 调用base类的enable_debug
+        super().enable_debug(level, trace_packets, sleep_time)
+        
+        # 启用CrossPoint注入调试（仅对节点3，因为第6个请求从那里开始卡住）
+        if 3 in self.nodes:
+            self.nodes[3].enable_crosspoint_injection_debug(True)
+            self.logger.info("已启用节点3的CrossPoint注入调试")
 
     def print_debug_status(self) -> None:
         """打印调试状态"""

@@ -293,9 +293,7 @@ class BaseNoCModel(ABC):
         if self.cycle % self.debug_config["log_interval"] == 0:
             self._log_periodic_status()
 
-        # Debug模式下的休眠功能
-        if self.debug_enabled and self.debug_config["sleep_time"] > 0:
-            time.sleep(self.debug_config["sleep_time"])
+        # Debug休眠已移至具体模型的_print_debug_info中，只有在打印信息时才执行
 
     def _step_compute_phase(self) -> None:
         """阶段1：组合逻辑阶段 - 所有组件计算传输决策，不修改状态"""

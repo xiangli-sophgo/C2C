@@ -77,7 +77,7 @@ class CrossRingFlit(BaseFlit):
     remaining_directions: List[Any] = field(default_factory=list)  # 剩余路由方向
     dimension_turn_cycle: int = -1  # 维度转换周期
     current_direction: str = ""  # 当前传输方向（"horizontal"或"vertical"）
-    
+
     # 延迟发送支持
     departure_cycle: float = 0.0  # 允许发送的周期
 
@@ -130,11 +130,11 @@ class CrossRingFlit(BaseFlit):
         # CrossRing的有效性检查需要考虑环路结构
         # 这里提供简化版本
         return next_node in self.path
-    
+
     def is_next_hop_destination(self, next_node: NodeId) -> bool:
         """检查下一跳是否是最终目的地"""
         return next_node == self.destination
-    
+
     def should_eject_at_node(self, current_node: NodeId) -> bool:
         """检查是否应该在当前节点下环（到达目标节点）"""
         return current_node == self.destination
@@ -146,7 +146,7 @@ class CrossRingFlit(BaseFlit):
         self._num_col = num_col
         self.dest_xid = self.destination % num_col  # x坐标：水平方向
         self.dest_yid = self.destination // num_col  # 这是原始row，需要转换
-        
+
         # 计算实际的y坐标（直角坐标系）
         dest_y = num_row - 1 - self.dest_yid  # y坐标：垂直方向，从下到上
 
@@ -265,7 +265,7 @@ class CrossRingFlit(BaseFlit):
         if self.current_tag_info:
             tag_info = f"[{self.current_tag_info}]"
 
-        return f"{self.packet_id}.{self.flit_id},{src_type}->{dst_type}:{position_str}{tag_info},{req_attr},{self.flit_type},{type_display},{status_str},{self.etag_priority}"
+        return f"{self.flit_type.upper()},{self.packet_id}.{self.flit_id},{src_type}->{dst_type}:{position_str}{tag_info},{req_attr},{type_display},{status_str},{self.etag_priority}"
 
     def _get_simplified_ip_type(self, ip_type_str: str, node_id: int) -> str:
         """
@@ -378,15 +378,13 @@ class CrossRingFlit(BaseFlit):
         self.current_slot_index = -1
         self.current_tag_info = ""
         self.crosspoint_direction = ""
-        
+
         # 重置延迟发送
         self.departure_cycle = 0.0
 
     def reset(self):
         """重置方法的简化接口"""
         self._reset_for_reuse()
-
-
 
 
 # 工厂函数
@@ -438,7 +436,7 @@ def create_crossring_flit(source: NodeId, destination: NodeId, path: Optional[Li
 
     # 提取num_col参数，避免传递给Flit构造函数
     num_col = kwargs.pop("num_col", 3)
-    
+
     flit = _global_crossring_flit_pool.get_flit(source=source, destination=destination, path=path, **kwargs)
 
     # 设置CrossRing坐标信息
@@ -465,5 +463,3 @@ def get_crossring_flit_pool_stats() -> Dict[str, Any]:
         统计信息字典
     """
     return _global_crossring_flit_pool.get_stats()
-
-

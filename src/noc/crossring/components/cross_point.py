@@ -870,7 +870,15 @@ class CrossRingCrossPoint:
         # 初始化Tag管理器
         self.tag_manager = CrossRingTagManager(node_id, config, logger)
 
+        # 调试控制标志
+        self._debug_injection_check = False
+
         self.logger.info(f"CrossPoint {crosspoint_id} 初始化完成，方向：{direction.value}，管理方向：{self.managed_directions}")
+
+    def enable_injection_debug(self, enabled: bool = True) -> None:
+        """启用或禁用注入调试输出"""
+        self._debug_injection_check = enabled
+        self.logger.debug(f"CrossPoint {self.crosspoint_id} 注入调试模式: {'启用' if enabled else '禁用'}")
 
     def connect_slice(self, direction: str, slice_type: str, ring_slice: RingSlice) -> None:
         """
@@ -905,6 +913,21 @@ class CrossRingCrossPoint:
 
         # 检查离开slice是否有空闲空间
         current_slot = departure_slice.peek_current_slot(channel)
+
+        # 添加详细的调试输出
+        if hasattr(self, '_debug_injection_check') and self._debug_injection_check:
+            downstream_info = "None"
+            if hasattr(departure_slice, 'downstream_slice') and departure_slice.downstream_slice:
+                downstream_info = f"slice_{departure_slice.downstream_slice.slice_id if hasattr(departure_slice.downstream_slice, 'slice_id') else 'unknown'}"
+            
+            output_buffer_status = "None"
+            if hasattr(departure_slice, 'output_buffer') and departure_slice.output_buffer.get(channel):
+                output_buffer_status = f"occupied"
+            
+            self.logger.debug(f"🔍 CrossPoint {self.crosspoint_id} can_inject检查 {direction}:{channel} - "
+                            f"current_slot: {'occupied' if current_slot else 'None'}, "
+                            f"downstream: {downstream_info}, "
+                            f"output_buffer: {output_buffer_status}")
 
         # 如果当前没有slot或是空slot，可以注入
         if current_slot is None:
@@ -1250,6 +1273,10 @@ class CrossRingCrossPoint:
         # 初始化传输计划
         self._injection_transfer_plan = []
         self._ejection_transfer_plan = []
+        
+        # 调试：确认CrossPoint被调用
+        if cycle >= 40 and cycle <= 60:
+            self.logger.warning(f"🔧 CrossPoint {self.crosspoint_id} compute阶段 周期{cycle}，管理方向：{self.managed_directions}")
 
         # 计算下环可能性：检查每个管理方向的到达slice
         for direction in self.managed_directions:
@@ -1291,12 +1318,17 @@ class CrossRingCrossPoint:
                     direction_fifo = node_inject_fifos[channel][direction]
 
                     if direction_fifo.valid_signal():
+                        flit = direction_fifo.peek_output()
+                        flit_id = getattr(flit, 'packet_id', 'unknown') if flit else 'unknown'
+                        
                         if self.can_inject_flit(direction, channel):
                             # 环路可以接受，计划传输
                             self._injection_transfer_plan.append({"type": "fifo_pipeline_read", "direction": direction, "channel": channel, "source_fifo": direction_fifo})
+                            self.logger.debug(f"📋 CrossPoint {self.crosspoint_id} 计划注入 {direction}:{channel} flit {flit_id}")
                         else:
-                            # 环路无法接受，检查是否需要触发I-Tag预约
-                            flit = direction_fifo.peek_output()
+                            # 环路无法接受
+                            self.logger.debug(f"🚫 CrossPoint {self.crosspoint_id} {direction}:{channel} flit {flit_id} 无法注入，departure slice占用")
+                            # 检查是否需要触发I-Tag预约
                             if flit and self._should_trigger_itag_for_waiting_flit(direction, channel, flit, cycle):
                                 # I-Tag不作为传输计划，直接触发
                                 if self._trigger_itag_reservation(direction, channel, cycle):
@@ -1336,18 +1368,31 @@ class CrossRingCrossPoint:
                         self.logger.debug(f"CrossPoint {self.crosspoint_id} 从 ring_bridge {transfer['direction']} 重新注入成功")
 
             elif transfer["type"] == "fifo_pipeline_read":
-                # 严格流水线：只有在确保能注入时才读取FIFO
-                # compute阶段已经验证了can_inject_flit，这里直接执行
-                flit = transfer["source_fifo"].read_output()
-                if flit:
-                    if self.try_inject_flit(transfer["direction"], flit, transfer["channel"]):
-                        self.logger.debug(f"CrossPoint {self.crosspoint_id} 从 {transfer['direction']} FIFO注入到环路成功")
-                    else:
-                        # 这种情况不应该发生，因为compute阶段已经检查过can_inject_flit
-                        self.logger.error(f"CrossPoint {self.crosspoint_id} 严重错误：compute阶段检查通过但update阶段注入失败")
-                        # 紧急情况：尝试放回FIFO头部
-                        if not transfer["source_fifo"].priority_write(flit):
-                            self.logger.error(f"CrossPoint {self.crosspoint_id} 无法将flit放回FIFO，数据丢失风险")
+                # 修复时序竞争问题：在update阶段实时检查can_inject_flit
+                # 因为slice可能在compute和update之间状态发生变化
+                can_inject = self.can_inject_flit(transfer["direction"], transfer["channel"])
+                flit_info = "unknown"
+                if hasattr(transfer["source_fifo"], "output_register") and transfer["source_fifo"].output_register:
+                    flit_info = f"pkt{getattr(transfer['source_fifo'].output_register, 'packet_id', 'unknown')}"
+                
+                if can_inject:
+                    flit = transfer["source_fifo"].read_output()
+                    if flit:
+                        flit_id = getattr(flit, 'packet_id', 'unknown')
+                        if self.try_inject_flit(transfer["direction"], flit, transfer["channel"]):
+                            self.logger.info(f"✅ CrossPoint {self.crosspoint_id} 成功注入 {transfer['direction']} flit {flit_id}")
+                        else:
+                            # 依然需要处理注入失败的情况
+                            self.logger.error(f"❌ CrossPoint {self.crosspoint_id} 注入失败，flit {flit_id}")
+                            # 尝试放回FIFO头部
+                            if not transfer["source_fifo"].priority_write(flit):
+                                self.logger.error(f"💥 CrossPoint {self.crosspoint_id} 无法将flit {flit_id} 放回FIFO，数据丢失！")
+                            else:
+                                self.logger.info(f"🔄 CrossPoint {self.crosspoint_id} 成功将flit {flit_id} 放回FIFO头部")
+                else:
+                    # 记录无法注入的情况
+                    self.logger.debug(f"⏳ CrossPoint {self.crosspoint_id} {transfer['direction']}:{transfer['channel']} 无法注入 {flit_info}，departure slice占用")
+                # 如果update阶段检查失败，不读取FIFO，flit继续等待下次机会
 
         # 更新I-Tag预约状态
         for channel in ["req", "rsp", "data"]:
