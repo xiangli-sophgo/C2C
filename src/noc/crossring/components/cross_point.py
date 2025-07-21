@@ -1010,7 +1010,7 @@ class CrossRingCrossPoint:
                 return True, "RB"  # 横向环通过RB下环
             else:
                 return True, "EQ"  # 纵向环直接下环
-        
+
         # 获取坐标信息（直角坐标系，原点在左下角）
         if hasattr(flit, "dest_coordinates"):
             dest_x, dest_y = flit.dest_coordinates
@@ -1277,22 +1277,30 @@ class CrossRingCrossPoint:
                                         {"type": "to_eject_fifo", "direction": direction, "channel": channel, "slot": current_slot, "flit": flit, "target_fifo": eject_fifo}
                                     )
 
-        # 计算上环可能性：首先处理ring_bridge输出的重新注入
+        # 计算上环可能性：按照自然顺序处理所有FIFO源
         for direction in self.managed_directions:
             for channel in ["req", "rsp", "data"]:
+                # 首先检查ring_bridge输出（维度转换结果）
                 if self.parent_node:
-                    ring_bridge_flit = self.parent_node.get_ring_bridge_output_flit(direction, channel)
+                    ring_bridge_flit = self.parent_node.ring_bridge.peek_output_flit(direction, channel)
                     if ring_bridge_flit and self.can_inject_flit(direction, channel):
-                        self._injection_transfer_plan.append({"type": "ring_bridge_reinject", "direction": direction, "channel": channel, "flit": ring_bridge_flit, "priority": "high"})
+                        self._injection_transfer_plan.append({"type": "ring_bridge_reinject", "direction": direction, "channel": channel, "flit": ring_bridge_flit})
 
-        # 然后处理正常的inject_direction_fifos（FIFO流水线逻辑）
-        for direction in self.managed_directions:
-            for channel in ["req", "rsp", "data"]:
+                # 然后检查inject_direction_fifos（正常FIFO）
                 if direction in node_inject_fifos[channel]:
                     direction_fifo = node_inject_fifos[channel][direction]
-                    # 只有在FIFO有数据且环路可以接受时才计划传输
-                    if direction_fifo.valid_signal() and self.can_inject_flit(direction, channel):
-                        self._injection_transfer_plan.append({"type": "fifo_pipeline_read", "direction": direction, "channel": channel, "source_fifo": direction_fifo, "priority": "normal"})
+
+                    if direction_fifo.valid_signal():
+                        if self.can_inject_flit(direction, channel):
+                            # 环路可以接受，计划传输
+                            self._injection_transfer_plan.append({"type": "fifo_pipeline_read", "direction": direction, "channel": channel, "source_fifo": direction_fifo})
+                        else:
+                            # 环路无法接受，检查是否需要触发I-Tag预约
+                            flit = direction_fifo.peek_output()
+                            if flit and self._should_trigger_itag_for_waiting_flit(direction, channel, flit, cycle):
+                                # I-Tag不作为传输计划，直接触发
+                                if self._trigger_itag_reservation(direction, channel, cycle):
+                                    self.logger.debug(f"CrossPoint {self.crosspoint_id} 为 {direction} {channel} 触发I-Tag预约（FIFO阻塞）")
 
         # 更新等待状态（不执行传输）
         for channel in ["req", "rsp", "data"]:
@@ -1317,16 +1325,15 @@ class CrossRingCrossPoint:
                     ejected_flit.flit_position = f"EQ_{transfer['direction']}"
                     self.logger.debug(f"CrossPoint {self.crosspoint_id} 成功下环到EQ: {transfer['direction']} {transfer['channel']}")
 
-        # 执行上环传输（按优先级）
-        high_priority = [t for t in getattr(self, "_injection_transfer_plan", []) if t.get("priority") == "high"]
-        normal_transfers = [t for t in getattr(self, "_injection_transfer_plan", []) if t.get("priority") != "high"]
-
-        for transfer in high_priority + normal_transfers:
+        # 执行上环传输（按自然顺序）
+        for transfer in getattr(self, "_injection_transfer_plan", []):
             if transfer["type"] == "ring_bridge_reinject":
-                flit = transfer["flit"]
-                flit.flit_position = "LINK"
-                if self.try_inject_flit(transfer["direction"], flit, transfer["channel"]):
-                    self.logger.debug(f"CrossPoint {self.crosspoint_id} 从 ring_bridge {transfer['direction']} 重新注入成功")
+                # 从ring_bridge读取flit并注入
+                actual_flit = self.parent_node.get_ring_bridge_output_flit(transfer["direction"], transfer["channel"])
+                if actual_flit:
+                    actual_flit.flit_position = "LINK"
+                    if self.try_inject_flit(transfer["direction"], actual_flit, transfer["channel"]):
+                        self.logger.debug(f"CrossPoint {self.crosspoint_id} 从 ring_bridge {transfer['direction']} 重新注入成功")
 
             elif transfer["type"] == "fifo_pipeline_read":
                 # 严格流水线：只有在确保能注入时才读取FIFO
@@ -1341,10 +1348,6 @@ class CrossRingCrossPoint:
                         # 紧急情况：尝试放回FIFO头部
                         if not transfer["source_fifo"].priority_write(flit):
                             self.logger.error(f"CrossPoint {self.crosspoint_id} 无法将flit放回FIFO，数据丢失风险")
-
-            elif transfer["type"] == "trigger_itag":
-                if self._trigger_itag_reservation(transfer["direction"], transfer["channel"], cycle):
-                    self.logger.debug(f"CrossPoint {self.crosspoint_id} 为 {transfer['direction']} {transfer['channel']} 触发I-Tag预约")
 
         # 更新I-Tag预约状态
         for channel in ["req", "rsp", "data"]:
@@ -1365,6 +1368,45 @@ class CrossRingCrossPoint:
         """
         self.step_compute_phase(cycle, node_inject_fifos, node_eject_fifos)
         self.step_update_phase(cycle, node_inject_fifos, node_eject_fifos)
+
+    def _should_trigger_itag_for_waiting_flit(self, direction: str, channel: str, flit, cycle: int) -> bool:
+        """
+        检查等待注入的flit是否应该触发I-Tag预约
+
+        Args:
+            direction: 注入方向
+            channel: 通道类型
+            flit: 等待的flit
+            cycle: 当前周期
+
+        Returns:
+            是否应该触发I-Tag预约
+        """
+        # 检查flit等待时间
+        if hasattr(flit, "injection_wait_start_cycle"):
+            wait_cycles = cycle - flit.injection_wait_start_cycle
+        else:
+            # 如果没有记录等待开始时间，标记当前周期并要求等待
+            flit.injection_wait_start_cycle = cycle
+            return False
+
+        # 确定环路类型和I-Tag配置
+        ring_type = "horizontal" if direction in ["TL", "TR"] else "vertical"
+
+        # 获取I-Tag触发阈值
+        trigger_threshold = 5  # 降低阈值进行测试
+        if hasattr(self.tag_manager, "itag_config"):
+            config = self.tag_manager.itag_config.get(ring_type, {})
+            trigger_threshold = config.get("trigger_threshold", trigger_threshold)
+
+        # 检查是否已有活跃的I-Tag预约
+        if hasattr(self.tag_manager, "itag_states"):
+            current_state = self.tag_manager.itag_states.get(channel, {}).get(ring_type)
+            if current_state and current_state.active:
+                return False  # 已有活跃预约，不重复触发
+
+        # 等待时间超过阈值时触发I-Tag
+        return wait_cycles >= trigger_threshold
 
     def _trigger_itag_reservation(self, direction: str, channel: str, cycle: int) -> bool:
         """触发I-Tag预约"""

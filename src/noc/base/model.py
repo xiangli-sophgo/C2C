@@ -479,7 +479,7 @@ class BaseNoCModel(ABC):
                 "simulation_time": simulation_time,
                 "cycles_per_second": self.cycle / simulation_time if simulation_time > 0 else 0,
                 "config": self._get_config_summary(),
-                "topology": self._get_topology_info(),
+                "topology": self._get_topology_info() if hasattr(self, '_get_topology_info') else {},
             },
             "global_stats": self.global_stats.copy(),
             "ip_interface_stats": ip_detailed_stats,
@@ -739,7 +739,7 @@ class BaseNoCModel(ABC):
                 "is_running": self.is_running,
                 "is_finished": self.is_finished,
             },
-            "topology_info": self._get_topology_info(),
+            "topology_info": self._get_topology_info() if hasattr(self, '_get_topology_info') else {},
             "performance": {
                 "throughput": self.global_stats["throughput"],
                 "average_latency": self.global_stats["average_latency"],

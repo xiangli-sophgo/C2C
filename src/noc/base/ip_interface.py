@@ -181,14 +181,9 @@ class PipelinedFIFO:
             self.next_output_valid = False
 
     def step_update_phase(self):
-        """时序逻辑：更新寄存器 - 优化版本，减少1拍延迟"""
-        # 首先检查是否需要首次输出（优先处理新写入的数据）
-        if not self.output_valid and self.internal_queue:
-            # 首次输出：立即从队列取出数据到输出寄存器
-            self.output_register = self.internal_queue.popleft()
-            self.output_valid = True
-        # 然后处理读取后的更新
-        elif self.read_this_cycle:
+        """时序逻辑：更新寄存器 - 修复同周期读写竞争"""
+        # 处理读取后的更新（优先处理）
+        if self.read_this_cycle:
             if self.internal_queue:
                 # 读取后继续输出：从队列补充输出寄存器
                 self.output_register = self.internal_queue.popleft()
@@ -197,6 +192,11 @@ class PipelinedFIFO:
                 # 队列已空：清空输出寄存器
                 self.output_register = None
                 self.output_valid = False
+        # 然后检查是否需要首次输出（处理新写入的数据）
+        elif not self.output_valid and self.internal_queue:
+            # 首次输出：立即从队列取出数据到输出寄存器
+            self.output_register = self.internal_queue.popleft()
+            self.output_valid = True
 
         # 重置读取标志
         self.read_this_cycle = False

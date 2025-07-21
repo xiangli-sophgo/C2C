@@ -196,26 +196,91 @@ NoC模块采用分层架构设计，基于继承和组合模式实现功能复�
 3. 使用现有的analysis、utils、debug、visualization模块
 4. 在utils/factory.py中注册新拓扑类型
 
-### Data Flow Paths
+### CrossRing数据流路径（XY路由策略）
 
-#### Injection Flow
-1. IP → l2h_fifo → node channel_buffer
-2. Node channel_buffer → inject_direction_fifos  
-3. inject_direction_fifos → CrossPoint → departure slice
-4. Departure slice → ring transmission
+#### 注入流程
+1. IP请求 → pending_by_channel → L2H FIFO → channel_buffer → inject_direction_fifos
 
-#### Ejection Flow
-1. Ring arrival slice → CrossPoint
-2. CrossPoint → eject_input_fifos
-3. eject_input_fifos → ip_eject_channel_buffers
-4. ip_eject_channel_buffers → h2l_fifos → IP
+#### 上环流程（分方向）
+**水平方向（直接上环）**：
+- IQ_TR/IQ_TL → 水平环CrossPoint → 水平环链路
+
+**垂直方向（通过Ring Bridge）**：
+- IQ_TU/IQ_TD → Ring Bridge → RB_TU/RB_TD → 垂直环CrossPoint → 垂直环链路
+
+#### 维度转换（仅单向）
+**水平→垂直转换**：
+- 水平环链路 → RB_TR/RB_TL → Ring Bridge → RB_TU/RB_TD → 垂直环链路
+- **注意：XY路由无垂直→水平转换**
+
+#### 弹出流程
+CrossRing采用双路径弹出机制，根据flit所在的环和目标位置选择不同的弹出路径：
+
+##### 1. CrossPoint弹出判断阶段
+每个到达slice的flit都会通过`should_eject_flit()`进行弹出决策：
+
+**横向CrossPoint**（处理TR/TL方向）：
+- 到达目标节点 → `return True, "RB"` (通过Ring Bridge下环)
+- 需要维度转换 → `return True, "RB"` (通过Ring Bridge转换)
+- 继续传输 → `return False, ""` (留在水平环)
+
+**纵向CrossPoint**（处理TU/TD方向）：
+- 到达目标节点 → `return True, "EQ"` (直接下环到IP)
+- 继续传输 → `return False, ""` (留在垂直环)
+
+##### 2. 弹出执行路径
+
+**路径A：水平环弹出（通过Ring Bridge）**
+```
+水平环 arrival slice → 横向CrossPoint → Ring Bridge → EjectQueue → IP
+```
+1. CrossPoint将flit传输到Ring Bridge
+2. Ring Bridge通过仲裁输出到EQ方向
+3. EjectQueue从`ring_bridge_EQ`源读取flit
+4. 分发到目标IP的channel_buffer
+
+**路径B：垂直环弹出（直接到EjectQueue）**
+```
+垂直环 arrival slice → 纵向CrossPoint → EjectQueue → IP
+```
+1. CrossPoint直接将flit写入`eject_input_fifos[channel][direction]` (TU/TD)
+2. EjectQueue从对应方向源读取flit
+3. 分发到目标IP的channel_buffer
+
+##### 3. EjectQueue仲裁与分发
+**XY路由下的活跃源**：`["IQ_EQ", "ring_bridge_EQ", "TU", "TD"]`
+
+**仲裁流程**：
+- 计算阶段：轮询各源，决定读取和分发策略
+- 执行阶段：从选定源读取flit，写入目标IP的`ip_eject_channel_buffers`
+
+##### 4. IP接收阶段
+```
+ip_eject_channel_buffers → h2l_fifos → IP.get_eject_flit()
+```
+
+**双路径设计原因**：
+- 水平环需要统一处理维度转换和本地弹出
+- 垂直环作为最终传输维度，直接弹出效率更高
+
+### Ring Bridge配置规则
+
+#### XY路由策略下的Ring Bridge
+**输入源**：`["IQ_TU", "IQ_TD", "RB_TR", "RB_TL"]`
+- IQ_TU/IQ_TD：垂直方向的直接注入
+- RB_TR/RB_TL：水平环转入的维度转换
+
+**输出方向**：`["EQ", "TU", "TD"]`
+- EQ：本地弹出
+- TU/TD：垂直环输出
+
+**不处理**：IQ_TR/IQ_TL（水平方向直接上环，不经过Ring Bridge）
 
 ### Key Architecture Rules
 
-1. **CrossPoint Slice Management**:
-   - Each CP has 4 slices: 2 directions × 2 types (arrival/departure)
-   - Arrival slices: Used for ejection decisions
-   - Departure slices: Used for injection decisions
+1. **CrossPoint职责分工**:
+   - 水平CrossPoint：处理IQ_TR/IQ_TL的直接上环
+   - 垂直CrossPoint：处理Ring Bridge输出的RB_TU/RB_TD
 
 2. **Tag Mechanisms**:
    - I-Tag: Triggered when injection waits exceed threshold (80-100 cycles)

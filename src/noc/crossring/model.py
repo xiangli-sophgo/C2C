@@ -61,8 +61,8 @@ class CrossRingModel(BaseNoCModel):
         super().__init__(config, model_name="CrossRingModel", traffic_file_path=traffic_file_path)
 
         # CrossRing网络组件 - 使用新的架构
-        self.crossring_nodes: Dict[NodeId, Any] = {}  # {node_id: CrossRingNode}
-        self.crossring_links: Dict[str, Any] = {}  # {link_id: CrossRingLink}
+        self.nodes: Dict[NodeId, Any] = {}  # {node_id: CrossRingNode}
+        self.links: Dict[str, Any] = {}  # {link_id: CrossRingLink}
 
         # Tag管理器
         self.tag_managers: Dict[NodeId, Any] = {}  # {node_id: CrossRingTagManager}
@@ -98,9 +98,9 @@ class CrossRingModel(BaseNoCModel):
         self._register_all_fifos_for_statistics()
 
         # 验证CrossRing网络初始化
-        if len(self.crossring_nodes) != self.config.NUM_NODE:
-            self.logger.error(f"CrossRing节点初始化不完整: 期望{self.config.NUM_NODE}，实际{len(self.crossring_nodes)}")
-            self.logger.error("debug: 当前crossring_nodes内容: {}".format(list(self.crossring_nodes.keys())))
+        if len(self.nodes) != self.config.NUM_NODE:
+            self.logger.error(f"CrossRing节点初始化不完整: 期望{self.config.NUM_NODE}，实际{len(self.nodes)}")
+            self.logger.error("debug: 当前nodes内容: {}".format(list(self.nodes.keys())))
             raise RuntimeError("CrossRing网络初始化失败")
 
         self.logger.info(f"CrossRing模型初始化完成: {config.NUM_ROW}x{config.NUM_COL}")
@@ -192,8 +192,8 @@ class CrossRingModel(BaseNoCModel):
             self._ip_registry[key] = ip_interface
 
             # 连接IP到对应的节点
-            if node_id in self.crossring_nodes:
-                self.crossring_nodes[node_id].connect_ip(key)
+            if node_id in self.nodes:
+                self.nodes[node_id].connect_ip(key)
                 self.logger.debug(f"连接IP接口 {key} 到节点 {node_id}")
             else:
                 self.logger.warning(f"节点 {node_id} 不存在，无法连接IP接口 {key}")
@@ -227,8 +227,8 @@ class CrossRingModel(BaseNoCModel):
                     self._ip_registry[key] = ip_interface
 
                     # 连接IP到对应的节点
-                    if node_id in self.crossring_nodes:
-                        self.crossring_nodes[node_id].connect_ip(key)
+                    if node_id in self.nodes:
+                        self.nodes[node_id].connect_ip(key)
                         self.logger.debug(f"连接IP接口 {key} 到节点 {node_id}")
                     else:
                         self.logger.warning(f"节点 {node_id} 不存在，无法连接IP接口 {key}")
@@ -250,8 +250,8 @@ class CrossRingModel(BaseNoCModel):
                 self._ip_registry[key] = ip_interface
 
                 # 连接IP到对应的节点
-                if node_id in self.crossring_nodes:
-                    self.crossring_nodes[node_id].connect_ip(key)
+                if node_id in self.nodes:
+                    self.nodes[node_id].connect_ip(key)
                     self.logger.info(f"连接优化IP接口 {key} 到节点 {node_id}")
                 else:
                     self.logger.warning(f"节点 {node_id} 不存在，无法连接IP接口 {key}")
@@ -280,7 +280,7 @@ class CrossRingModel(BaseNoCModel):
     def _setup_crossring_networks(self) -> None:
         """设置CrossRing网络组件的完整实现 - 真实环形拓扑"""
         # 用CrossRingNode实例替换原有dict结构
-        self.crossring_nodes: Dict[NodeId, CrossRingNode] = {}
+        self.nodes: Dict[NodeId, CrossRingNode] = {}
 
         # 导入CrossRingNode类
         from .node import CrossRingNode
@@ -290,14 +290,14 @@ class CrossRingModel(BaseNoCModel):
 
             try:
                 node = CrossRingNode(node_id=node_id, coordinates=coordinates, config=self.config, logger=self.logger, topology=self.topology)
-                self.crossring_nodes[node_id] = node
+                self.nodes[node_id] = node
             except Exception as e:
                 import traceback
 
                 traceback.print_exc()
 
         # 创建链接
-        self._setup_crossring_links()
+        self._setup_links()
 
         # 连接slice到CrossPoint
         self._connect_slices_to_crosspoints()
@@ -305,7 +305,7 @@ class CrossRingModel(BaseNoCModel):
         # 连接相部链路的slice形成传输链
         self._connect_ring_slices()
 
-    def _setup_crossring_links(self) -> None:
+    def _setup_links(self) -> None:
         """创建CrossRing链接"""
 
         # 导入必要的类
@@ -347,7 +347,7 @@ class CrossRingModel(BaseNoCModel):
                 # 创建链接
                 try:
                     link = CrossRingLink(link_id=link_id, source_node=node_id, dest_node=neighbor_id, direction=direction, config=self.config, num_slices=num_slices, logger=self.logger)
-                    self.crossring_links[link_id] = link
+                    self.links[link_id] = link
                     link_count += 1
                 except Exception as e:
                     print(f"DEBUG: 创建链接失败 {link_id}: {e}")
@@ -357,19 +357,16 @@ class CrossRingModel(BaseNoCModel):
 
     def _connect_slices_to_crosspoints(self) -> None:
         """连接RingSlice到CrossPoint"""
-        print(f"\n🔧 开始连接CrossPoint slices...")
-
-        for node_id, node in self.crossring_nodes.items():
-            print(f"\n处理节点{node_id}:")
+        # 连接CrossPoint slices（简化输出）
+        connected_count = 0
+        for node_id, node in self.nodes.items():
             # 处理每个方向
             for direction_str in ["TR", "TL", "TU", "TD"]:
-                print(f"  处理方向 {direction_str}:")
                 # 确定CrossPoint方向
                 crosspoint_direction = "horizontal" if direction_str in ["TR", "TL"] else "vertical"
                 crosspoint = node.get_crosspoint(crosspoint_direction)
 
                 if not crosspoint:
-                    print(f"    ❌ 没有找到 {crosspoint_direction} CrossPoint")
                     continue
 
                 # 获取该方向的出链路（departure）
@@ -387,25 +384,16 @@ class CrossRingModel(BaseNoCModel):
                         # 普通链路
                         out_link_id = f"link_{node_id}_{direction_str}_{neighbor_id}"
 
-                    out_link = self.crossring_links.get(out_link_id)
+                    out_link = self.links.get(out_link_id)
                     if out_link:
-                        print(f"    ✅ 找到出链路: {out_link_id}")
-                    else:
-                        print(f"    ❌ 未找到出链路: {out_link_id}")
-
-                if not out_link:
-                    print(f"    ❌ 没有找到出链路 node{node_id}_{direction_str}_*")
+                        connected_count += 1
 
                 # 连接slice
-                for channel in ["req"]:  # 只处理req通道进行调试
-                    print(f"    处理通道 {channel}:")
+                for channel in ["req", "rsp", "data"]:  # 处理所有三个通道
                     # 连接departure slice（出链路的第一个slice）
                     if out_link and out_link.ring_slices[channel]:
                         departure_slice = out_link.ring_slices[channel][0]
                         crosspoint.connect_slice(direction_str, "departure", departure_slice)
-                        print(f"      ✅ 连接departure slice: {direction_str} <- {out_link.link_id}:0")
-                    else:
-                        print(f"      ❌ 无法连接departure slice: out_link={out_link is not None}")
 
                     # 连接arrival slice - 需要根据CrossPoint连接规则
                     arrival_slice = None
@@ -413,7 +401,7 @@ class CrossRingModel(BaseNoCModel):
                     if direction_str == "TR":
                         # TR arrival slice来自其他节点的TR链路，如果没有则来自本节点TL自环
                         found = False
-                        for link_id, link in self.crossring_links.items():
+                        for link_id, link in self.links.items():
                             if link.dest_node == node_id and "TR" in link_id and link.source_node != node_id:
                                 if link.ring_slices[channel]:
                                     arrival_slice = link.ring_slices[channel][-1]  # 其他节点TR链路的最后slice
@@ -423,14 +411,14 @@ class CrossRingModel(BaseNoCModel):
                         # 如果没有找到其他节点的TR链路，使用本节点TL_TR自环
                         if not found:
                             self_tl_link_id = f"link_{node_id}_TL_TR_{node_id}"
-                            self_tl_link = self.crossring_links.get(self_tl_link_id)
+                            self_tl_link = self.links.get(self_tl_link_id)
                             if self_tl_link and self_tl_link.ring_slices[channel] and len(self_tl_link.ring_slices[channel]) > 1:
                                 arrival_slice = self_tl_link.ring_slices[channel][1]  # 自环的第1个slice
 
                     elif direction_str == "TL":
                         # TL arrival slice来自其他节点的TL链路，如果没有则来自本节点TR自环
                         found = False
-                        for link_id, link in self.crossring_links.items():
+                        for link_id, link in self.links.items():
                             if link.dest_node == node_id and "TL" in link_id and link.source_node != node_id:
                                 if link.ring_slices[channel]:
                                     arrival_slice = link.ring_slices[channel][-1]  # 其他节点TL链路的最后slice
@@ -440,14 +428,14 @@ class CrossRingModel(BaseNoCModel):
                         # 如果没有找到其他节点的TL链路，使用本节点TR_TL自环
                         if not found:
                             self_tr_link_id = f"link_{node_id}_TR_TL_{node_id}"
-                            self_tr_link = self.crossring_links.get(self_tr_link_id)
+                            self_tr_link = self.links.get(self_tr_link_id)
                             if self_tr_link and self_tr_link.ring_slices[channel] and len(self_tr_link.ring_slices[channel]) > 1:
                                 arrival_slice = self_tr_link.ring_slices[channel][1]  # 自环的第1个slice
 
                     elif direction_str == "TU":
                         # TU arrival slice来自其他节点的TU链路，如果没有则来自本节点TD自环
                         found = False
-                        for link_id, link in self.crossring_links.items():
+                        for link_id, link in self.links.items():
                             if link.dest_node == node_id and "TU" in link_id and link.source_node != node_id:
                                 if link.ring_slices[channel]:
                                     arrival_slice = link.ring_slices[channel][-1]  # 其他节点TU链路的最后slice
@@ -457,14 +445,14 @@ class CrossRingModel(BaseNoCModel):
                         # 如果没有找到其他节点的TU链路，使用本节点TD_TU自环
                         if not found:
                             self_td_link_id = f"link_{node_id}_TD_TU_{node_id}"
-                            self_td_link = self.crossring_links.get(self_td_link_id)
+                            self_td_link = self.links.get(self_td_link_id)
                             if self_td_link and self_td_link.ring_slices[channel] and len(self_td_link.ring_slices[channel]) > 1:
                                 arrival_slice = self_td_link.ring_slices[channel][1]  # 自环的第1个slice
 
                     elif direction_str == "TD":
                         # TD arrival slice来自其他节点的TD链路，如果没有则来自本节点TU自环
                         found = False
-                        for link_id, link in self.crossring_links.items():
+                        for link_id, link in self.links.items():
                             if link.dest_node == node_id and "TD" in link_id and link.source_node != node_id:
                                 if link.ring_slices[channel]:
                                     arrival_slice = link.ring_slices[channel][-1]  # 其他节点TD链路的最后slice
@@ -474,7 +462,7 @@ class CrossRingModel(BaseNoCModel):
                         # 如果没有找到其他节点的TD链路，使用本节点TU_TD自环
                         if not found:
                             self_tu_link_id = f"link_{node_id}_TU_TD_{node_id}"
-                            self_tu_link = self.crossring_links.get(self_tu_link_id)
+                            self_tu_link = self.links.get(self_tu_link_id)
                             if self_tu_link and self_tu_link.ring_slices[channel] and len(self_tu_link.ring_slices[channel]) > 1:
                                 arrival_slice = self_tu_link.ring_slices[channel][1]  # 自环的第1个slice
 
@@ -485,7 +473,7 @@ class CrossRingModel(BaseNoCModel):
         """获取节点的所有链接"""
         node_links = {}
 
-        for link_id, link in self.crossring_links.items():
+        for link_id, link in self.links.items():
             if link.source_node == node_id:
                 # 从链接ID中提取方向
                 parts = link_id.split("_")
@@ -500,7 +488,7 @@ class CrossRingModel(BaseNoCModel):
         # 开始连接RingSlice形成传输链
 
         connected_count = 0
-        for link_id, link in self.crossring_links.items():
+        for link_id, link in self.links.items():
             for channel in ["req", "rsp", "data"]:
                 ring_slices = link.ring_slices[channel]
 
@@ -539,7 +527,7 @@ class CrossRingModel(BaseNoCModel):
                 else:
                     # 普通链路
                     out_link_id = f"link_{node_id}_{direction_str}_{neighbor_id}"
-                out_link = self.crossring_links.get(out_link_id)
+                out_link = self.links.get(out_link_id)
 
                 if not out_link:
                     continue
@@ -561,7 +549,7 @@ class CrossRingModel(BaseNoCModel):
                         else:
                             # 下一个是普通链路
                             next_link_id = f"link_{node_id}_{reverse_direction}_{next_neighbor_id}"
-                        next_link = self.crossring_links.get(next_link_id)
+                        next_link = self.links.get(next_link_id)
                 else:
                     # 非自环情况：继续同方向
                     next_neighbor_connections = self._get_ring_connections(neighbor_id)
@@ -574,7 +562,7 @@ class CrossRingModel(BaseNoCModel):
                         else:
                             # 下一个是普通链路
                             next_link_id = f"link_{neighbor_id}_{direction_str}_{next_neighbor_id}"
-                        next_link = self.crossring_links.get(next_link_id)
+                        next_link = self.links.get(next_link_id)
 
                 if not next_link:
                     continue
@@ -602,13 +590,13 @@ class CrossRingModel(BaseNoCModel):
 
         # 1. 打印所有链路信息
         print("\n📋 链路列表:")
-        for link_id, link in sorted(self.crossring_links.items()):
+        for link_id, link in sorted(self.links.items()):
             slice_count = len(link.ring_slices.get("req", []))
             print(f"  {link_id}: {link.source_node}->{link.dest_node}, {slice_count} slices")
 
         # 2. 打印链路间slice连接
         print("\n🔗 链路间slice连接:")
-        for link_id, link in sorted(self.crossring_links.items()):
+        for link_id, link in sorted(self.links.items()):
             for channel in ["req"]:  # 只显示req通道
                 slices = link.ring_slices.get(channel, [])
                 if slices:
@@ -616,7 +604,7 @@ class CrossRingModel(BaseNoCModel):
                     if hasattr(last_slice, "downstream_slice") and last_slice.downstream_slice:
                         downstream_info = f"slice_0"  # 简化显示
                         # 找到downstream slice属于哪个链路
-                        for dst_link_id, dst_link in self.crossring_links.items():
+                        for dst_link_id, dst_link in self.links.items():
                             dst_slices = dst_link.ring_slices.get(channel, [])
                             if dst_slices and dst_slices[0] == last_slice.downstream_slice:
                                 downstream_info = f"{dst_link_id}:0"
@@ -625,7 +613,7 @@ class CrossRingModel(BaseNoCModel):
 
         # 3. 打印CrossPoint slice连接
         # print("\n🎯 CrossPoint slice连接:")
-        for node_id, node in sorted(self.crossring_nodes.items()):
+        for node_id, node in sorted(self.nodes.items()):
             # print(f"\n  节点{node_id} (坐标{node.coordinates}):")
 
             # 水平CrossPoint
@@ -638,7 +626,7 @@ class CrossRingModel(BaseNoCModel):
                         if slice_obj:
                             # 找到这个slice属于哪个链路
                             slice_info = "unknown"
-                            for link_id, link in self.crossring_links.items():
+                            for link_id, link in self.links.items():
                                 for ch in ["req"]:
                                     slices = link.ring_slices.get(ch, [])
                                     for i, s in enumerate(slices):
@@ -659,7 +647,7 @@ class CrossRingModel(BaseNoCModel):
                         if slice_obj:
                             # 找到这个slice属于哪个链路
                             slice_info = "unknown"
-                            for link_id, link in self.crossring_links.items():
+                            for link_id, link in self.links.items():
                                 for ch in ["req"]:
                                     slices = link.ring_slices.get(ch, [])
                                     for i, s in enumerate(slices):
@@ -779,69 +767,37 @@ class CrossRingModel(BaseNoCModel):
 
         self.logger.debug(f"注册IP接口到全局registry: {key}")
 
-    def _step_pre_update_phase(self) -> None:
-        """预更新阶段：更新所有FIFO状态，使compute阶段能看到最新的valid/ready信号"""
-        # 1. 所有IP接口的FIFO预更新
-        for ip_interface in self.ip_interfaces.values():
-            if hasattr(ip_interface, "_step_fifo_pre_update"):
-                ip_interface._step_fifo_pre_update()
-
-        # 2. 所有CrossRing节点的FIFO预更新
-        for node in self.crossring_nodes.values():
-            if hasattr(node, "_step_update_phase"):
-                node._step_update_phase()
-
     def _sync_global_clock(self) -> None:
         """重写时钟同步阶段：添加CrossRing节点时钟同步"""
         # 调用基类的时钟同步
         super()._sync_global_clock()
 
         # 额外同步CrossRing节点的时钟
-        for node in self.crossring_nodes.values():
+        for node in self.nodes.values():
             if hasattr(node, "current_cycle"):
                 node.current_cycle = self.cycle
 
     def _step_topology_network_compute(self) -> None:
         """CrossRing网络组件计算阶段"""
         # 所有CrossRing节点计算阶段
-        for node in self.crossring_nodes.values():
+        for node in self.nodes.values():
             if hasattr(node, "step_compute_phase"):
                 node.step_compute_phase(self.cycle)
 
     def step(self) -> None:
         self.cycle += 1
 
-        # 阶段0：时钟同步阶段 - 确保所有组件使用统一的时钟值
-        self._sync_global_clock()
-
         # 阶段0.1：TrafficScheduler处理请求注入（如果有配置）
         if hasattr(self, "traffic_scheduler") and self.traffic_scheduler:
             ready_requests = self.traffic_scheduler.get_ready_requests(self.cycle)
-            # print(f"🔍 周期{self.cycle}: get_ready_requests返回{len(ready_requests)}个请求")
             if ready_requests:
-                # print(f"  - 第一个请求: {ready_requests[0]}")
-                # 调试：检查IP接口是否存在
                 req = ready_requests[0]
                 cycle, src, src_type, dst, dst_type, op, burst, traffic_id = req
-                # print(f"  - 解析请求: src={src}, src_type={src_type}, dst={dst}, dst_type={dst_type}")
 
                 # 检查源节点的IP接口
                 source_ip = self._find_ip_interface_for_request(src, "read" if op.upper() == "R" else "write", src_type)
-                # print(f"  - 源节点{src}的IP接口: {source_ip}")
-                # if source_ip:
-                # print(f"    IP类型: {source_ip.ip_type}, 节点: {source_ip.node_id}")
-                # else:
-                # print(f"    ❌ 未找到源节点{src}的IP接口")
-                # print(f"    可用IP接口: {list(self._ip_registry.keys())}")
 
                 injected = self._inject_traffic_requests(ready_requests)
-                # if injected > 0:
-                # print(f"🎯 周期{self.cycle}: 从traffic文件注入了{injected}个请求")
-                # else:
-                # print(f"❌ 周期{self.cycle}: 注入失败，ready_requests={len(ready_requests)}, injected={injected}")
-
-        # 阶段0.5：预更新阶段 - 更新所有FIFO状态，使新写入的数据立即反映在valid/ready信号中
-        self._step_pre_update_phase()
 
         # 阶段1：组合逻辑阶段 - 所有组件计算传输决策（现在能看到最新的valid/ready状态）
         self._step_compute_phase()
@@ -868,12 +824,12 @@ class CrossRingModel(BaseNoCModel):
     def _step_topology_network_update(self) -> None:
         """CrossRing网络组件更新阶段"""
         # 所有CrossRing节点更新阶段
-        for node_id, node in self.crossring_nodes.items():
+        for node_id, node in self.nodes.items():
             if hasattr(node, "step_update_phase"):
                 node.step_update_phase(self.cycle)
 
         # 所有CrossRing链路传输阶段
-        for link_id, link in self.crossring_links.items():
+        for link_id, link in self.links.items():
             if hasattr(link, "step_transmission"):
                 link.step_transmission(self.cycle)
 
@@ -889,7 +845,7 @@ class CrossRingModel(BaseNoCModel):
     def _update_crossring_statistics(self) -> None:
         """更新CrossRing特有的统计信息"""
         # 更新CrossRing特有的统计
-        for node in self.crossring_nodes.values():
+        for node in self.nodes.values():
             if hasattr(node, "crossring_stats"):
                 node_stats = node.crossring_stats
                 self.crossring_stats["dimension_turns"] += node_stats.get("dimension_turns", 0)
@@ -1281,7 +1237,7 @@ class CrossRingModel(BaseNoCModel):
                         self.fifo_stats_collector.register_fifo(fifo, node_id=node_id, simplified_name=simplified_name)
 
         # 注册CrossRing节点的FIFO
-        for node_id, node in self.crossring_nodes.items():
+        for node_id, node in self.nodes.items():
             node_id_str = str(node_id)
 
             # 注册inject direction FIFOs (注入队列输出)

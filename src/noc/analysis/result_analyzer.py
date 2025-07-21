@@ -8,6 +8,9 @@ from typing import Dict, List, Optional, Any
 from collections import defaultdict
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.patches import Rectangle, FancyArrowPatch
+import networkx as nx
 import logging
 import time
 import os
@@ -67,7 +70,16 @@ class ResultAnalyzer:
 
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
-        plt.rcParams["font.sans-serif"] = ["SimHei", "Arial Unicode MS"]  # 支持中文
+        plt.rcParams["font.sans-serif"] = [
+            "SimHei",  # 黑体
+            "Microsoft YaHei",  # 微软雅黑
+            "WenQuanYi Zen Hei",  # 文泉驿正黑
+            "Noto Sans CJK SC",  # 思源黑体
+            "PingFang SC",  # 苹方
+            "Heiti SC",  # 黑体-简
+            "Arial Unicode MS",  # 一种包含多种字符的字体
+            "DejaVu Sans",
+        ]
         plt.rcParams["axes.unicode_minus"] = False
 
     def convert_tracker_to_request_info(self, request_tracker, config) -> List[RequestInfo]:
@@ -75,46 +87,48 @@ class ResultAnalyzer:
         requests = []
 
         # 获取配置参数
-        network_frequency = getattr(config.basic, "NETWORK_FREQUENCY", 1.0) if hasattr(config, "basic") else 1.0
+        network_frequency = getattr(config.basic, "NETWORK_FREQUENCY", 2.0) if hasattr(config, "basic") else 2.0
+        # cycle时间：1000 / frequency (ns per cycle) - 例如2GHz = 0.5ns per cycle
+        cycle_time_ns = 1000.0 / (network_frequency * 1000)  # frequency是GHz，转换为ns
 
         for req_id, lifecycle in request_tracker.completed_requests.items():
             if lifecycle.completed_cycle <= 0:
                 continue
 
-            # 时间转换：cycle -> ns (按照老版本的方式)
-            # 使用整数除法，与老版本保持一致
-            start_time = lifecycle.created_cycle // network_frequency
-            end_time = lifecycle.completed_cycle // network_frequency
+            # 时间转换：cycle -> ns
+            start_time = int(lifecycle.created_cycle * cycle_time_ns)
+            end_time = int(lifecycle.completed_cycle * cycle_time_ns)
             rn_end_time = end_time  # 简化处理
             sn_end_time = end_time  # 简化处理
 
-            # 计算延迟（按照老版本方式）
-            total_latency = lifecycle.completed_cycle - lifecycle.created_cycle
-            cmd_latency = total_latency // 3  # 简化假设
-            data_latency = total_latency // 3
-            transaction_latency = total_latency
+            # 计算延迟（cycle数 * cycle时间）
+            total_latency_cycles = lifecycle.completed_cycle - lifecycle.created_cycle
+            total_latency_ns = int(total_latency_cycles * cycle_time_ns)
+            cmd_latency = total_latency_ns // 3  # 简化假设
+            data_latency = total_latency_ns // 3
+            transaction_latency = total_latency_ns
 
             # 计算字节数 (按照老版本的方式)
-            burst_length = getattr(lifecycle, "burst_size", 4)
+            burst_length = lifecycle.burst_size
             # 老版本使用128字节/flit
             total_bytes = burst_length * 128
 
             request_info = RequestInfo(
-                packet_id=req_id,
+                packet_id=str(req_id),
                 start_time=start_time,
                 end_time=end_time,
                 rn_end_time=rn_end_time,
                 sn_end_time=sn_end_time,
                 req_type=lifecycle.op_type,
-                source_node=getattr(lifecycle, "src_node", 0),
-                dest_node=getattr(lifecycle, "dst_node", 0),
-                source_type=getattr(lifecycle, "src_ip_type", "gdma"),
-                dest_type=getattr(lifecycle, "dst_ip_type", "ddr"),
+                source_node=lifecycle.source,
+                dest_node=lifecycle.destination,
+                source_type="gdma",  # 从traffic文件可知
+                dest_type="ddr",  # 从traffic文件可知
                 burst_length=burst_length,
                 total_bytes=total_bytes,
-                cmd_latency=cmd_latency // network_frequency,
-                data_latency=data_latency // network_frequency,
-                transaction_latency=transaction_latency // network_frequency,
+                cmd_latency=cmd_latency,
+                data_latency=data_latency,
+                transaction_latency=transaction_latency,
             )
             requests.append(request_info)
 
@@ -303,42 +317,42 @@ class ResultAnalyzer:
         return result
 
     def analyze_port_bandwidth(self, metrics) -> Dict[str, Any]:
-        """分析端口级别带宽"""
-        port_analysis = defaultdict(lambda: {"read": [], "write": []})
+        """分析端口级别带宽（按IP类型分组）"""
+        ip_analysis = defaultdict(lambda: {"read": [], "write": []})
 
         for metric in metrics:
-            port_id = f"节点{metric.source_node}"
-            port_analysis[port_id][metric.req_type].append(metric)
+            # 按源IP类型分组（谁发起的请求）
+            source_ip_type = metric.source_type  # 'gdma' 或 'ddr'
+            ip_analysis[source_ip_type.upper()][metric.req_type].append(metric)
 
-        port_summary = {}
-        for port_id, data in port_analysis.items():
+        ip_summary = {}
+        for ip_type, data in ip_analysis.items():
             read_reqs = data["read"]
             write_reqs = data["write"]
 
-            # 计算该端口的读写带宽
+            # 计算该IP类型的读写带宽
+            read_bw = 0
             if read_reqs:
                 read_total_bytes = sum(r.total_bytes for r in read_reqs)
                 read_total_time = max(r.end_time for r in read_reqs) - min(r.start_time for r in read_reqs)
                 read_bw = read_total_bytes / read_total_time if read_total_time > 0 else 0
-            else:
-                read_bw = 0
 
+            write_bw = 0
             if write_reqs:
                 write_total_bytes = sum(r.total_bytes for r in write_reqs)
                 write_total_time = max(r.end_time for r in write_reqs) - min(r.start_time for r in write_reqs)
                 write_bw = write_total_bytes / write_total_time if write_total_time > 0 else 0
-            else:
-                write_bw = 0
 
-            port_summary[port_id] = {
+            ip_summary[ip_type] = {
                 "读带宽_GB/s": f"{read_bw:.2f}",
                 "写带宽_GB/s": f"{write_bw:.2f}",
                 "总带宽_GB/s": f"{read_bw + write_bw:.2f}",
                 "读请求数": len(read_reqs),
                 "写请求数": len(write_reqs),
+                "总请求数": len(read_reqs) + len(write_reqs),
             }
 
-        return port_summary
+        return ip_summary
 
     def analyze_tag_data(self, model) -> Dict[str, Any]:
         """分析Tag机制数据（I-Tag和E-Tag）"""
@@ -354,7 +368,7 @@ class ResultAnalyzer:
         total_ring_hops = 0
 
         try:
-            for node in model.crossring_nodes.values():
+            for node in model.nodes.values():
                 # 收集I-Tag数据
                 if hasattr(node, "horizontal_crosspoint") and hasattr(node.horizontal_crosspoint, "tag_manager"):
                     tag_mgr = node.horizontal_crosspoint.tag_manager
@@ -377,37 +391,89 @@ class ResultAnalyzer:
         return tag_analysis
 
     def plot_bandwidth_curves(self, metrics, save_dir: str = "output") -> str:
-        """生成带宽曲线图"""
+        """生成带宽时间曲线图"""
         if not metrics:
             return ""
 
         try:
-            # 按端口分组数据
-            port_data = defaultdict(lambda: {"时间": [], "带宽": []})
+            # 找出时间范围
+            start_time = min(m.start_time for m in metrics)
+            end_time = max(m.end_time for m in metrics)
+            time_range = end_time - start_time
 
-            for metric in metrics:
-                port_key = f"节点{metric.source_node}-{metric.request_type.value.upper()}"
-                port_data[port_key]["时间"].append(metric.end_time / 1000)  # 转换为us
-                port_data[port_key]["带宽"].append(metric.bandwidth_gbps)
+            if time_range <= 0:
+                return ""
+
+            # 动态调整窗口大小，确保合理的时间分辨率
+            max_windows = 200  # 减少窗口数量，避免图表过宽
+            window_size = max(1, int(time_range / max_windows))
+            num_windows = int(time_range / window_size) + 1
+
+            # 创建累积带宽曲线（从0开始，随时间增加）
+            time_points = [start_time + i * window_size for i in range(num_windows)]
+            cumulative_bytes = {"总": [0.0] * num_windows, "读": [0.0] * num_windows, "写": [0.0] * num_windows}
+
+            # 计算累积传输字节数
+            for window_idx, current_time in enumerate(time_points):
+                # 计算到当前时间点为止完成的总字节数
+                completed_requests = [m for m in metrics if m.end_time <= current_time]
+
+                cumulative_bytes["总"][window_idx] = sum(req.total_bytes for req in completed_requests)
+                cumulative_bytes["读"][window_idx] = sum(req.total_bytes for req in completed_requests if req.req_type == "read")
+                cumulative_bytes["写"][window_idx] = sum(req.total_bytes for req in completed_requests if req.req_type == "write")
+
+            # 计算瞬时带宽（相邻时间点的差值）
+            bandwidth_data = {"总带宽": [0.0] * num_windows, "读带宽": [0.0] * num_windows, "写带宽": [0.0] * num_windows}
+
+            for i in range(1, num_windows):
+                time_delta = window_size  # ns
+                bandwidth_data["总带宽"][i] = (cumulative_bytes["总"][i] - cumulative_bytes["总"][i - 1]) / time_delta  # bytes/ns
+                bandwidth_data["读带宽"][i] = (cumulative_bytes["读"][i] - cumulative_bytes["读"][i - 1]) / time_delta
+                bandwidth_data["写带宽"][i] = (cumulative_bytes["写"][i] - cumulative_bytes["写"][i - 1]) / time_delta
+
+            # 检查是否有实际的读写数据
+            has_read_data = any(bw > 0 for bw in bandwidth_data["读带宽"])
+            has_write_data = any(bw > 0 for bw in bandwidth_data["写带宽"])
 
             # 生成图表
-            fig, ax = plt.subplots(figsize=(12, 8))
+            fig, ax = plt.subplots(figsize=(10, 6))  # 减小图片宽度
 
-            for port_key, data in port_data.items():
-                if data["时间"]:
-                    ax.plot(data["时间"], data["带宽"], label=port_key, marker="o", linewidth=2)
+            # 转换时间为微秒，从0开始
+            time_us = [(t - start_time) / 1000 for t in time_points]
 
-            ax.set_xlabel("时间 (μs)")
-            ax.set_ylabel("带宽 (GB/s)")
-            ax.set_title("NoC 带宽曲线图")
-            ax.legend()
+            # 只绘制有数据的曲线
+            ax.plot(time_us, bandwidth_data["总带宽"], label="总带宽", linewidth=2, color="blue")
+
+            if has_read_data:
+                ax.plot(time_us, bandwidth_data["读带宽"], label="读带宽", linewidth=2, color="green", linestyle="--")
+
+            if has_write_data:
+                ax.plot(time_us, bandwidth_data["写带宽"], label="写带宽", linewidth=2, color="red", linestyle=":")
+
+            ax.set_xlabel("时间 (μs)", fontsize=12)
+            ax.set_ylabel("带宽 (GB/s)", fontsize=12)
+            ax.set_title("CrossRing NoC 带宽时间曲线", fontsize=14)
+            ax.legend(fontsize=10)
             ax.grid(True, alpha=0.3)
+
+            # 设置Y轴从0开始
+            ax.set_ylim(bottom=0)
+
+            # 设置合理的X轴范围，去除箭头拉伸
+            if len(time_us) > 1:
+                ax.set_xlim(0, time_us[-1])
+
+            # 添加峰值标注（但不用箭头，避免图表拉伸）
+            if bandwidth_data["总带宽"] and max(bandwidth_data["总带宽"]) > 0:
+                max_bw = max(bandwidth_data["总带宽"])
+                max_idx = bandwidth_data["总带宽"].index(max_bw)
+                ax.text(time_us[max_idx], max_bw + max_bw * 0.05, f"峰值: {max_bw:.2f} GB/s", ha="center", va="bottom", fontsize=10, bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.9))
 
             # 保存图表
             timestamp = int(time.time())
             save_path = f"{save_dir}/crossring_bandwidth_curve_{timestamp}.png"
             os.makedirs(save_dir, exist_ok=True)
-            fig.savefig(save_path, bbox_inches="tight", dpi=300)
+            fig.savefig(save_path, bbox_inches="tight", dpi=100)
             plt.close(fig)
 
             self.logger.info(f"带宽曲线图已保存到: {save_path}")
@@ -423,42 +489,84 @@ class ResultAnalyzer:
             return ""
 
         try:
-            latencies = [m.total_latency for m in metrics]
-            read_latencies = [m.total_latency for m in metrics if m.request_type == RequestType.READ]
-            write_latencies = [m.total_latency for m in metrics if m.request_type == RequestType.WRITE]
+            # 三种延迟类型数据
+            cmd_latencies = [m.cmd_latency for m in metrics]
+            data_latencies = [m.data_latency for m in metrics]
+            transaction_latencies = [m.transaction_latency for m in metrics]
+            
+            # 按读写操作分类
+            read_cmd = [m.cmd_latency for m in metrics if m.req_type == "read"]
+            read_data = [m.data_latency for m in metrics if m.req_type == "read"]
+            read_transaction = [m.transaction_latency for m in metrics if m.req_type == "read"]
+            
+            write_cmd = [m.cmd_latency for m in metrics if m.req_type == "write"]
+            write_data = [m.data_latency for m in metrics if m.req_type == "write"]
+            write_transaction = [m.transaction_latency for m in metrics if m.req_type == "write"]
 
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+            fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
 
-            # 延迟直方图
-            ax1.hist(latencies, bins=30, alpha=0.7, label="总体延迟", color="blue")
-            if read_latencies:
-                ax1.hist(read_latencies, bins=30, alpha=0.7, label="读延迟", color="green")
-            if write_latencies:
-                ax1.hist(write_latencies, bins=30, alpha=0.7, label="写延迟", color="red")
-
+            # 1. 三种延迟类型对比直方图
+            ax1.hist(cmd_latencies, bins=20, alpha=0.7, label="CMD延迟", color="blue")
+            ax1.hist(data_latencies, bins=20, alpha=0.7, label="DATA延迟", color="green")
+            ax1.hist(transaction_latencies, bins=20, alpha=0.7, label="TRANSACTION延迟", color="red")
             ax1.set_xlabel("延迟 (ns)")
             ax1.set_ylabel("频次")
-            ax1.set_title("延迟分布直方图")
+            ax1.set_title("三种延迟类型分布直方图")
             ax1.legend()
             ax1.grid(True, alpha=0.3)
 
-            # 延迟箱线图
-            latency_data = []
-            labels = []
+            # 2. 延迟类型箱线图
+            latency_data = [cmd_latencies, data_latencies, transaction_latencies]
+            latency_labels = ["CMD延迟", "DATA延迟", "TRANSACTION延迟"]
+            ax2.boxplot(latency_data, labels=latency_labels)
+            ax2.set_ylabel("延迟 (ns)")
+            ax2.set_title("延迟类型箱线图")
+            ax2.grid(True, alpha=0.3)
 
-            if read_latencies:
-                latency_data.append(read_latencies)
-                labels.append("读操作")
+            # 3. 读操作延迟对比
+            if read_cmd or read_data or read_transaction:
+                read_data_list = []
+                read_labels = []
+                if read_cmd:
+                    read_data_list.append(read_cmd)
+                    read_labels.append("读CMD")
+                if read_data:
+                    read_data_list.append(read_data)
+                    read_labels.append("读DATA")
+                if read_transaction:
+                    read_data_list.append(read_transaction)
+                    read_labels.append("读TRANSACTION")
+                    
+                if read_data_list:
+                    ax3.boxplot(read_data_list, labels=read_labels)
+                    ax3.set_ylabel("延迟 (ns)")
+                    ax3.set_title("读操作延迟对比")
+                    ax3.grid(True, alpha=0.3)
 
-            if write_latencies:
-                latency_data.append(write_latencies)
-                labels.append("写操作")
+            # 4. 写操作延迟对比
+            if write_cmd or write_data or write_transaction:
+                write_data_list = []
+                write_labels = []
+                if write_cmd:
+                    write_data_list.append(write_cmd)
+                    write_labels.append("写CMD")
+                if write_data:
+                    write_data_list.append(write_data)
+                    write_labels.append("写DATA")
+                if write_transaction:
+                    write_data_list.append(write_transaction)
+                    write_labels.append("写TRANSACTION")
+                    
+                if write_data_list:
+                    ax4.boxplot(write_data_list, labels=write_labels)
+                    ax4.set_ylabel("延迟 (ns)")
+                    ax4.set_title("写操作延迟对比")
+                    ax4.grid(True, alpha=0.3)
+                else:
+                    ax4.text(0.5, 0.5, "无写操作数据", ha='center', va='center', transform=ax4.transAxes, fontsize=14)
+                    ax4.set_title("写操作延迟对比")
 
-            if latency_data:
-                ax2.boxplot(latency_data, labels=labels)
-                ax2.set_ylabel("延迟 (ns)")
-                ax2.set_title("延迟箱线图")
-                ax2.grid(True, alpha=0.3)
+            plt.tight_layout()
 
             # 保存图表
             timestamp = int(time.time())
@@ -474,53 +582,69 @@ class ResultAnalyzer:
             self.logger.error(f"生成延迟分布图失败: {e}")
             return ""
 
-    def plot_port_bandwidth_comparison(self, port_analysis: Dict[str, Any], save_dir: str = "output") -> str:
-        """生成端口带宽对比图"""
-        if not port_analysis:
+    def plot_port_bandwidth_comparison(self, ip_analysis: Dict[str, Any], save_dir: str = "output") -> str:
+        """生成IP类型带宽对比图"""
+        if not ip_analysis:
             return ""
 
         try:
-            ports = list(port_analysis.keys())
-            read_bw = [float(port_analysis[port]["读带宽_GB/s"]) for port in ports]
-            write_bw = [float(port_analysis[port]["写带宽_GB/s"]) for port in ports]
+            ip_types = list(ip_analysis.keys())
 
-            fig, ax = plt.subplots(figsize=(12, 8))
+            # 创建图表
+            fig, ax = plt.subplots(figsize=(10, 6))
 
-            x = np.arange(len(ports))
+            x = np.arange(len(ip_types))
             width = 0.35
+
+            # 提取读写带宽数据
+            read_bw = [float(ip_analysis[ip_type]["读带宽_GB/s"]) for ip_type in ip_types]
+            write_bw = [float(ip_analysis[ip_type]["写带宽_GB/s"]) for ip_type in ip_types]
 
             bars1 = ax.bar(x - width / 2, read_bw, width, label="读带宽", color="green", alpha=0.7)
             bars2 = ax.bar(x + width / 2, write_bw, width, label="写带宽", color="red", alpha=0.7)
 
-            ax.set_xlabel("端口")
-            ax.set_ylabel("带宽 (GB/s)")
-            ax.set_title("各端口带宽对比")
+            ax.set_xlabel("IP类型", fontsize=12)
+            ax.set_ylabel("带宽 (GB/s)", fontsize=12)
+            ax.set_title("各IP类型带宽对比", fontsize=14)
             ax.set_xticks(x)
-            ax.set_xticklabels(ports, rotation=45)
+            ax.set_xticklabels(ip_types)
             ax.legend()
             ax.grid(True, alpha=0.3)
 
             # 添加数值标签
             for bar in bars1:
                 height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width() / 2.0, height, f"{height:.2f}", ha="center", va="bottom")
+                if height > 0:
+                    ax.text(bar.get_x() + bar.get_width() / 2.0, height, f"{height:.2f}", ha="center", va="bottom", fontsize=10)
 
             for bar in bars2:
                 height = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width() / 2.0, height, f"{height:.2f}", ha="center", va="bottom")
+                if height > 0:
+                    ax.text(bar.get_x() + bar.get_width() / 2.0, height, f"{height:.2f}", ha="center", va="bottom", fontsize=10)
+
+            # 添加请求数量信息
+            for i, ip_type in enumerate(ip_types):
+                total_requests = ip_analysis[ip_type]["总请求数"]
+                read_requests = ip_analysis[ip_type]["读请求数"]
+                write_requests = ip_analysis[ip_type]["写请求数"]
+
+                # 在X轴标签下方添加请求数信息
+                ax.text(i, -max(max(read_bw), max(write_bw)) * 0.1, f"总请求: {total_requests}\n(读:{read_requests}, 写:{write_requests})", ha="center", va="top", fontsize=8, alpha=0.7)
+
+            plt.tight_layout()
 
             # 保存图表
             timestamp = int(time.time())
-            save_path = f"{save_dir}/crossring_port_bandwidth_{timestamp}.png"
+            save_path = f"{save_dir}/crossring_ip_bandwidth_{timestamp}.png"
             os.makedirs(save_dir, exist_ok=True)
-            fig.savefig(save_path, bbox_inches="tight", dpi=300)
+            fig.savefig(save_path, bbox_inches="tight", dpi=150)
             plt.close(fig)
 
-            self.logger.info(f"端口带宽对比图已保存到: {save_path}")
+            self.logger.info(f"IP带宽对比图已保存到: {save_path}")
             return save_path
 
         except Exception as e:
-            self.logger.error(f"生成端口带宽对比图失败: {e}")
+            self.logger.error(f"生成IP带宽对比图失败: {e}")
             return ""
 
     def save_results(self, analysis: Dict[str, Any], save_dir: str = "output") -> str:
@@ -539,43 +663,285 @@ class ResultAnalyzer:
             self.logger.error(f"保存分析结果失败: {e}")
             return ""
 
-    def convert_tracker_to_metrics(self, request_tracker, config) -> List[RequestInfo]:
-        """将RequestTracker数据转换为RequestInfo列表格式"""
-        metrics = []
-        
-        # 处理已完成的请求
-        for packet_id, lifecycle in request_tracker.completed_requests.items():
-            # 转换时间（假设以周期为单位，需要转换为ns）
-            network_frequency = getattr(config, 'NETWORK_FREQUENCY', 1000)  # MHz
-            cycle_time_ns = 1000.0 / network_frequency  # ns per cycle
-            
-            # 计算延迟
-            latency_cycles = lifecycle.completed_cycle - lifecycle.created_cycle
-            latency_ns = int(latency_cycles * cycle_time_ns)
-            
-            req_info = RequestInfo(
-                packet_id=packet_id,
-                start_time=int(lifecycle.created_cycle * cycle_time_ns),
-                end_time=int(lifecycle.completed_cycle * cycle_time_ns),
-                rn_end_time=int(lifecycle.completed_cycle * cycle_time_ns),  # 简化处理
-                sn_end_time=int(lifecycle.completed_cycle * cycle_time_ns),  # 简化处理
-                req_type=lifecycle.op_type,
-                source_node=lifecycle.source,
-                dest_node=lifecycle.destination,
-                source_type="gdma",  # 从traffic文件可知
-                dest_type="ddr",     # 从traffic文件可知
-                burst_length=lifecycle.burst_size,
-                total_bytes=lifecycle.burst_size * 128,  # 假设每个flit是128字节
-                cmd_latency=latency_ns // 3,  # 简化处理：命令延迟占1/3
-                data_latency=latency_ns // 3,  # 简化处理：数据延迟占1/3
-                transaction_latency=latency_ns  # 总延迟
-            )
-            
-            metrics.append(req_info)
-        
-        return metrics
+    def plot_traffic_distribution(self, model, metrics, save_dir: str = "output", mode: str = "total") -> str:
+        """
+        绘制流量分布图，显示节点IP带宽和链路带宽
 
-    def analyze_noc_results(self, request_tracker, config, model, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True) -> Dict[str, Any]:
+        Args:
+            model: CrossRingModel实例
+            metrics: 请求度量数据
+            save_dir: 保存目录
+            mode: 显示模式 ("read", "write", "total")
+
+        Returns:
+            保存的文件路径
+        """
+        if not metrics:
+            return ""
+
+        try:
+            # 获取节点数量和拓扑信息
+            num_nodes = len(model.nodes)
+            num_rows = model.config.NUM_ROW
+            num_cols = model.config.NUM_COL
+
+            # 收集节点级IP带宽数据和链路带宽数据
+            # 支持的IP类型：GDMA, SDMA, CDMA, DDR, L2M等，用小写存储
+            node_ip_bandwidth = defaultdict(lambda: defaultdict(float))
+            link_bandwidth = defaultdict(float)
+
+            # 分析每个请求的路径和带宽
+            for metric in metrics:
+                # 计算该请求的带宽贡献
+                request_bandwidth = metric.total_bytes / (metric.end_time - metric.start_time) if metric.end_time > metric.start_time else 0
+
+                # 按节点和IP类型累计带宽（源节点和目标节点都计算）
+                source_ip_type = metric.source_type.lower()  # gdma/ddr
+                dest_ip_type = metric.dest_type.lower()  # gdma/ddr
+                
+                # 源节点：发送带宽
+                node_ip_bandwidth[metric.source_node][source_ip_type] += request_bandwidth
+                # 目标节点：接收带宽
+                node_ip_bandwidth[metric.dest_node][dest_ip_type] += request_bandwidth
+
+                # 计算链路带宽（只处理跨节点通信）
+                if metric.source_node != metric.dest_node:
+                    src_row = metric.source_node // num_cols
+                    src_col = metric.source_node % num_cols
+                    dst_row = metric.dest_node // num_cols
+                    dst_col = metric.dest_node % num_cols
+
+                    # 水平路由
+                    if src_row == dst_row:
+                        step = 1 if dst_col > src_col else -1
+                        for col in range(src_col, dst_col, step):
+                            curr_node = src_row * num_cols + col
+                            next_node = src_row * num_cols + col + step
+                            if mode == "total" or mode == metric.req_type:
+                                link_bandwidth[(curr_node, next_node)] += request_bandwidth
+
+                    # 垂直路由
+                    elif src_col == dst_col:
+                        step = 1 if dst_row > src_row else -1
+                        for row in range(src_row, dst_row, step):
+                            curr_node = row * num_cols + src_col
+                            next_node = (row + step) * num_cols + src_col
+                            if mode == "total" or mode == metric.req_type:
+                                link_bandwidth[(curr_node, next_node)] += request_bandwidth
+
+            # 计算总IP类型带宽（用于汇总显示）
+            # 动态计算所有IP类型的总带宽
+            ip_type_totals = defaultdict(float)
+            for node_data in node_ip_bandwidth.values():
+                for ip_type, bandwidth in node_data.items():
+                    ip_type_totals[ip_type] += bandwidth
+
+            # 计算节点位置（网格对齐，不交错）
+            pos = {}
+            for node_id in range(num_nodes):
+                row = node_id // num_cols
+                col = node_id % num_cols
+                pos[node_id] = (col * 3, -row * 2)  # 规整网格，不偏移
+
+            # 创建图形
+            fig, ax = plt.subplots(figsize=(14, 10))
+            ax.set_aspect("equal")
+
+            # 动态计算字体大小
+            base_font = 10
+            dynamic_font = min(14, max(6, base_font * (65 / num_nodes) ** 0.5))
+
+            # 节点大小
+            node_size = 4000  # 增大节点
+            square_size = np.sqrt(node_size) / 60  # 调整节点大小，更大的方框
+
+            # 添加所有可能的链路（包括没有流量的）
+            all_links = set()
+            for node_id in range(num_nodes):
+                row = node_id // num_cols
+                col = node_id % num_cols
+
+                # 水平连接
+                if col < num_cols - 1:
+                    all_links.add((node_id, node_id + 1))
+                    all_links.add((node_id + 1, node_id))
+
+                # 垂直连接
+                if row < num_rows - 1:
+                    all_links.add((node_id, node_id + num_cols))
+                    all_links.add((node_id + num_cols, node_id))
+
+            # 绘制所有链路（包括无流量的），使用双向箭头显示
+            max_link_bw = max(link_bandwidth.values()) if link_bandwidth else 1.0
+            
+            # 为了避免双向箭头重叠，需要为每个方向计算偏移
+            for src, dst in all_links:
+                x1, y1 = pos[src]
+                x2, y2 = pos[dst]
+
+                bandwidth = link_bandwidth.get((src, dst), 0.0)
+
+                # 计算链路颜色和线宽
+                if bandwidth > 0:
+                    intensity = min(1.0, bandwidth / max_link_bw)
+                    color = (intensity, 0, 0)
+                    linewidth = 1 + intensity * 2  # 减小线宽
+                    alpha = 0.9
+                else:
+                    color = (0.7, 0.7, 0.7)  # 灰色表示无流量
+                    linewidth = 0.8  # 减小无流量链路线宽
+                    alpha = 0.5
+
+                # 计算基本方向向量
+                dx, dy = x2 - x1, y2 - y1
+                dist = np.hypot(dx, dy)
+                if dist > 0:
+                    dx, dy = dx / dist, dy / dist
+                    
+                    # 计算垂直偏移向量（用于分离双向箭头）
+                    perp_dx, perp_dy = -dy, dx  # 垂直方向
+                    offset = 0.08  # 减小偏移距离，让双向箭头更近
+                    
+                    # 为该方向的箭头添加偏移
+                    offset_x1 = x1 + perp_dx * offset
+                    offset_y1 = y1 + perp_dy * offset
+                    offset_x2 = x2 + perp_dx * offset
+                    offset_y2 = y2 + perp_dy * offset
+                    
+                    # 计算从偏移后节点边缘的起止点
+                    start_x = offset_x1 + dx * square_size / 2
+                    start_y = offset_y1 + dy * square_size / 2
+                    end_x = offset_x2 - dx * square_size / 2
+                    end_y = offset_y2 - dy * square_size / 2
+
+                    # 绘制带箭头的连接线
+                    arrow = FancyArrowPatch(
+                        (start_x, start_y), (end_x, end_y),
+                        arrowstyle='-|>',
+                        mutation_scale=dynamic_font * 1.2,  # 增大箭头大小
+                        color=color,
+                        linewidth=linewidth,
+                        alpha=alpha,
+                        zorder=1
+                    )
+                    ax.add_patch(arrow)
+
+                    # 如果有带宽，在箭头旁边添加标签
+                    if bandwidth > 0:
+                        # 判断链路方向并决定标签位置（更靠近链路，字体更大）
+                        if abs(dx) > abs(dy):  # 水平链路
+                            # 水平链路标签放在上下
+                            label_offset_x = 0
+                            label_offset_y = 0.2 if src < dst else -0.2  # 减小距离
+                        else:  # 垂直链路
+                            # 垂直链路标签放在左右
+                            label_offset_x = 0.2 if src < dst else -0.2  # 减小距离
+                            label_offset_y = 0
+                        
+                        mid_x = (start_x + end_x) / 2 + label_offset_x
+                        mid_y = (start_y + end_y) / 2 + label_offset_y
+                        
+                        ax.text(
+                            mid_x,
+                            mid_y,
+                            f"{bandwidth:.1f}",
+                            ha="center",
+                            va="center",
+                            fontsize=dynamic_font * 0.7,  # 增大字体
+                            bbox=dict(boxstyle="round,pad=0.1", facecolor="white", alpha=0.8),
+                            color=color,
+                            fontweight="bold",
+                        )
+
+            # 绘制节点和IP信息
+            for node_id in range(num_nodes):
+                x, y = pos[node_id]
+
+                # 绘制主节点方框
+                rect = Rectangle((x - square_size / 2, y - square_size / 2), width=square_size, height=square_size, color="lightblue", ec="black", linewidth=2, zorder=2)
+                ax.add_patch(rect)
+
+                # 节点编号和IP带宽信息写在方框内
+                # 获取该节点的实际IP带宽（动态支持所有IP类型）
+                node_ip_data = node_ip_bandwidth[node_id]
+                
+                # IP类型首字母映射
+                def get_ip_abbreviation(ip_type):
+                    """获取IP类型的首字母缩写"""
+                    return ip_type.upper()[0] if ip_type else ""
+                
+                # 找出该节点有带宽的IP类型
+                active_ips = [(ip_type, bw) for ip_type, bw in node_ip_data.items() if bw > 0]
+                
+                if len(active_ips) == 0:
+                    ip_text = ""  # 无流量时不显示任何文字
+                elif len(active_ips) == 1:
+                    ip_type, bw = active_ips[0]
+                    ip_abbrev = get_ip_abbreviation(ip_type)
+                    ip_text = f"{ip_abbrev}: {bw:.1f}"
+                else:
+                    # 多个IP类型，每个IP类型分行显示
+                    ip_lines = []
+                    for ip_type, bw in active_ips:
+                        ip_abbrev = get_ip_abbreviation(ip_type)
+                        ip_lines.append(f"{ip_abbrev}: {bw:.1f}")
+                    ip_text = "\n".join(ip_lines)
+
+                # 在节点方框内显示信息
+                if ip_text:
+                    node_text = f"{node_id}\n{ip_text}"
+                else:
+                    node_text = f"{node_id}"
+                ax.text(x, y, node_text, ha="center", va="center", fontsize=dynamic_font * 0.8, fontweight="bold")  # 增大字体
+
+            # 添加总结信息框（动态显示所有IP类型）
+            summary_lines = ["总带宽统计:"]
+            for ip_type, total_bw in sorted(ip_type_totals.items()):
+                ip_display = ip_type.upper()  # 显示大写
+                summary_lines.append(f"{ip_display}: {total_bw:.2f} GB/s")
+            
+            summary_text = "\n".join(summary_lines)
+            ax.text(0.02, 0.98, summary_text, transform=ax.transAxes, fontsize=12, verticalalignment="top", bbox=dict(boxstyle="round,pad=0.5", facecolor="lightgray", alpha=0.9))
+
+            # 设置标题和布局
+            title = f"CrossRing NoC 流量分布图 ({mode.upper()}模式)"
+            ax.set_title(title, fontsize=16, fontweight="bold")
+
+            # 设置坐标轴范围
+            all_x = [x for x, y in pos.values()]
+            all_y = [y for x, y in pos.values()]
+            margin = 1.5
+            ax.set_xlim(min(all_x) - margin, max(all_x) + margin)
+            ax.set_ylim(min(all_y) - margin, max(all_y) + margin)
+            ax.axis("off")
+
+            # 添加图例
+            legend_elements = [
+                mpatches.Patch(color="lightblue", label="节点(含IP信息)"),
+                mpatches.Patch(color="red", label="高带宽链路"),
+                mpatches.Patch(color="gray", label="无流量链路"),
+                mpatches.Patch(color="lightgray", label="带宽统计"),
+            ]
+            ax.legend(handles=legend_elements, loc="upper right", fontsize=10)
+
+            # 保存图表
+            timestamp = int(time.time())
+            save_path = f"{save_dir}/crossring_traffic_distribution_{timestamp}.png"
+            os.makedirs(save_dir, exist_ok=True)
+            fig.savefig(save_path, bbox_inches="tight", dpi=150)
+            plt.close(fig)
+
+            self.logger.info(f"流量分布图已保存到: {save_path}")
+            return save_path
+
+        except Exception as e:
+            self.logger.error(f"生成流量分布图失败: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return ""
+
+    def analyze_noc_results(self, request_tracker, config, model, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output") -> Dict[str, Any]:
         """
         NoC仿真结果完整分析
 
@@ -608,7 +974,7 @@ class ResultAnalyzer:
         }
 
         # 转换数据格式
-        metrics = self.convert_tracker_to_metrics(request_tracker, config)
+        metrics = self.convert_tracker_to_request_info(request_tracker, config)
 
         if not metrics:
             self.logger.warning("没有找到已完成的请求数据")
@@ -631,25 +997,30 @@ class ResultAnalyzer:
             chart_paths = []
 
             # 带宽曲线图
-            bw_path = self.plot_bandwidth_curves(metrics)
+            bw_path = self.plot_bandwidth_curves(metrics, save_dir=save_dir)
             if bw_path:
                 chart_paths.append(bw_path)
 
             # 延迟分布图
-            lat_path = self.plot_latency_distribution(metrics)
+            lat_path = self.plot_latency_distribution(metrics, save_dir=save_dir)
             if lat_path:
                 chart_paths.append(lat_path)
 
             # 端口带宽对比图
-            port_path = self.plot_port_bandwidth_comparison(analysis["端口带宽分析"])
+            port_path = self.plot_port_bandwidth_comparison(analysis["端口带宽分析"], save_dir=save_dir)
             if port_path:
                 chart_paths.append(port_path)
+
+            # 流量分布图
+            traffic_path = self.plot_traffic_distribution(model, metrics, save_dir=save_dir, mode="total")
+            if traffic_path:
+                chart_paths.append(traffic_path)
 
             analysis["可视化文件"] = {"生成的图表": chart_paths, "图表数量": len(chart_paths)}
 
         # 保存结果文件
         if save_results:
-            results_file = self.save_results(analysis)
+            results_file = self.save_results(analysis, save_dir=save_dir)
             if results_file:
                 analysis["输出文件"] = {
                     "分析结果文件": results_file,

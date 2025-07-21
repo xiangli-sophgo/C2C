@@ -130,49 +130,36 @@ class CrossRingNode:
 
     def step_compute_phase(self, cycle: int) -> None:
         """
-        计算阶段：正确的两阶段执行顺序。
+        计算阶段：只进行组合逻辑计算和决策，不修改任何状态。
         """
-        # 1. 更新所有FIFO的组合逻辑阶段
+        # 1. 所有FIFO的组合逻辑计算
         self.inject_queue.step_compute_phase(cycle)
         self.eject_queue.step_compute_phase(cycle)
         self.ring_bridge.step_compute_phase(cycle)
 
-        # 2. 计算所有仲裁决策（但不执行）
+        # 2. 计算仲裁决策（不执行）
         self.inject_queue.compute_arbitration(cycle)
         self.eject_queue.compute_arbitration(cycle, self.inject_queue.inject_direction_fifos, self.ring_bridge)
         self.ring_bridge.compute_arbitration(cycle, self.inject_queue.inject_direction_fifos)
 
-        # 3. 处理CrossPoint的计算阶段
-        if hasattr(self.horizontal_crosspoint, "step_compute_phase"):
-            self.horizontal_crosspoint.step_compute_phase(cycle, self.inject_queue.inject_direction_fifos, self.eject_queue.eject_input_fifos)
-        if hasattr(self.vertical_crosspoint, "step_compute_phase"):
-            self.vertical_crosspoint.step_compute_phase(cycle, self.inject_queue.inject_direction_fifos, self.eject_queue.eject_input_fifos)
+        # 3. CrossPoint计算阶段
+        self.horizontal_crosspoint.step_compute_phase(cycle, self.inject_queue.inject_direction_fifos, self.eject_queue.eject_input_fifos)
+        self.vertical_crosspoint.step_compute_phase(cycle, self.inject_queue.inject_direction_fifos, self.eject_queue.eject_input_fifos)
 
     def step_update_phase(self, cycle: int) -> None:
         """
-        更新阶段：正确的两阶段执行顺序。
+        更新阶段：基于计算阶段的决策执行状态修改。
         """
-        # 1. 执行注入仲裁（优先执行）
+        # 1. 执行所有仲裁决策
         self.inject_queue.execute_arbitration(cycle)
-
-        # 2. CrossPoint执行
-        if hasattr(self.horizontal_crosspoint, "step_update_phase"):
-            self.horizontal_crosspoint.step_update_phase(cycle, self.inject_queue.inject_direction_fifos, self.eject_queue.eject_input_fifos)
-        else:
-            self.horizontal_crosspoint.step(cycle, self.inject_queue.inject_direction_fifos, self.eject_queue.eject_input_fifos)
-
-        if hasattr(self.vertical_crosspoint, "step_update_phase"):
-            self.vertical_crosspoint.step_update_phase(cycle, self.inject_queue.inject_direction_fifos, self.eject_queue.eject_input_fifos)
-        else:
-            self.vertical_crosspoint.step(cycle, self.inject_queue.inject_direction_fifos, self.eject_queue.eject_input_fifos)
-
-        # 3. 执行ring_bridge仲裁
+        self.eject_queue.execute_arbitration(cycle, self.inject_queue.inject_direction_fifos, self.ring_bridge)
         self.ring_bridge.execute_arbitration(cycle, self.inject_queue.inject_direction_fifos)
 
-        # 4. 执行eject仲裁
-        self.eject_queue.execute_arbitration(cycle, self.inject_queue.inject_direction_fifos, self.ring_bridge)
+        # 2. CrossPoint更新阶段
+        self.horizontal_crosspoint.step_update_phase(cycle, self.inject_queue.inject_direction_fifos, self.eject_queue.eject_input_fifos)
+        self.vertical_crosspoint.step_update_phase(cycle, self.inject_queue.inject_direction_fifos, self.eject_queue.eject_input_fifos)
 
-        # 5. 更新所有FIFO的时序逻辑阶段
+        # 3. 更新所有FIFO的时序逻辑
         self.inject_queue.step_update_phase()
         self.eject_queue.step_update_phase()
         self.ring_bridge.step_update_phase()

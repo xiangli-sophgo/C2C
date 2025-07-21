@@ -156,8 +156,8 @@ class CrossRingIPInterface(BaseIPInterface):
             是否成功注入
         """
         # 获取对应的节点
-        if self.node_id in self.model.crossring_nodes:
-            node = self.model.crossring_nodes[self.node_id]
+        if self.node_id in self.model.nodes:
+            node = self.model.nodes[self.node_id]
 
             # 注入到节点的对应IP的channel buffer
             ip_key = self.ip_type
@@ -209,8 +209,8 @@ class CrossRingIPInterface(BaseIPInterface):
     def _eject_from_topology_network(self, channel: str):
         """从CrossRing网络弹出"""
         # 获取对应的节点
-        if self.node_id in self.model.crossring_nodes:
-            node = self.model.crossring_nodes[self.node_id]
+        if self.node_id in self.model.nodes:
+            node = self.model.nodes[self.node_id]
 
             # 从节点的对应IP的eject channel buffer获取flit
             ip_key = self.ip_type
@@ -955,21 +955,8 @@ class CrossRingIPInterface(BaseIPInterface):
             flit.flit_position = "L2H"
             flit.current_node_id = self.node_id
 
-            # 对于read请求，需要在RN端预占资源以接收返回的data
-            if req_type == "read":
-                if not self._check_and_reserve_resources(flit):
-                    self.logger.warning(f"⚠️ RN端资源不足，read请求 {packet_id} 仍会发送但可能导致数据接收失败")
-                    # 即使资源不足也要创建rn_rdb条目，避免KeyError
-                    if flit.packet_id not in self.rn_rdb:
-                        self.rn_rdb[flit.packet_id] = []
-
-            # 对于write请求，需要在RN端预占WDB资源以存储待发送的data
-            elif req_type == "write":
-                if not self._check_and_reserve_resources(flit):
-                    self.logger.warning(f"⚠️ RN端资源不足，write请求 {packet_id} 仍会发送但可能导致数据发送失败")
-                # 确保创建rn_wdb条目，避免KeyError
-                if flit.packet_id not in self.rn_wdb:
-                    self.rn_wdb[flit.packet_id] = []
+            # 请求总是添加到pending队列，资源检查在传输到L2H时进行
+            # 这里只是标记请求类型，实际的资源检查在step()中的传输阶段进行
 
             # 添加到pending_by_channel队列（无限大，永不失败）
             self.pending_by_channel["req"].append(flit)
@@ -1047,6 +1034,12 @@ class CrossRingIPInterface(BaseIPInterface):
             if self.pending_by_channel[channel] and self.l2h_fifos[channel].ready_signal():
                 flit = self.pending_by_channel[channel][0]
                 if flit.departure_cycle <= current_cycle:
+                    # 对于req通道，检查RN端资源是否足够处理响应
+                    if channel == "req":
+                        if not self._check_and_reserve_resources(flit):
+                            self.logger.debug(f"🚫 RN端资源不足，暂停发送请求 {flit.packet_id} 到L2H")
+                            continue  # 资源不足时跳过此请求，检查下一个
+                    
                     self._transfer_decisions["pending_to_l2h"]["channel"] = channel
                     self._transfer_decisions["pending_to_l2h"]["flit"] = flit
                     return
@@ -1107,8 +1100,8 @@ class CrossRingIPInterface(BaseIPInterface):
     def _can_inject_to_node(self, flit, channel: str) -> bool:
         """检查是否可以注入到node"""
         # 获取对应的节点
-        if self.node_id in self.model.crossring_nodes:
-            node = self.model.crossring_nodes[self.node_id]
+        if self.node_id in self.model.nodes:
+            node = self.model.nodes[self.node_id]
             ip_key = self.ip_type
 
             if ip_key in node.ip_inject_channel_buffers:
@@ -1119,8 +1112,8 @@ class CrossRingIPInterface(BaseIPInterface):
     def _peek_from_topology_network(self, channel: str):
         """查看network中是否有可eject的flit"""
         # 获取对应的节点
-        if self.node_id in self.model.crossring_nodes:
-            node = self.model.crossring_nodes[self.node_id]
+        if self.node_id in self.model.nodes:
+            node = self.model.nodes[self.node_id]
             ip_key = self.ip_type
 
             if ip_key in node.ip_eject_channel_buffers:
@@ -1134,35 +1127,6 @@ class CrossRingIPInterface(BaseIPInterface):
                 self.logger.warning(f"IP {self.ip_type} 找不到eject buffer key: {ip_key}, 可用keys: {list(node.ip_eject_channel_buffers.keys())}")
         return None
 
-    def _process_pending_to_l2h(self, current_cycle: int) -> bool:
-        """处理所有pending队列到L2H FIFO的传输"""
-        # 按优先级顺序处理：req > rsp > data
-        channels = ["req", "rsp", "data"]
-
-        for channel in channels:
-            # 统一使用pending_by_channel处理所有通道
-            if self.pending_by_channel[channel] and self.l2h_fifos[channel].can_accept_input():
-                flit = self.pending_by_channel[channel][0]  # 查看队首
-
-                # 检查departure_cycle延迟
-                if hasattr(flit, "departure_cycle") and current_cycle < flit.departure_cycle:
-                    continue  # 还没到发送时间
-
-                # 尝试写入L2H
-                if self.l2h_fifos[channel].write_input(flit):
-                    # 成功写入，从pending队列移除
-                    self.pending_by_channel[channel].popleft()
-
-                    # 更新flit位置信息
-                    flit.flit_position = "L2H"
-
-                    # 更新请求状态（仅对req通道）
-                    if channel == "req" and hasattr(flit, "packet_id") and flit.packet_id in self.active_requests:
-                        self.active_requests[flit.packet_id]["stage"] = "l2h_fifo"
-
-                    return True
-
-        return False
 
     def step_update_phase(self, current_cycle: int) -> None:
         """更新阶段：执行compute阶段的传输决策"""
@@ -1230,8 +1194,8 @@ class CrossRingIPInterface(BaseIPInterface):
     def _inject_to_node(self, flit, channel: str) -> bool:
         """将flit注入到node"""
         # 获取对应的节点
-        if self.node_id in self.model.crossring_nodes:
-            node = self.model.crossring_nodes[self.node_id]
+        if self.node_id in self.model.nodes:
+            node = self.model.nodes[self.node_id]
             ip_key = self.ip_type
 
             if ip_key in node.ip_inject_channel_buffers:
