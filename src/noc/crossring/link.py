@@ -285,7 +285,6 @@ class RingSlice:
 
         # 输入/输出缓存 - 用于流水线传输
         self.input_buffer: Dict[str, Optional[CrossRingSlot]] = {"req": None, "rsp": None, "data": None}
-
         self.output_buffer: Dict[str, Optional[CrossRingSlot]] = {"req": None, "rsp": None, "data": None}
 
         # 上下游连接
@@ -310,8 +309,17 @@ class RingSlice:
             return False
 
         # 检查输入缓存是否已满
+        # 修复：允许有效slot覆盖空slot（无flit的slot）
         if self.input_buffer[channel] is not None:
-            return False  # 输入缓存已满，无法接收
+            existing_slot = self.input_buffer[channel]
+            # 如果是空slot且新slot有效，允许覆盖
+            if (not existing_slot.is_occupied and 
+                not hasattr(existing_slot, 'flit') or existing_slot.flit is None) and \
+               (slot is not None and slot.is_occupied and slot.flit is not None):
+                # 允许覆盖空slot
+                pass
+            else:
+                return False  # 输入缓存已满，无法接收
 
         self.input_buffer[channel] = slot
 
@@ -384,42 +392,101 @@ class RingSlice:
 
         return slot
 
-    def step(self, cycle: int) -> None:
+    def step_compute_phase(self, cycle: int) -> None:
         """
-        执行一个时钟周期的传输
+        计算阶段：确定传输决策，不修改状态
+        
+        计算哪些slot需要移动，但不执行实际的移动操作
+        
+        Args:
+            cycle: 当前周期
+        """
+        # 计算传输决策，存储在临时变量中
+        # 这里只需要确定传输的可行性，不修改状态
+        self._next_cycle = cycle
+        
+        # 预计算传输决策，但不执行
+        self._transfer_plan = {}
+        for channel in ["req", "rsp", "data"]:
+            self._transfer_plan[channel] = {
+                "can_move_to_output": True,  # 当前槽总是可以移动到输出缓存
+                "can_move_to_current": True,  # 输入缓存总是可以移动到当前槽
+                "can_transmit_downstream": False  # 默认不能传输
+            }
+            
+            # 检查是否可以向下游传输
+            # 应该基于current_slots（将要移动到output_buffer的内容）来判断
+            if (self.downstream_slice and 
+                self.current_slots[channel] is not None and
+                self.downstream_slice.input_buffer.get(channel) is None):
+                self._transfer_plan[channel]["can_transmit_downstream"] = True
 
-        在每个时钟周期：
-        1. 将输入缓存的内容移到当前槽
-        2. 将当前槽的内容移到输出缓存
-        3. 更新统计信息
-        4. 向下游传输slot
-
+    def step_update_phase(self, cycle: int) -> None:
+        """
+        更新阶段：基于计算阶段的决策执行状态修改
+        
+        遵循两阶段执行模型：在单个update周期内完成所有传输
+        
         Args:
             cycle: 当前周期
         """
         self.stats["total_cycles"] += 1
-
-        # 处理每个通道
+        
+        # 两阶段模型：同时执行传输和更新操作
         for channel in ["req", "rsp", "data"]:
-            # Step 1: 当前槽 -> 输出缓存
-            self.output_buffer[channel] = self.current_slots[channel]
+            current_slot = self.current_slots[channel]
+            input_slot = self.input_buffer[channel]
+            
+            # 第一步：向下游传输当前slot（如果可以）
+            downstream_transmitted = False
+            if (self._transfer_plan[channel]["can_transmit_downstream"] and
+                self.downstream_slice and current_slot is not None):
+                
+                if self.downstream_slice.receive_slot(current_slot, channel):
+                    downstream_transmitted = True
+                    self.stats["slots_transmitted"][channel] += 1
+            
+            # 第二步：同时进行内部移动
+            if downstream_transmitted:
+                # 当前slot已传输，输入slot移动到当前位置
+                self.current_slots[channel] = input_slot
+                self.input_buffer[channel] = None
+            else:
+                # 当前slot未传输，移动到输出缓存，输入slot移动到当前位置
+                if current_slot is not None and self._transfer_plan[channel]["can_move_to_output"]:
+                    self.output_buffer[channel] = current_slot
+                
+                if self._transfer_plan[channel]["can_move_to_current"]:
+                    self.current_slots[channel] = input_slot
+                    self.input_buffer[channel] = None
 
-            # Step 2: 输入缓存 -> 当前槽
-            self.current_slots[channel] = self.input_buffer[channel]
-            self.input_buffer[channel] = None
-
-            # Step 3: 更新Slot的等待时间
+            # 更新slot的等待时间
             if self.current_slots[channel] is not None:
                 self.current_slots[channel].increment_wait()
                 self.current_slots[channel].cycle = cycle
 
-            # Step 4: 向下游传输slot
-            if self.downstream_slice and self.output_buffer[channel] is not None:
+    def step_downstream_transmission(self, cycle: int) -> None:
+        """
+        下游传输阶段：向下游slice传输数据
+        
+        这个方法应该在所有slice完成update阶段后调用
+        
+        Args:
+            cycle: 当前周期
+        """
+        for channel in ["req", "rsp", "data"]:
+            # Step 4: 向下游传输slot（基于compute阶段的决策）
+            if (hasattr(self, '_transfer_plan') and 
+                self._transfer_plan[channel]["can_transmit_downstream"] and
+                self.downstream_slice and 
+                self.output_buffer[channel] is not None):
+                
                 transmitted_slot = self.output_buffer[channel]
                 if self.downstream_slice.receive_slot(transmitted_slot, channel):
                     self.output_buffer[channel] = None
                     self.stats["slots_transmitted"][channel] += 1
                     self.logger.debug(f"RingSlice {self.slice_id} 向下游传输slot {transmitted_slot.slot_id}")
+
 
     def peek_current_slot(self, channel: str) -> Optional[CrossRingSlot]:
         """
@@ -655,46 +722,79 @@ class CrossRingLink(BaseLink):
 
         return new_slot
 
-    def step_transmission(self, cycle: int) -> None:
+    def step_compute_phase(self, cycle: int) -> None:
         """
-        执行一个周期的传输
-
+        计算阶段：让所有Ring Slice执行compute阶段
+        
+        Args:
+            cycle: 当前周期
+        """
+        # 处理每个通道的传输计算
+        for channel in ["req", "rsp", "data"]:
+            self._step_channel_compute(channel, cycle)
+    
+    def step_update_phase(self, cycle: int) -> None:
+        """
+        更新阶段：让所有Ring Slice执行update阶段
+        
+        优化：移除单独的下游传输阶段，传输在slice的update阶段完成
+        
         Args:
             cycle: 当前周期
         """
         self.stats["total_cycles"] += 1
-
-        # 处理每个通道的传输
+        
+        # 处理每个通道的传输更新（现在包含下游传输）
         for channel in ["req", "rsp", "data"]:
-            self._step_channel_transmission(channel, cycle)
+            self._step_channel_update(channel, cycle)
+        
+        # 注意：下游传输现在在slice的update阶段完成，不需要单独调用
 
         # 更新利用率统计
         self._update_utilization_stats()
 
-    def _step_channel_transmission(self, channel: str, cycle: int) -> None:
+    def _step_channel_compute(self, channel: str, cycle: int) -> None:
         """
-        处理单个通道的传输
-
+        处理单个通道的计算阶段
+        
         Args:
             channel: 通道类型
             cycle: 当前周期
         """
         slices = self.ring_slices[channel]
-
-        # 让所有Ring Slice执行一个周期
+        
+        # 让所有Ring Slice执行compute阶段
         for ring_slice in slices:
-            ring_slice.step(cycle)
+            ring_slice.step_compute_phase(cycle)
 
-        # 连接相邻的Ring Slice（形成传输链）
-        for i in range(len(slices)):
-            current_slice = slices[i]
-            next_slice = slices[(i + 1) % len(slices)]  # 环形连接
+    def _step_channel_update(self, channel: str, cycle: int) -> None:
+        """
+        处理单个通道的更新阶段
+        
+        Args:
+            channel: 通道类型
+            cycle: 当前周期
+        """
+        slices = self.ring_slices[channel]
+        
+        # 让所有Ring Slice执行update阶段
+        for ring_slice in slices:
+            ring_slice.step_update_phase(cycle)
 
-            # 从当前slice传输到下一个slice
-            transmitted_slot = current_slice.transmit_slot(channel)
-            if transmitted_slot:
-                next_slice.receive_slot(transmitted_slot, channel)
-                self.stats["slots_transmitted"][channel] += 1
+    def _step_channel_downstream_transmission(self, channel: str, cycle: int) -> None:
+        """
+        处理单个通道的下游传输阶段
+        
+        Args:
+            channel: 通道类型
+            cycle: 当前周期
+        """
+        slices = self.ring_slices[channel]
+        
+        # 让所有Ring Slice执行下游传输
+        for ring_slice in slices:
+            ring_slice.step_downstream_transmission(cycle)
+
 
     def _update_utilization_stats(self) -> None:
         """更新利用率统计"""

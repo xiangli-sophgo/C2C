@@ -810,12 +810,6 @@ class CrossRingModel(BaseNoCModel):
             if hasattr(node, "current_cycle"):
                 node.current_cycle = self.cycle
 
-    def _step_topology_network_compute(self) -> None:
-        """CrossRing网络组件计算阶段"""
-        # 所有CrossRing节点计算阶段
-        for node in self.nodes.values():
-            if hasattr(node, "step_compute_phase"):
-                node.step_compute_phase(self.cycle)
 
     def step(self) -> None:
         self.cycle += 1
@@ -852,18 +846,29 @@ class CrossRingModel(BaseNoCModel):
 
         # Debug休眠已移至_print_debug_info中，只有在打印信息时才执行
 
+    def _step_topology_network_compute(self) -> None:
+        """CrossRing网络组件计算阶段"""
+        # 1. 所有节点的计算阶段
+        for node_id, node in self.nodes.items():
+            if hasattr(node, "step_compute_phase"):
+                node.step_compute_phase(self.cycle)
+                
+        # 2. 所有链路的计算阶段
+        for link_id, link in self.links.items():
+            if hasattr(link, "step_compute_phase"):
+                link.step_compute_phase(self.cycle)
+
     def _step_topology_network_update(self) -> None:
         """CrossRing网络组件更新阶段"""
-        # 先执行所有CrossRing链路传输阶段（slice移动）
-        # 这样就能为注入腾出departure slice的空间
-        for link_id, link in self.links.items():
-            if hasattr(link, "step_transmission"):
-                link.step_transmission(self.cycle)
-
-        # 然后执行所有CrossRing节点更新阶段（包括CrossPoint注入）
+        # 1. 先执行节点更新阶段（包括CrossPoint注入）
         for node_id, node in self.nodes.items():
             if hasattr(node, "step_update_phase"):
                 node.step_update_phase(self.cycle)
+
+        # 2. 然后执行链路更新阶段（slice内部移动，但不传输）
+        for link_id, link in self.links.items():
+            if hasattr(link, "step_update_phase"):
+                link.step_update_phase(self.cycle)
 
     def get_congestion_statistics(self) -> Dict[str, Any]:
         """获取拥塞统计信息"""
@@ -1086,7 +1091,7 @@ class CrossRingModel(BaseNoCModel):
             "cycle_accurate": cycle_accurate,
         }
 
-    def analyze_simulation_results(self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True) -> Dict[str, Any]:
+    def analyze_simulation_results(self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output") -> Dict[str, Any]:
         """
         分析仿真结果 - 调用CrossRing专用分析器
 
@@ -1094,12 +1099,13 @@ class CrossRingModel(BaseNoCModel):
             results: 仿真结果
             enable_visualization: 是否生成可视化图表
             save_results: 是否保存结果文件
+            save_dir: 保存目录
 
         Returns:
             详细的分析结果
         """
         analyzer = ResultAnalyzer()
-        return analyzer.analyze_noc_results(self.request_tracker, self.config, self, results, enable_visualization, save_results)  # 传入模型实例用于Tag数据分析
+        return analyzer.analyze_noc_results(self.request_tracker, self.config, self, results, enable_visualization, save_results, save_dir)  # 传入模型实例用于Tag数据分析
 
     def _analyze_ip_interfaces(self, ip_stats: Dict[str, Any]) -> Dict[str, Any]:
         """分析IP接口统计"""

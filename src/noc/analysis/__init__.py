@@ -4,6 +4,6 @@ NoC分析模块
 """
 
 from .result_analyzer import ResultAnalyzer, RequestType, RequestInfo
-from .fifo_analyzer import FIFOStatsCollector, FIFOVisualizer
+from .fifo_analyzer import FIFOStatsCollector
 
-__all__ = ['ResultAnalyzer', 'RequestType', 'RequestInfo', 'FIFOStatsCollector', 'FIFOVisualizer']
+__all__ = ['ResultAnalyzer', 'RequestType', 'RequestInfo', 'FIFOStatsCollector']

@@ -11,11 +11,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.noc.crossring.model import CrossRingModel
 from src.noc.crossring.config import CrossRingConfig
 import logging
+import matplotlib
 
 # 配置日志级别以显示关键调试信息
-logging.basicConfig(level=logging.ERROR, format="%(levelname)s - %(message)s")
-# 只显示错误和重要信息
-logging.getLogger("src.noc.crossring").setLevel(logging.ERROR)
+logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
+# 显示INFO级别信息以查看注入日志
+logging.getLogger("src.noc.crossring").setLevel(logging.INFO)
+
+if sys.platform == "darwin":  # macOS 的系统标识是 'darwin'
+    matplotlib.use("macosx")  # 仅在 macOS 上使用该后端
 
 
 def track_request_smart(output_dir: str = None):
@@ -72,56 +76,44 @@ def track_request_smart(output_dir: str = None):
 
     print(f"✅ 成功设置TrafficScheduler，准备处理请求")
 
-    # 跟踪的packet_id - 第6和第7个请求
-    packet_ids = [6, 7]  # packet_id从0开始，所以5是第6个，6是第7个
-
-    # 启用全局调试模式，跟踪实际的packet_id
-    # enable_debug方法签名: enable_debug(level: int = 1, trace_packets: List[str] = None, sleep_time: float = 0.0)
-    model.enable_debug(level=2, trace_packets=[str(pid) for pid in packet_ids], sleep_time=0.3)
-
-    # 添加自定义调试：在每个周期检查节点3的inject_direction_fifos状态
-    original_step = model.step
-
-    def debug_step():
-        original_step()
-        # 只在关键周期显示调试信息
-        if model.cycle < 40 or model.cycle > 60:
-            return
-        # 检查节点3的IQ_TR状态
-        if hasattr(model, "nodes") and 3 in model.nodes:
-            node3 = model.nodes[3]
-            if hasattr(node3, "inject_queue") and hasattr(node3.inject_queue, "inject_direction_fifos"):
-                req_tr_fifo = node3.inject_queue.inject_direction_fifos["req"]["TR"]
-                # 总是显示FIFO状态，不管是否为空
-                if hasattr(req_tr_fifo, "internal_queue"):
-                    queue_contents = []
-                    for i, flit in enumerate(req_tr_fifo.internal_queue):
-                        packet_id = getattr(flit, "packet_id", "unknown")
-                        queue_contents.append(f"pos{i}:pkt{packet_id}")
-
-                    output_info = "None"
-                    if hasattr(req_tr_fifo, "output_register") and req_tr_fifo.output_register:
-                        output_packet_id = getattr(req_tr_fifo.output_register, "packet_id", "unknown")
-                        output_info = f"pkt{output_packet_id}"
-
-                    print(f"🔍 周期{model.cycle}: N3.IQ_TR内容=[{','.join(queue_contents)}], 输出={output_info}, valid={getattr(req_tr_fifo, 'output_valid', False)}")
-
-    model.step = debug_step
+    # 启用调试模式以显示请求处理过程
+    packet_ids = [
+        6,
+    ]
+    model.enable_debug(level=1, trace_packets=[str(pid) for pid in packet_ids], sleep_time=0.1)
 
     print("-" * 60)
 
     # 运行仿真
-    for cycle in range(200):  # 减少运行周期以便观察
+    for cycle in range(150):  # 运行足够的周期完成传输
         model.step()
+        # if model.cycle > 100:
+        # break
 
     # 执行结果分析
     print("-" * 60)
     print("📊 开始结果分析...")
 
     # 执行分析
-    results = {"simulation_time": model.cycle, "total_requests": len(model.request_tracker.completed_requests), "topology": "CrossRing"}
+    completed_requests = len(model.request_tracker.completed_requests) if hasattr(model, "request_tracker") and model.request_tracker else 0
+    results = {"simulation_time": model.cycle, "total_requests": completed_requests, "topology": "CrossRing"}
 
-    analysis = analysis = model.analyze_simulation_results(results, enable_visualization=True, save_results=True)
+    print(f"📊 仿真统计信息:")
+    print(f"  - 仿真周期: {model.cycle}")
+    print(f"  - 完成请求数: {completed_requests}")
+    if hasattr(model, "request_tracker") and model.request_tracker:
+        total_requests = len(model.request_tracker.active_requests) + len(model.request_tracker.completed_requests)
+        print(f"  - 总请求数: {total_requests}")
+        print(f"  - 正在处理: {len(model.request_tracker.active_requests)}")
+
+    # 确保输出目录是绝对路径字符串
+    save_dir_str = str(output_dir.resolve())
+
+    try:
+        analysis = model.analyze_simulation_results(results, enable_visualization=True, save_results=True, save_dir=save_dir_str)
+    except Exception as e:
+        print(f"ERROR: 分析失败: {e}")
+        analysis = {}
 
     # 显示分析结果摘要
     print("\n📈 分析结果摘要:")
