@@ -1130,24 +1130,30 @@ class CrossRingCrossPoint:
 
     def _get_flit_actual_direction(self, flit: CrossRingFlit, arrival_direction: str) -> str:
         """
-        计算flit的实际传输方向（基于其路由目标）
+        计算flit应该写入Ring Bridge的输入方向
+        
+        关键修复：从水平环弹出的flit应该写入RB_TR/RB_TL输入，而不是RB_TU/RB_TD
+        Ring Bridge内部会处理维度转换逻辑
 
         Args:
             flit: 要分析的flit
             arrival_direction: 到达slice的方向
 
         Returns:
-            flit的实际传输方向
+            Ring Bridge输入方向
         """
-        # 计算flit的下一个路由方向
-        next_direction = self.parent_node._calculate_routing_direction(flit) if self.parent_node else "TR"
-
-        # 如果是EQ（本地），则使用到达方向
-        if next_direction == "EQ":
-            return arrival_direction
-
-        # 否则使用路由计算的方向
-        return next_direction
+        # 对于水平CrossPoint，flit应该写入对应的水平方向输入
+        if self.direction == CrossPointDirection.HORIZONTAL:
+            # 水平环弹出 -> 写入RB_TR或RB_TL（基于到达方向）
+            return arrival_direction  # TR或TL
+            
+        # 对于垂直CrossPoint，flit应该写入对应的垂直方向输入  
+        elif self.direction == CrossPointDirection.VERTICAL:
+            # 垂直环弹出 -> 写入RB_TU或RB_TD（基于到达方向）
+            return arrival_direction  # TU或TD
+            
+        # 默认使用到达方向
+        return arrival_direction
 
     def add_to_ring_bridge_input(self, flit: CrossRingFlit, from_direction: str, channel: str) -> bool:
         """

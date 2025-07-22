@@ -86,7 +86,7 @@ class ResultAnalyzer:
         self.bandwidth_time_series = defaultdict(lambda: {"time": [], "start_times": [], "bytes": []})
 
     def convert_tracker_to_request_info(self, request_tracker, config) -> List[RequestInfo]:
-        """转换RequestTracker数据为RequestInfo格式（按照老版本逻辑）"""
+        """转换RequestTracker数据为RequestInfo格式（使用正确的延迟计算）"""
         requests = []
 
         # 获取配置参数
@@ -96,44 +96,104 @@ class ResultAnalyzer:
 
         for req_id, lifecycle in request_tracker.completed_requests.items():
             # 使用实际的时间戳
-            # 如果时间戳无效，说明请求追踪有问题，需要警告并使用推断值
-            if lifecycle.created_cycle <= 0:
-                self.logger.warning(f"请求{req_id}的created_cycle无效({lifecycle.created_cycle})，请求追踪可能有问题")
-                # 使用请求ID推断大概的创建时间（每个请求间隔4周期注入）
-                lifecycle.created_cycle = int(req_id) * 4  # 基于traffic文件，每4周期一个请求
-            if lifecycle.completed_cycle <= 0:
-                self.logger.warning(f"请求{req_id}的completed_cycle无效({lifecycle.completed_cycle})，请求追踪可能有问题")
-                # 假设典型延迟15周期
-                lifecycle.completed_cycle = lifecycle.created_cycle + 15
-
             # 时间转换：cycle -> ns
             start_time = int(lifecycle.created_cycle * cycle_time_ns)
             end_time = int(lifecycle.completed_cycle * cycle_time_ns)
             rn_end_time = end_time  # 简化处理
             sn_end_time = end_time  # 简化处理
 
-            # 计算延迟（cycle数 * cycle时间）- 所有请求应有相同延迟
-            total_latency_cycles = lifecycle.completed_cycle - lifecycle.created_cycle
-            total_latency_ns = int(total_latency_cycles * cycle_time_ns)
-            cmd_latency = total_latency_ns // 3  # 简化假设
-            data_latency = total_latency_ns // 3
-            transaction_latency = total_latency_ns
+            # 提取source_type和dest_type
+            source_type = "unknown"
+            dest_type = "unknown"
+            
+            # 直接从所有flits中收集时间戳
+            cmd_entry_cake0_cycle = np.inf
+            cmd_entry_noc_from_cake0_cycle = np.inf
+            cmd_entry_noc_from_cake1_cycle = np.inf
+            cmd_received_by_cake0_cycle = np.inf
+            cmd_received_by_cake1_cycle = np.inf
+            data_entry_noc_from_cake0_cycle = np.inf
+            data_entry_noc_from_cake1_cycle = np.inf
+            data_received_complete_cycle = np.inf
+            
+            # 从request flits中收集时间戳和IP类型
+            for flit in lifecycle.request_flits:
+                # 提取IP类型信息
+                if hasattr(flit, 'source_type') and source_type == "unknown":
+                    source_type = flit.source_type
+                if hasattr(flit, 'destination_type') and dest_type == "unknown":
+                    dest_type = flit.destination_type
+                
+                # 收集时间戳
+                if hasattr(flit, 'cmd_entry_cake0_cycle') and flit.cmd_entry_cake0_cycle < np.inf:
+                    cmd_entry_cake0_cycle = min(cmd_entry_cake0_cycle, flit.cmd_entry_cake0_cycle)
+                if hasattr(flit, 'cmd_entry_noc_from_cake0_cycle') and flit.cmd_entry_noc_from_cake0_cycle < np.inf:
+                    cmd_entry_noc_from_cake0_cycle = min(cmd_entry_noc_from_cake0_cycle, flit.cmd_entry_noc_from_cake0_cycle)
+                if hasattr(flit, 'cmd_entry_noc_from_cake1_cycle') and flit.cmd_entry_noc_from_cake1_cycle < np.inf:
+                    cmd_entry_noc_from_cake1_cycle = min(cmd_entry_noc_from_cake1_cycle, flit.cmd_entry_noc_from_cake1_cycle)
+                if hasattr(flit, 'cmd_received_by_cake0_cycle') and flit.cmd_received_by_cake0_cycle < np.inf:
+                    cmd_received_by_cake0_cycle = min(cmd_received_by_cake0_cycle, flit.cmd_received_by_cake0_cycle)
+                if hasattr(flit, 'cmd_received_by_cake1_cycle') and flit.cmd_received_by_cake1_cycle < np.inf:
+                    cmd_received_by_cake1_cycle = min(cmd_received_by_cake1_cycle, flit.cmd_received_by_cake1_cycle)
+            
+            # 从response flits中收集时间戳
+            for flit in lifecycle.response_flits:
+                if hasattr(flit, 'cmd_received_by_cake0_cycle') and flit.cmd_received_by_cake0_cycle < np.inf:
+                    cmd_received_by_cake0_cycle = min(cmd_received_by_cake0_cycle, flit.cmd_received_by_cake0_cycle)
+                if hasattr(flit, 'cmd_received_by_cake1_cycle') and flit.cmd_received_by_cake1_cycle < np.inf:
+                    cmd_received_by_cake1_cycle = min(cmd_received_by_cake1_cycle, flit.cmd_received_by_cake1_cycle)
+            
+            # 从data flits中收集时间戳
+            for flit in lifecycle.data_flits:
+                if hasattr(flit, 'data_entry_noc_from_cake0_cycle') and flit.data_entry_noc_from_cake0_cycle < np.inf:
+                    data_entry_noc_from_cake0_cycle = min(data_entry_noc_from_cake0_cycle, flit.data_entry_noc_from_cake0_cycle)
+                if hasattr(flit, 'data_entry_noc_from_cake1_cycle') and flit.data_entry_noc_from_cake1_cycle < np.inf:
+                    data_entry_noc_from_cake1_cycle = min(data_entry_noc_from_cake1_cycle, flit.data_entry_noc_from_cake1_cycle)
+                if hasattr(flit, 'data_received_complete_cycle') and flit.data_received_complete_cycle < np.inf:
+                    data_received_complete_cycle = min(data_received_complete_cycle, flit.data_received_complete_cycle)
+            
+            # 按照BaseFlit的calculate_latencies方法计算延迟
+            cmd_latency = np.inf
+            data_latency = np.inf
+            transaction_latency = np.inf
+            
+            # 调试：打印收集到的时间戳
+            if req_id == list(request_tracker.completed_requests.keys())[0]:  # 只打印第一个请求
+                self.logger.debug(f"请求 {req_id} 时间戳:")
+                self.logger.debug(f"  cmd_entry_cake0_cycle: {cmd_entry_cake0_cycle}")
+                self.logger.debug(f"  cmd_entry_noc_from_cake0_cycle: {cmd_entry_noc_from_cake0_cycle}")
+                self.logger.debug(f"  cmd_received_by_cake1_cycle: {cmd_received_by_cake1_cycle}")
+                self.logger.debug(f"  data_entry_noc_from_cake0_cycle: {data_entry_noc_from_cake0_cycle}")
+                self.logger.debug(f"  data_entry_noc_from_cake1_cycle: {data_entry_noc_from_cake1_cycle}")
+                self.logger.debug(f"  data_received_complete_cycle: {data_received_complete_cycle}")
+                self.logger.debug(f"  lifecycle中的flit数量: req={len(lifecycle.request_flits)}, rsp={len(lifecycle.response_flits)}, data={len(lifecycle.data_flits)}")
+            
+            # 命令延迟：cmd_received_by_cake1_cycle - cmd_entry_noc_from_cake0_cycle
+            if cmd_entry_noc_from_cake0_cycle < np.inf and cmd_received_by_cake1_cycle < np.inf:
+                cmd_latency = cmd_received_by_cake1_cycle - cmd_entry_noc_from_cake0_cycle
+            
+            # 数据延迟：根据读写类型不同
+            if lifecycle.op_type == "read":
+                # 读操作：data_received_complete_cycle - data_entry_noc_from_cake1_cycle
+                if data_entry_noc_from_cake1_cycle < np.inf and data_received_complete_cycle < np.inf:
+                    data_latency = data_received_complete_cycle - data_entry_noc_from_cake1_cycle
+            elif lifecycle.op_type == "write":
+                # 写操作：data_received_complete_cycle - data_entry_noc_from_cake0_cycle
+                if data_entry_noc_from_cake0_cycle < np.inf and data_received_complete_cycle < np.inf:
+                    data_latency = data_received_complete_cycle - data_entry_noc_from_cake0_cycle
+            
+            # 事务延迟：data_received_complete_cycle - cmd_entry_cake0_cycle
+            if cmd_entry_cake0_cycle < np.inf and data_received_complete_cycle < np.inf:
+                transaction_latency = data_received_complete_cycle - cmd_entry_cake0_cycle
+            
+            # 将cycle延迟转换为ns
+            cmd_latency_ns = int(cmd_latency * cycle_time_ns) if cmd_latency < np.inf else 0
+            data_latency_ns = int(data_latency * cycle_time_ns) if data_latency < np.inf else 0
+            transaction_latency_ns = int(transaction_latency * cycle_time_ns) if transaction_latency < np.inf else 0
 
-            # 计算字节数 (按照老版本的方式)
+            # 计算字节数
             burst_length = lifecycle.burst_size
-            # 老版本使用128字节/flit
-            total_bytes = burst_length * 128
-
-            # 从lifecycle中获取实际的IP类型信息
-            if hasattr(lifecycle, "source_ip_type") and hasattr(lifecycle, "dest_ip_type"):
-                source_type = lifecycle.source_ip_type
-                dest_type = lifecycle.dest_ip_type
-            else:
-                # 如果lifecycle没有IP类型信息，使用默认格式匹配traffic文件
-                # traffic文件格式: timestamp,source_node,source_ip,dest_node,dest_ip,operation,burst_size
-                # 例如: 0,3,gdma_0,4,ddr_0,R,4
-                source_type = "gdma_0"  # 从traffic file: source node 3 -> gdma_0
-                dest_type = "ddr_0"     # 从traffic file: dest node 4 -> ddr_0
+            total_bytes = burst_length * 128  # 128字节/flit
 
             request_info = RequestInfo(
                 packet_id=str(req_id),
@@ -148,9 +208,9 @@ class ResultAnalyzer:
                 dest_type=dest_type,
                 burst_length=burst_length,
                 total_bytes=total_bytes,
-                cmd_latency=cmd_latency,
-                data_latency=data_latency,
-                transaction_latency=transaction_latency,
+                cmd_latency=cmd_latency_ns,
+                data_latency=data_latency_ns,
+                transaction_latency=transaction_latency_ns,
             )
             requests.append(request_info)
 

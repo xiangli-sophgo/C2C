@@ -173,13 +173,17 @@ class CrossRingIPInterface(BaseIPInterface):
 
                         # 更新时间戳
                         if channel == "req" and hasattr(flit, "req_attr") and flit.req_attr == "new":
+                            # 设置命令从源IP进入NoC的时间（进入channel buffer）
                             flit.cmd_entry_noc_from_cake0_cycle = self.current_cycle
                         elif channel == "rsp":
+                            # 响应从目标IP进入NoC的时间
                             flit.cmd_entry_noc_from_cake1_cycle = self.current_cycle
                         elif channel == "data":
                             if flit.req_type == "read":
+                                # 读数据从目标IP进入NoC的时间
                                 flit.data_entry_noc_from_cake1_cycle = self.current_cycle
                             elif flit.req_type == "write":
+                                # 写数据从源IP进入NoC的时间
                                 flit.data_entry_noc_from_cake0_cycle = self.current_cycle
 
                         # 更新RequestTracker状态：flit成功注入到网络
@@ -576,6 +580,8 @@ class CrossRingIPInterface(BaseIPInterface):
                 channel="data",
                 flit_type="data",
                 departure_cycle=self.current_cycle + latency + i * self.clock_ratio,
+                num_col=self.config.NUM_COL,
+                num_row=self.config.NUM_ROW,
             )
 
             data_flit.sync_latency_record(req)
@@ -609,6 +615,8 @@ class CrossRingIPInterface(BaseIPInterface):
                 channel="data",
                 flit_type="data",
                 departure_cycle=self.current_cycle + latency + i * self.clock_ratio,
+                num_col=self.config.NUM_COL,
+                num_row=self.config.NUM_ROW,
             )
 
             data_flit.sync_latency_record(req)
@@ -641,6 +649,8 @@ class CrossRingIPInterface(BaseIPInterface):
             flit_type="rsp",
             rsp_type="negative",
             departure_cycle=self.current_cycle + self.clock_ratio,
+            num_col=self.config.NUM_COL,
+            num_row=self.config.NUM_ROW,
         )
 
         rsp.sync_latency_record(req)
@@ -665,6 +675,8 @@ class CrossRingIPInterface(BaseIPInterface):
             flit_type="rsp",
             rsp_type="datasend",
             departure_cycle=self.current_cycle + self.clock_ratio,
+            num_col=self.config.NUM_COL,
+            num_row=self.config.NUM_ROW,
         )
 
         rsp.sync_latency_record(req)
@@ -808,7 +820,7 @@ class CrossRingIPInterface(BaseIPInterface):
             path = self.model.topology.calculate_shortest_path(source, destination)
             
             # 创建读请求flit
-            req_flit = create_crossring_flit(source, destination, path)
+            req_flit = create_crossring_flit(source, destination, path, num_col=self.config.NUM_COL, num_row=self.config.NUM_ROW)
             req_flit.packet_id = packet_id
             req_flit.req_type = "read"
             req_flit.burst_length = burst_length
@@ -836,7 +848,7 @@ class CrossRingIPInterface(BaseIPInterface):
             path = self.model.topology.calculate_shortest_path(source, destination)
             
             # 创建写请求flit
-            req_flit = create_crossring_flit(source, destination, path)
+            req_flit = create_crossring_flit(source, destination, path, num_col=self.config.NUM_COL, num_row=self.config.NUM_ROW)
             req_flit.packet_id = packet_id
             req_flit.req_type = "write"
             req_flit.burst_length = burst_length
@@ -933,7 +945,7 @@ class CrossRingIPInterface(BaseIPInterface):
             path = self.model.topology.calculate_shortest_path(source, destination)
             
             # 创建CrossRing Flit
-            flit = create_crossring_flit(source=source, destination=destination, path=path, packet_id=packet_id, req_type=req_type, burst_length=burst_length, num_col=self.config.NUM_COL)
+            flit = create_crossring_flit(source=source, destination=destination, path=path, packet_id=packet_id, req_type=req_type, burst_length=burst_length, num_col=self.config.NUM_COL, num_row=self.config.NUM_ROW)
 
             # 设置IP类型信息
             flit.source_type = source_type if source_type else self.ip_type
@@ -943,6 +955,9 @@ class CrossRingIPInterface(BaseIPInterface):
             if not destination_type:
                 self.logger.warning(f"⚠️ 没有提供destination_type参数，使用'unknown'作为默认值。建议从traffic文件传入正确的destination_type。")
             flit.channel = "req"
+            
+            # 设置命令进入源IP的时间戳
+            flit.cmd_entry_cake0_cycle = self.current_cycle
             flit.inject_cycle = kwargs.get("inject_cycle", self.current_cycle)
 
             # 注册到请求追踪器
@@ -1001,7 +1016,6 @@ class CrossRingIPInterface(BaseIPInterface):
 
     def step_compute_phase(self, current_cycle: int) -> None:
         """计算阶段：计算传输决策但不执行"""
-
         # 初始化传输决策存储
         self._transfer_decisions = {
             "pending_to_l2h": {"channel": None, "flit": None},
@@ -1204,6 +1218,21 @@ class CrossRingIPInterface(BaseIPInterface):
                     # 更新flit位置
                     flit.flit_position = "IQ_CH"
                     flit.current_node_id = self.node_id
+
+                    # 更新时间戳
+                    if channel == "req" and hasattr(flit, "req_attr") and flit.req_attr == "new":
+                        # 设置命令从源IP进入NoC的时间（进入channel buffer）
+                        flit.cmd_entry_noc_from_cake0_cycle = self.current_cycle
+                    elif channel == "rsp":
+                        # 响应从目标IP进入NoC的时间
+                        flit.cmd_entry_noc_from_cake1_cycle = self.current_cycle
+                    elif channel == "data":
+                        if flit.req_type == "read":
+                            # 读数据从目标IP进入NoC的时间
+                            flit.data_entry_noc_from_cake1_cycle = self.current_cycle
+                        elif flit.req_type == "write":
+                            # 写数据从源IP进入NoC的时间
+                            flit.data_entry_noc_from_cake0_cycle = self.current_cycle
 
                     # 更新请求状态
                     if channel == "req" and hasattr(flit, "packet_id") and flit.packet_id in self.active_requests:

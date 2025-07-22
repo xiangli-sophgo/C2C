@@ -434,13 +434,14 @@ def create_crossring_flit(source: NodeId, destination: NodeId, path: Optional[Li
     if path is None:
         path = [source, destination]
 
-    # 提取num_col参数，避免传递给Flit构造函数
+    # 提取num_col和num_row参数，避免传递给Flit构造函数
     num_col = kwargs.pop("num_col", 3)
+    num_row = kwargs.pop("num_row", 3)
 
     flit = _global_crossring_flit_pool.get_flit(source=source, destination=destination, path=path, **kwargs)
 
-    # 设置CrossRing坐标信息
-    flit.set_crossring_coordinates(num_col, num_row=3)
+    # 设置CrossRing坐标信息 - 使用正确的num_row参数
+    flit.set_crossring_coordinates(num_col, num_row=num_row)
 
     return flit
 

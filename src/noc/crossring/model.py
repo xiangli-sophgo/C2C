@@ -252,7 +252,7 @@ class CrossRingModel(BaseNoCModel):
         for ip_type, positions in ip_type_configs:
             for node_id in positions:
                 # 为每个节点创建多个IP通道
-                channel_count = self.config.channel_spec.get(ip_type, 2)
+                channel_count = self.config.CHANNEL_SPEC.get(ip_type, 2)
                 for channel_id in range(channel_count):
                     key = f"{ip_type}_{channel_id}_node{node_id}"
                     ip_interface = CrossRingIPInterface(config=self.config, ip_type=f"{ip_type}_{channel_id}", node_id=node_id, model=self)

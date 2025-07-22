@@ -39,9 +39,9 @@ def track_request_smart(output_dir: str = None):
     print(f"📁 输出目录: {output_dir}")
 
     # 创建2x2配置 - 使用小规模拓扑减少输出
-    config = CrossRingConfig.create_custom_config(num_row=3, num_col=3)
+    config = CrossRingConfig.create_custom_config(num_row=2, num_col=2)
 
-    traffic_file = Path(__file__).parent.parent.parent / "traffic_data" / "test1.txt"
+    traffic_file = Path(__file__).parent.parent.parent / "traffic_data" / "sample_traffic.txt"
     if not traffic_file.exists():
         print(f"❌ Traffic文件不存在: {traffic_file}")
         return False
@@ -78,7 +78,7 @@ def track_request_smart(output_dir: str = None):
 
     # 启用调试模式以显示请求处理过程
     packet_ids = [
-        # 6,
+        1,
     ]
     model.enable_debug(level=1, trace_packets=[str(pid) for pid in packet_ids], sleep_time=0.1)
 
@@ -87,8 +87,18 @@ def track_request_smart(output_dir: str = None):
     # 运行仿真
     for cycle in range(3000):  # 运行足够的周期完成传输
         model.step()
-        # if model.cycle > 100:
-        # break
+
+        # 每100周期打印一次状态
+        if cycle % 100 == 0 and cycle > 0:
+            active_count = len(model.request_tracker.active_requests) if hasattr(model, "request_tracker") else 0
+            completed_count = len(model.request_tracker.completed_requests) if hasattr(model, "request_tracker") else 0
+            print(f"周期 {cycle}: 活跃={active_count}, 完成={completed_count}")
+
+        # 如果所有请求都完成了，提前退出
+        if hasattr(model, "request_tracker") and model.request_tracker:
+            if not model.request_tracker.active_requests and model.request_tracker.completed_requests:
+                print(f"所有请求在周期 {cycle} 完成")
+                break
 
     # 执行结果分析
     print("-" * 60)
@@ -97,6 +107,64 @@ def track_request_smart(output_dir: str = None):
     # 执行分析
     completed_requests = len(model.request_tracker.completed_requests) if hasattr(model, "request_tracker") and model.request_tracker else 0
     results = {"simulation_time": model.cycle, "total_requests": completed_requests, "topology": "CrossRing"}
+
+    # 调试：打印RequestLifecycle的详细信息
+    if hasattr(model, "request_tracker") and model.request_tracker:
+        print(f"\n🔍 调试信息 - RequestTracker状态:")
+        print(f"  - 已完成请求数: {len(model.request_tracker.completed_requests)}")
+        print(f"  - 活跃请求数: {len(model.request_tracker.active_requests)}")
+
+        # 打印活跃请求的状态
+        if model.request_tracker.active_requests:
+            print("\n  活跃请求状态:")
+            for req_id, lifecycle in model.request_tracker.active_requests.items():
+                print(f"    请求 {req_id}: state={lifecycle.current_state.value}, created={lifecycle.created_cycle}, injected={lifecycle.injected_cycle}")
+                print(f"      source={lifecycle.source} -> dest={lifecycle.destination}, op_type={lifecycle.op_type}, burst_size={lifecycle.burst_size}")
+                print(f"      request_flits={len(lifecycle.request_flits)}, response_flits={len(lifecycle.response_flits)}, data_flits={len(lifecycle.data_flits)}")
+
+                # 检查请求flit的时间戳
+                if lifecycle.request_flits:
+                    flit = lifecycle.request_flits[0]
+                    print(f"      第一个request flit时间戳:")
+                    print(f"        cmd_entry_cake0_cycle: {getattr(flit, 'cmd_entry_cake0_cycle', 'N/A')}")
+                    print(f"        cmd_entry_noc_from_cake0_cycle: {getattr(flit, 'cmd_entry_noc_from_cake0_cycle', 'N/A')}")
+                    print(f"        cmd_received_by_cake1_cycle: {getattr(flit, 'cmd_received_by_cake1_cycle', 'N/A')}")
+
+        print("\n  已完成请求详情:")
+        for req_id, lifecycle in model.request_tracker.completed_requests.items():
+            print(f"\n请求 {req_id}:")
+            print(f"  - created_cycle: {lifecycle.created_cycle}")
+            print(f"  - injected_cycle: {lifecycle.injected_cycle}")
+            print(f"  - completed_cycle: {lifecycle.completed_cycle}")
+            print(f"  - op_type: {lifecycle.op_type}")
+            print(f"  - source: {lifecycle.source} -> dest: {lifecycle.destination}")
+            print(f"  - burst_size: {lifecycle.burst_size}")
+            print(f"  - request_flits数量: {len(lifecycle.request_flits)}")
+            print(f"  - response_flits数量: {len(lifecycle.response_flits)}")
+            print(f"  - data_flits数量: {len(lifecycle.data_flits)}")
+
+            # 打印第一个request flit的时间戳
+            if lifecycle.request_flits:
+                flit = lifecycle.request_flits[0]
+                print(f"\n  第一个request flit时间戳:")
+                print(f"    - cmd_entry_cake0_cycle: {getattr(flit, 'cmd_entry_cake0_cycle', 'N/A')}")
+                print(f"    - cmd_entry_noc_from_cake0_cycle: {getattr(flit, 'cmd_entry_noc_from_cake0_cycle', 'N/A')}")
+                print(f"    - cmd_received_by_cake1_cycle: {getattr(flit, 'cmd_received_by_cake1_cycle', 'N/A')}")
+
+            # 打印第一个data flit的时间戳
+            if lifecycle.data_flits:
+                flit = lifecycle.data_flits[0]
+                print(f"\n  第一个data flit时间戳:")
+                print(f"    - data_entry_noc_from_cake1_cycle: {getattr(flit, 'data_entry_noc_from_cake1_cycle', 'N/A')}")
+                print(f"    - data_received_complete_cycle: {getattr(flit, 'data_received_complete_cycle', 'N/A')}")
+
+                # 计算延迟
+                if hasattr(flit, "calculate_latencies"):
+                    latencies = flit.calculate_latencies()
+                    print(f"\n  计算的延迟 (cycles):")
+                    print(f"    - cmd_latency: {latencies.get('cmd_latency', 'N/A')}")
+                    print(f"    - data_latency: {latencies.get('data_latency', 'N/A')}")
+                    print(f"    - transaction_latency: {latencies.get('transaction_latency', 'N/A')}")
 
     print(f"📊 仿真统计信息:")
     print(f"  - 仿真周期: {model.cycle}")
