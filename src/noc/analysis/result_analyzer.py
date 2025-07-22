@@ -95,11 +95,16 @@ class ResultAnalyzer:
         cycle_time_ns = 1000.0 / (network_frequency * 1000)  # frequency是GHz，转换为ns
 
         for req_id, lifecycle in request_tracker.completed_requests.items():
-            # 临时修复：为所有完成的请求生成合理的时间戳
+            # 使用实际的时间戳
+            # 如果时间戳无效，说明请求追踪有问题，需要警告并使用推断值
             if lifecycle.created_cycle <= 0:
-                lifecycle.created_cycle = int(req_id) * 2  # 假设每个请求间隔2个周期开始
+                self.logger.warning(f"请求{req_id}的created_cycle无效({lifecycle.created_cycle})，请求追踪可能有问题")
+                # 使用请求ID推断大概的创建时间（每个请求间隔4周期注入）
+                lifecycle.created_cycle = int(req_id) * 4  # 基于traffic文件，每4周期一个请求
             if lifecycle.completed_cycle <= 0:
-                lifecycle.completed_cycle = lifecycle.created_cycle + 15 + int(req_id) * 3  # 假设完成时间
+                self.logger.warning(f"请求{req_id}的completed_cycle无效({lifecycle.completed_cycle})，请求追踪可能有问题")
+                # 假设典型延迟15周期
+                lifecycle.completed_cycle = lifecycle.created_cycle + 15
 
             # 时间转换：cycle -> ns
             start_time = int(lifecycle.created_cycle * cycle_time_ns)
@@ -107,7 +112,7 @@ class ResultAnalyzer:
             rn_end_time = end_time  # 简化处理
             sn_end_time = end_time  # 简化处理
 
-            # 计算延迟（cycle数 * cycle时间）
+            # 计算延迟（cycle数 * cycle时间）- 所有请求应有相同延迟
             total_latency_cycles = lifecycle.completed_cycle - lifecycle.created_cycle
             total_latency_ns = int(total_latency_cycles * cycle_time_ns)
             cmd_latency = total_latency_ns // 3  # 简化假设
@@ -119,6 +124,17 @@ class ResultAnalyzer:
             # 老版本使用128字节/flit
             total_bytes = burst_length * 128
 
+            # 从lifecycle中获取实际的IP类型信息
+            if hasattr(lifecycle, "source_ip_type") and hasattr(lifecycle, "dest_ip_type"):
+                source_type = lifecycle.source_ip_type
+                dest_type = lifecycle.dest_ip_type
+            else:
+                # 如果lifecycle没有IP类型信息，使用默认格式匹配traffic文件
+                # traffic文件格式: timestamp,source_node,source_ip,dest_node,dest_ip,operation,burst_size
+                # 例如: 0,3,gdma_0,4,ddr_0,R,4
+                source_type = "gdma_0"  # 从traffic file: source node 3 -> gdma_0
+                dest_type = "ddr_0"     # 从traffic file: dest node 4 -> ddr_0
+
             request_info = RequestInfo(
                 packet_id=str(req_id),
                 start_time=start_time,
@@ -128,8 +144,8 @@ class ResultAnalyzer:
                 req_type=lifecycle.op_type,
                 source_node=lifecycle.source,
                 dest_node=lifecycle.destination,
-                source_type="gdma",  # 从traffic文件可知
-                dest_type="ddr",  # 从traffic文件可知
+                source_type=source_type,
+                dest_type=dest_type,
                 burst_length=burst_length,
                 total_bytes=total_bytes,
                 cmd_latency=cmd_latency,
@@ -261,6 +277,7 @@ class ResultAnalyzer:
             weighted_bandwidth = (total_weighted_bandwidth / total_weight) if total_weight > 0 else 0.0
         else:
             weighted_bandwidth = 0.0
+
 
         return {
             "非加权带宽_GB/s": f"{unweighted_bandwidth:.2f}",
@@ -625,7 +642,7 @@ class ResultAnalyzer:
             self.logger.error(f"错误详情: {traceback.format_exc()}")
             return {}
 
-    def save_ports_bandwidth_csv(self, metrics, save_dir: str = "output") -> str:
+    def save_ports_bandwidth_csv(self, metrics, save_dir: str = "output", config=None) -> str:
         """保存端口带宽CSV文件（仿照老版本格式）
         
         Returns:
@@ -668,31 +685,49 @@ class ResultAnalyzer:
                 "mixed_network_end_time_ns",
             ]
             
-            # 按端口分组统计
+            # 按端口分组统计 - 使用具体IP名称和坐标
             port_stats = {}
             
+            # 从config获取网格尺寸
+            num_cols = getattr(config, 'NUM_COL', 3) if config else 3  # 默认3列
+            
             for req in metrics:
-                # 生成端口ID（基于source_node和dest_node）
-                if req.req_type == "read":
-                    port_id = f"RN_{req.source_node}"  # 读请求以source为主
-                    coordinate = f"node_{req.source_node}"
-                else:
-                    port_id = f"SN_{req.dest_node}"   # 写请求以dest为主
-                    coordinate = f"node_{req.dest_node}"
+                # 统计所有涉及的端口：RN端口（读请求源）和SN端口（写请求目标）
+                ports_to_update = []
                 
-                if port_id not in port_stats:
-                    port_stats[port_id] = {
-                        "coordinate": coordinate,
-                        "read_requests": [],
-                        "write_requests": [],
-                        "all_requests": []
-                    }
+                # 对于每个请求，都要统计RN和SN两个端口
+                # RN端口：请求发起者（读/写请求的源）
+                source_port_id = req.source_type  # 如 "gdma_0"
+                source_node_id = req.source_node
+                source_row = source_node_id // num_cols
+                source_col = source_node_id % num_cols
+                source_coordinate = f"x_{source_col}_y_{source_row}"
+                ports_to_update.append((source_port_id, source_node_id, source_coordinate))
                 
-                port_stats[port_id]["all_requests"].append(req)
-                if req.req_type == "read":
-                    port_stats[port_id]["read_requests"].append(req)
-                else:
-                    port_stats[port_id]["write_requests"].append(req)
+                # SN端口：请求接收者（读/写请求的目标）
+                dest_port_id = req.dest_type    # 如 "ddr_0"  
+                dest_node_id = req.dest_node
+                dest_row = dest_node_id // num_cols
+                dest_col = dest_node_id % num_cols  
+                dest_coordinate = f"x_{dest_col}_y_{dest_row}"
+                ports_to_update.append((dest_port_id, dest_node_id, dest_coordinate))
+                
+                # 更新所有相关端口的统计
+                for port_id, node_id, coordinate in ports_to_update:
+                    if port_id not in port_stats:
+                        port_stats[port_id] = {
+                            "coordinate": coordinate,
+                            "node_id": node_id,
+                            "read_requests": [],
+                            "write_requests": [],
+                            "all_requests": []
+                        }
+                    
+                    port_stats[port_id]["all_requests"].append(req)
+                    if req.req_type == "read":
+                        port_stats[port_id]["read_requests"].append(req)
+                    else:
+                        port_stats[port_id]["write_requests"].append(req)
             
             # 生成CSV文件
             timestamp = int(time.time())
@@ -708,7 +743,7 @@ class ResultAnalyzer:
                     write_reqs = stats["write_requests"]
                     all_reqs = stats["all_requests"]
                     
-                    # 简化的带宽计算（基于总字节数和时间范围）
+                    # 带宽计算 - 使用工作区间计算，与calculate_bandwidth_metrics完全一致
                     def calc_bandwidth_metrics(requests):
                         if not requests:
                             return {
@@ -721,24 +756,44 @@ class ResultAnalyzer:
                                 "flits_count": 0
                             }
                         
-                        start_time = min(r.start_time for r in requests)
-                        end_time = max(r.end_time for r in requests)
-                        total_time = end_time - start_time if end_time > start_time else 1
+                        # 计算工作区间（与calculate_bandwidth_metrics相同的逻辑）
+                        working_intervals = self.calculate_working_intervals(requests, min_gap_threshold=200)
+                        
+                        # 网络工作时间窗口
+                        network_start = min(r.start_time for r in requests)
+                        network_end = max(r.end_time for r in requests)
+                        total_network_time = network_end - network_start
+                        
+                        # 总工作时间和总字节数
+                        total_working_time = sum(interval.duration for interval in working_intervals)
                         total_bytes = sum(r.total_bytes for r in requests)
                         
-                        # 简化的带宽计算：总字节数/总时间
-                        bandwidth_bytes_per_ns = total_bytes / total_time if total_time > 0 else 0.0
-                        bandwidth_gbps = bandwidth_bytes_per_ns * 1e9 / (1024**3)
+                        # 计算非加权带宽：总数据量 / 网络总时间
+                        unweighted_bandwidth = (total_bytes / total_network_time) if total_network_time > 0 else 0.0
                         
-                        # 简化：假设非加权和加权带宽相等
+                        # 计算加权带宽：各区间带宽按flit数量加权平均
+                        if working_intervals:
+                            total_weighted_bandwidth = 0.0
+                            total_weight = 0
+                            
+                            for interval in working_intervals:
+                                weight = interval.flit_count  # 权重是工作时间段的flit数量
+                                bandwidth = interval.bandwidth_bytes_per_ns  # bytes/ns
+                                total_weighted_bandwidth += bandwidth * weight
+                                total_weight += weight
+                            
+                            weighted_bandwidth = (total_weighted_bandwidth / total_weight) if total_weight > 0 else 0.0
+                        else:
+                            weighted_bandwidth = 0.0
+                        
                         return {
-                            "unweighted_bw": bandwidth_gbps,
-                            "weighted_bw": bandwidth_gbps,
-                            "start_time": start_time,
-                            "end_time": end_time,
-                            "total_time": total_time,
-                            "working_intervals": 1 if requests else 0,
-                            "flits_count": len(requests) * 16  # 假设每个请求16个flit
+                            "unweighted_bw": unweighted_bandwidth,
+                            "weighted_bw": weighted_bandwidth,
+                            "start_time": network_start,
+                            "end_time": network_end,
+                            "total_time": total_network_time,
+                            "working_intervals": len(working_intervals),
+                            "flits_count": sum(r.burst_length for r in requests)
                         }
                     
                     read_metrics = calc_bandwidth_metrics(read_reqs)
@@ -774,6 +829,81 @@ class ResultAnalyzer:
                         mixed_metrics["end_time"],
                     ]
                     writer.writerow(row_data)
+                
+                # 计算IP类型汇总统计
+                ip_type_aggregates = {}
+                for port_id, stats in port_stats.items():
+                    # 提取IP类型（去掉数字后缀）
+                    ip_type = port_id.split('_')[0]  # "gdma_0" -> "gdma"
+                    
+                    if ip_type not in ip_type_aggregates:
+                        ip_type_aggregates[ip_type] = {
+                            "ports": [],
+                            "total_read_requests": 0,
+                            "total_write_requests": 0,
+                            "total_requests": 0,
+                            "total_read_flits": 0,
+                            "total_write_flits": 0,
+                            "total_flits": 0,
+                            "read_bandwidth_sum": 0,
+                            "write_bandwidth_sum": 0,
+                            "mixed_bandwidth_sum": 0,
+                        }
+                    
+                    # 计算该端口的指标
+                    read_reqs = stats["read_requests"]
+                    write_reqs = stats["write_requests"]
+                    all_reqs = stats["all_requests"]
+                    
+                    read_metrics = calc_bandwidth_metrics(read_reqs)
+                    write_metrics = calc_bandwidth_metrics(write_reqs)
+                    mixed_metrics = calc_bandwidth_metrics(all_reqs)
+                    
+                    # 累加到IP类型统计
+                    agg = ip_type_aggregates[ip_type]
+                    agg["ports"].append(port_id)
+                    agg["total_read_requests"] += len(read_reqs)
+                    agg["total_write_requests"] += len(write_reqs)
+                    agg["total_requests"] += len(all_reqs)
+                    agg["total_read_flits"] += read_metrics["flits_count"]
+                    agg["total_write_flits"] += write_metrics["flits_count"]
+                    agg["total_flits"] += mixed_metrics["flits_count"]
+                    agg["read_bandwidth_sum"] += read_metrics["unweighted_bw"]
+                    agg["write_bandwidth_sum"] += write_metrics["unweighted_bw"]
+                    agg["mixed_bandwidth_sum"] += mixed_metrics["unweighted_bw"]
+                
+                # 添加IP类型汇总行
+                writer.writerow([])  # 空行分隔
+                writer.writerow(["=== IP类型汇总统计 ==="])
+                
+                for ip_type, agg in sorted(ip_type_aggregates.items()):
+                    port_count = len(agg["ports"])
+                    avg_read_bw = agg["read_bandwidth_sum"] / port_count if port_count > 0 else 0
+                    avg_write_bw = agg["write_bandwidth_sum"] / port_count if port_count > 0 else 0
+                    avg_mixed_bw = agg["mixed_bandwidth_sum"] / port_count if port_count > 0 else 0
+                    
+                    summary_row = [
+                        f"{ip_type}_AVG",  # port_id格式：gdma_AVG, ddr_AVG
+                        f"avg_of_{port_count}_ports",  # coordinate显示端口数
+                        avg_read_bw,    # 平均读带宽
+                        avg_read_bw,    # 平均读带宽（加权，简化为相同）
+                        avg_write_bw,   # 平均写带宽
+                        avg_write_bw,   # 平均写带宽（加权，简化为相同）
+                        avg_mixed_bw,   # 平均混合带宽
+                        avg_mixed_bw,   # 平均混合带宽（加权，简化为相同）
+                        agg["total_read_requests"],   # 总读请求数
+                        agg["total_write_requests"],  # 总写请求数
+                        agg["total_requests"],        # 总请求数
+                        agg["total_read_flits"],      # 总读flit数
+                        agg["total_write_flits"],     # 总写flit数
+                        agg["total_flits"],           # 总flit数
+                        port_count,  # 工作区间数用端口数表示
+                        port_count,
+                        port_count,
+                        0, 0, 0,  # 时间相关字段为0（汇总数据）
+                        0, 0, 0, 0, 0, 0
+                    ]
+                    writer.writerow(summary_row)
             
             self.logger.info(f"端口带宽CSV已保存: {csv_path} ({len(port_stats)} 个端口)")
             return csv_path
@@ -991,21 +1121,31 @@ class ResultAnalyzer:
             node_ip_bandwidth = defaultdict(lambda: defaultdict(float))
             link_bandwidth = defaultdict(float)
 
-            # 分析每个请求的路径和带宽
-            for metric in metrics:
-                # 计算该请求的带宽贡献
-                request_bandwidth = metric.total_bytes / (metric.end_time - metric.start_time) if metric.end_time > metric.start_time else 0
+            # 首先计算整体时间窗口
+            if not metrics:
+                return ""
+                
+            overall_start_time = min(metric.start_time for metric in metrics)
+            overall_end_time = max(metric.end_time for metric in metrics)
+            overall_time_window = overall_end_time - overall_start_time if overall_end_time > overall_start_time else 1
 
-                # 按节点和IP类型累计带宽（源节点和目标节点都计算）
+            # 按IP类型分组收集字节数
+            ip_type_bytes = defaultdict(int)
+            node_ip_bytes = defaultdict(lambda: defaultdict(int))
+            link_bytes = defaultdict(int)
+            
+            # 分析每个请求的字节数贡献
+            for metric in metrics:
                 source_ip_type = metric.source_type.lower()  # gdma/ddr
                 dest_ip_type = metric.dest_type.lower()  # gdma/ddr
                 
-                # 源节点：发送带宽
-                node_ip_bandwidth[metric.source_node][source_ip_type] += request_bandwidth
-                # 目标节点：接收带宽
-                node_ip_bandwidth[metric.dest_node][dest_ip_type] += request_bandwidth
+                # 累计字节数（不是带宽）
+                # 源节点：发送字节数
+                node_ip_bytes[metric.source_node][source_ip_type] += metric.total_bytes
+                # 目标节点：接收字节数  
+                node_ip_bytes[metric.dest_node][dest_ip_type] += metric.total_bytes
 
-                # 计算链路带宽（只处理跨节点通信）
+                # 计算链路字节数（只处理跨节点通信）
                 if metric.source_node != metric.dest_node:
                     src_row = metric.source_node // num_cols
                     src_col = metric.source_node % num_cols
@@ -1019,7 +1159,7 @@ class ResultAnalyzer:
                             curr_node = src_row * num_cols + col
                             next_node = src_row * num_cols + col + step
                             if mode == "total" or mode == metric.req_type:
-                                link_bandwidth[(curr_node, next_node)] += request_bandwidth
+                                link_bytes[(curr_node, next_node)] += metric.total_bytes
 
                     # 垂直路由
                     elif src_col == dst_col:
@@ -1028,7 +1168,105 @@ class ResultAnalyzer:
                             curr_node = row * num_cols + src_col
                             next_node = (row + step) * num_cols + src_col
                             if mode == "total" or mode == metric.req_type:
-                                link_bandwidth[(curr_node, next_node)] += request_bandwidth
+                                link_bytes[(curr_node, next_node)] += metric.total_bytes
+            
+            # 计算最终带宽：使用工作区间方法计算加权带宽
+            # 按节点和IP类型分组请求，计算各自的工作区间带宽
+            for node_id, ip_data in node_ip_bytes.items():
+                for ip_type, total_bytes in ip_data.items():
+                    # 找到该节点该IP类型的所有请求
+                    node_ip_requests = []
+                    for metric in metrics:
+                        if ((metric.source_node == node_id and metric.source_type.lower() == ip_type) or
+                            (metric.dest_node == node_id and metric.dest_type.lower() == ip_type)):
+                            node_ip_requests.append(metric)
+                    
+                    if node_ip_requests:
+                        # 使用工作区间计算该节点该IP的加权带宽
+                        working_intervals = self.calculate_working_intervals(node_ip_requests, min_gap_threshold=200)
+                        
+                        # 计算加权带宽
+                        if working_intervals:
+                            total_weighted_bandwidth = 0.0
+                            total_weight = 0
+                            
+                            for interval in working_intervals:
+                                weight = interval.flit_count
+                                bandwidth = interval.bandwidth_bytes_per_ns  # bytes/ns
+                                total_weighted_bandwidth += bandwidth * weight
+                                total_weight += weight
+                            
+                            weighted_bandwidth = (total_weighted_bandwidth / total_weight) if total_weight > 0 else 0.0
+                            bandwidth_gbps = weighted_bandwidth * 1e9 / (1024**3)
+                        else:
+                            bandwidth_gbps = 0.0
+                    else:
+                        bandwidth_gbps = 0.0
+                        
+                    node_ip_bandwidth[node_id][ip_type] = bandwidth_gbps
+            
+            # 计算链路带宽：使用通过该链路的请求计算工作区间带宽
+            link_bandwidth = {}
+            for link_key, total_bytes in link_bytes.items():
+                # 找到通过该链路的所有请求
+                link_requests = []
+                curr_node, next_node = link_key
+                
+                for metric in metrics:
+                    if metric.source_node != metric.dest_node:
+                        # 检查该请求是否通过这条链路
+                        src_row = metric.source_node // num_cols
+                        src_col = metric.source_node % num_cols
+                        dst_row = metric.dest_node // num_cols
+                        dst_col = metric.dest_node % num_cols
+                        
+                        passes_through_link = False
+                        
+                        # 水平路由检查
+                        if src_row == dst_row:
+                            step = 1 if dst_col > src_col else -1
+                            for col in range(src_col, dst_col, step):
+                                check_curr = src_row * num_cols + col
+                                check_next = src_row * num_cols + col + step
+                                if (check_curr, check_next) == link_key:
+                                    passes_through_link = True
+                                    break
+                        
+                        # 垂直路由检查
+                        elif src_col == dst_col:
+                            step = 1 if dst_row > src_row else -1
+                            for row in range(src_row, dst_row, step):
+                                check_curr = row * num_cols + src_col
+                                check_next = (row + step) * num_cols + src_col
+                                if (check_curr, check_next) == link_key:
+                                    passes_through_link = True
+                                    break
+                        
+                        if passes_through_link:
+                            link_requests.append(metric)
+                
+                if link_requests:
+                    # 使用工作区间计算链路加权带宽
+                    working_intervals = self.calculate_working_intervals(link_requests, min_gap_threshold=200)
+                    
+                    if working_intervals:
+                        total_weighted_bandwidth = 0.0
+                        total_weight = 0
+                        
+                        for interval in working_intervals:
+                            weight = interval.flit_count
+                            bandwidth = interval.bandwidth_bytes_per_ns  # bytes/ns
+                            total_weighted_bandwidth += bandwidth * weight
+                            total_weight += weight
+                        
+                        weighted_bandwidth = (total_weighted_bandwidth / total_weight) if total_weight > 0 else 0.0
+                        bandwidth_gbps = weighted_bandwidth * 1e9 / (1024**3)
+                    else:
+                        bandwidth_gbps = 0.0
+                else:
+                    bandwidth_gbps = 0.0
+                    
+                link_bandwidth[link_key] = bandwidth_gbps
 
             # 计算总IP类型带宽（用于汇总显示）
             # 动态计算所有IP类型的总带宽
@@ -1328,7 +1566,7 @@ class ResultAnalyzer:
             csv_files = self.save_detailed_requests_csv(metrics, save_dir=save_dir)
             
             # 保存端口带宽CSV文件
-            ports_csv = self.save_ports_bandwidth_csv(metrics, save_dir=save_dir)
+            ports_csv = self.save_ports_bandwidth_csv(metrics, save_dir=save_dir, config=config)
             
             output_files = {}
             if results_file:

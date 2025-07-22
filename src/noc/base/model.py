@@ -698,7 +698,8 @@ class BaseNoCModel(ABC):
                     burst_length=burst,
                     ip_type=src_type,
                     source_type=src_type,
-                    destination_type=dst_type
+                    destination_type=dst_type,
+                    inject_cycle=cycle  # 传递正确的注入时间
                 )
                 
                 if packet_ids:

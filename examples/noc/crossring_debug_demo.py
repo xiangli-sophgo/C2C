@@ -78,14 +78,14 @@ def track_request_smart(output_dir: str = None):
 
     # 启用调试模式以显示请求处理过程
     packet_ids = [
-        6,
+        # 6,
     ]
     model.enable_debug(level=1, trace_packets=[str(pid) for pid in packet_ids], sleep_time=0.1)
 
     print("-" * 60)
 
     # 运行仿真
-    for cycle in range(150):  # 运行足够的周期完成传输
+    for cycle in range(3000):  # 运行足够的周期完成传输
         model.step()
         # if model.cycle > 100:
         # break
