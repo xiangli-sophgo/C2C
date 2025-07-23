@@ -16,6 +16,7 @@ import logging
 
 from .flit import BaseFlit
 from src.noc.utils.types import NodeId
+from src.noc.utils.token_bucket import TokenBucket
 
 
 class FIFOStatistics:
@@ -348,6 +349,9 @@ class BaseIPInterface(ABC):
         # ========== 请求跟踪 ==========
         self.active_requests = {}  # {packet_id: request_info}
         self.completed_requests = {}  # {packet_id: completion_info}
+        
+        # ========== 带宽限制 ==========
+        self.token_bucket = None  # 将由子类根据IP类型初始化
 
         # 日志
         self.logger = logging.getLogger(f"{self.__class__.__name__}_{ip_type}_{node_id}")
@@ -369,6 +373,17 @@ class BaseIPInterface(ABC):
         self.l2h_fifos = {"req": PipelinedFIFO("l2h_req", depth=l2h_depth), "rsp": PipelinedFIFO("l2h_rsp", depth=l2h_depth), "data": PipelinedFIFO("l2h_data", depth=l2h_depth)}
 
         self.h2l_fifos = {"req": PipelinedFIFO("h2l_req", depth=h2l_depth), "rsp": PipelinedFIFO("h2l_rsp", depth=h2l_depth), "data": PipelinedFIFO("h2l_data", depth=h2l_depth)}
+        
+    def _setup_token_bucket(self, rate: float, bucket_size: float) -> None:
+        """
+        设置令牌桶用于带宽限制。
+        
+        Args:
+            rate: 每周期生成的令牌数（通常为 bandwidth_limit / flit_size）
+            bucket_size: 桶的最大容量
+        """
+        self.token_bucket = TokenBucket(rate=rate, bucket_size=bucket_size)
+        self.logger.info(f"为IP {self.ip_type} 设置了令牌桶: rate={rate}, bucket_size={bucket_size}")
 
 
     def step(self, cycle: int) -> None:

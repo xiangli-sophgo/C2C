@@ -65,7 +65,6 @@ class TrafficPattern(Enum):
     TRACE_BASED = "trace_based"
 
 
-
 class LinkType(Enum):
     """Link type enumeration."""
 
@@ -153,7 +152,7 @@ class NoCConfiguration:
     link_latency: int = 1  # cycles
 
     # Packet/Flit parameters
-    flit_size: int = 64  # bits
+    flit_size: int = 128  # bits
     packet_size: int = 512  # bits
     header_size: int = 64  # bits
 
@@ -172,7 +171,6 @@ class NoCConfiguration:
     # Power and energy
     static_power: float = 0.0  # W
     dynamic_power_per_flit: float = 0.0  # W per flit
-
 
     # Custom parameters
     custom_params: Dict[str, Any] = field(default_factory=dict)

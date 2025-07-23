@@ -1,18 +1,4 @@
 #!/usr/bin/env python3
-"""
-简化的CrossRing NoC演示
-=====================
-
-最简单的CrossRing仿真演示，只需几行代码：
-1. 创建CrossRing模型
-2. 从traffic文件注入流量
-3. 运行仿真
-4. 显示结果
-
-Usage:
-    python simple_crossring_demo.py [rows] [cols] [max_cycles]
-"""
-
 import sys
 import logging
 from pathlib import Path
@@ -28,6 +14,11 @@ def create_config(rows=2, cols=3, config_name="demo"):
     """创建CrossRing配置"""
     config = CrossRingConfig(num_row=rows, num_col=cols, config_name=config_name)
     config.basic_config.NETWORK_FREQUENCY = 2
+    config.ip_config.DDR_BW_LIMIT = 20
+    # config.ip_config.GDMA_BW_LIMIT = 20
+    config.latency_config.DDR_R_LATENCY = 155
+    config.tracker_config.RN_R_TRACKER_OSTD = 128
+    config.tracker_config.SN_DDR_R_TRACKER_OSTD = 32
 
     return config
 
@@ -47,12 +38,12 @@ def main():
 
     # 3. 配置各种选项
     model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)  # Traffic文件设置，节点的IP会根据数据流连接。
-    # model.enable_debug(level=1, trace_packets=["1", "7"])  # debug设置，跟踪特定请求
-    model.enable_visualization(flow_distribution=True, bandwidth_analysis=True, save_figures=1)  # 可视化设置
+    # model.setup_debug(level=1, trace_packets=["1", "7"])  # debug设置，跟踪特定请求
+    model.setup_result_analysis(flow_distribution=True, bandwidth_analysis=True, save_figures=0, save_dir="../../output/")  # 可视化设置
 
     # 4. 运行仿真
     print("▶️  开始仿真")
-    model.run_simulation(max_cycles=20000, progress_interval=2000, results_analysis=True, verbose=1)
+    model.run_simulation(max_time_ns=3000.0, progress_interval_ns=1000.0, results_analysis=True, verbose=1)
 
 
 if __name__ == "__main__":

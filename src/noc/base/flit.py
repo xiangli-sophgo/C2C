@@ -218,7 +218,15 @@ class BaseFlit(ABC):
             src, dst = self.source, self.destination
 
         data_flit = self.__class__(
-            source=src, destination=dst, packet_id=self.packet_id, flit_id=flit_id, channel="data", flit_type="data", req_type=self.req_type, burst_length=self.burst_length, **kwargs
+            source=src,
+            destination=dst,
+            packet_id=self.packet_id,
+            flit_id=flit_id,
+            channel="data",
+            flit_type="data",
+            req_type=self.req_type,
+            burst_length=self.burst_length,
+            **kwargs,
         )
 
         # 设置头尾标识

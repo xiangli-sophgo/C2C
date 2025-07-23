@@ -207,7 +207,11 @@ class BaseNoCModel(ABC):
         try:
             # 分析traffic文件获取需要的IP接口
             traffic_reader = TrafficFileReader(
-                filename=self.traffic_file_path.split("/")[-1], traffic_file_path="/".join(self.traffic_file_path.split("/")[:-1]), config=self.config, time_offset=0, traffic_id="analysis"
+                filename=self.traffic_file_path.split("/")[-1],
+                traffic_file_path="/".join(self.traffic_file_path.split("/")[:-1]),
+                config=self.config,
+                time_offset=0,
+                traffic_id="analysis",
             )
 
             ip_info = traffic_reader.get_required_ip_interfaces()
@@ -320,21 +324,39 @@ class BaseNoCModel(ABC):
             if hasattr(ip_interface, "current_cycle"):
                 ip_interface.current_cycle = self.cycle
 
-    def run_simulation(self, max_cycles: int = 10000, stats_start_cycle: int = 0, progress_interval: int = 5000, results_analysis: bool = False, verbose: bool = True) -> Dict[str, Any]:
+    def run_simulation(
+        self, max_time_ns: float = 5000.0, stats_start_time_ns: float = 0.0, progress_interval_ns: float = 1000.0, results_analysis: bool = False, verbose: bool = True
+    ) -> Dict[str, Any]:
         """
         运行完整仿真
 
         Args:
-            max_cycles: 最大仿真周期
-            stats_start_cycle: 统计开始周期
-            progress_interval: 进度显示间隔（周期数）
+            max_time_ns: 最大仿真时间（纳秒）
+            stats_start_time_ns: 统计开始时间（纳秒）
+            progress_interval_ns: 进度显示间隔（纳秒）
             results_analysis: 是否在仿真结束后执行结果分析
             verbose: 是否打印详细的模型信息和中间结果
 
         Returns:
             仿真结果字典
         """
-        self.logger.info(f"开始NoC仿真: max_cycles={max_cycles}")
+        # 获取网络频率进行ns到cycle的转换
+        network_freq = 1.0  # 默认1GHz
+        if hasattr(self.config, "basic_config") and hasattr(self.config.basic_config, "NETWORK_FREQUENCY"):
+            network_freq = self.config.basic_config.NETWORK_FREQUENCY
+        elif hasattr(self.config, "NETWORK_FREQUENCY"):
+            network_freq = self.config.NETWORK_FREQUENCY
+        elif hasattr(self.config, "clock_frequency"):
+            network_freq = self.config.clock_frequency
+        
+        # ns转换为cycle：cycle = time_ns * frequency_GHz
+        max_cycles = int(max_time_ns * network_freq)
+        stats_start_cycle = int(stats_start_time_ns * network_freq)
+        progress_interval = int(progress_interval_ns * network_freq)
+        
+        cycle_time_ns = 1.0 / network_freq  # 1个周期的纳秒数
+        
+        self.logger.info(f"开始NoC仿真: max_time={max_time_ns}ns (max_cycles={max_cycles}), 网络频率={network_freq}GHz")
 
         # 如果启用详细模式，打印traffic统计信息
         if verbose and hasattr(self, "traffic_scheduler") and self.traffic_scheduler:
@@ -370,11 +392,11 @@ class BaseNoCModel(ABC):
                             completed_requests = len(self.request_tracker.completed_requests)
 
                         # 计算时间（ns）
-                        cycle_time_ns = 1.0 / self.config.clock_frequency  # 1个周期的纳秒数 (1GHz = 1ns/cycle)
                         current_time_ns = cycle * cycle_time_ns
-                        max_time_ns = max_cycles * cycle_time_ns
 
-                        self.logger.info(f"仿真进度: {current_time_ns:.1f}ns/{max_time_ns:.1f}ns (周期 {cycle}/{max_cycles}), 活跃请求={active_requests}, 完成请求={completed_requests}")
+                        self.logger.info(
+                            f"仿真进度: {current_time_ns:.1f}ns/{max_time_ns:.1f}ns (周期 {cycle}/{max_cycles}), 活跃请求={active_requests}, 完成请求={completed_requests}"
+                        )
 
         except KeyboardInterrupt:
             self.logger.warning("仿真被用户中断")
@@ -412,7 +434,7 @@ class BaseNoCModel(ABC):
         # 获取总请求数和已完成请求数
         total_requests = 0
         completed_requests = 0
-        
+
         if hasattr(self, "traffic_scheduler") and self.traffic_scheduler:
             # 统计traffic文件中的总请求数
             for chain in self.traffic_scheduler.parallel_chains:
@@ -421,16 +443,16 @@ class BaseNoCModel(ABC):
                     try:
                         with open(abs_path, "r") as f:
                             for line in f:
-                                if line.strip() and not line.startswith('#'):
+                                if line.strip() and not line.startswith("#"):
                                     parts = line.strip().split(",")
                                     if len(parts) >= 7:
                                         total_requests += 1
                     except Exception:
                         continue
-        
+
         if hasattr(self, "request_tracker") and self.request_tracker:
             completed_requests = len(self.request_tracker.completed_requests)
-        
+
         # 直接比较：如果所有请求都完成了就停止
         return completed_requests >= total_requests and total_requests > 0
 
@@ -577,7 +599,9 @@ class BaseNoCModel(ABC):
     def _log_periodic_status(self) -> None:
         """定期状态日志"""
         active_requests = self.get_total_active_requests()
-        self.logger.debug(f"周期 {self.cycle}: " f"活跃请求={active_requests}, " f"总吞吐={self.global_stats['throughput']:.2f}, " f"平均延迟={self.global_stats['average_latency']:.2f}")
+        self.logger.debug(
+            f"周期 {self.cycle}: " f"活跃请求={active_requests}, " f"总吞吐={self.global_stats['throughput']:.2f}, " f"平均延迟={self.global_stats['average_latency']:.2f}"
+        )
 
     def get_total_active_requests(self) -> int:
         """获取总活跃请求数"""
@@ -590,55 +614,57 @@ class BaseNoCModel(ABC):
         """打印仿真进度统计信息（详细模式）"""
         # 计算时间（ns） - 从配置获取网络频率
         network_freq = 1.0  # 默认1GHz
-        if hasattr(self.config, 'basic_config') and hasattr(self.config.basic_config, 'NETWORK_FREQUENCY'):
+        if hasattr(self.config, "basic_config") and hasattr(self.config.basic_config, "NETWORK_FREQUENCY"):
             network_freq = self.config.basic_config.NETWORK_FREQUENCY
-        elif hasattr(self.config, 'NETWORK_FREQUENCY'):
+        elif hasattr(self.config, "NETWORK_FREQUENCY"):
             network_freq = self.config.NETWORK_FREQUENCY
-        
+
         cycle_time_ns = 1.0 / network_freq  # ns/cycle
         current_time_ns = cycle * cycle_time_ns
-        
+
         # 获取基本统计信息
         active_requests = 0
         completed_requests = 0
         injected_requests = 0
         response_count = 0
         received_flits = 0
-        
+
         if hasattr(self, "request_tracker") and self.request_tracker:
             active_requests = len(self.request_tracker.active_requests)
             completed_requests = len(self.request_tracker.completed_requests)
             injected_requests = active_requests + completed_requests
-            
+
         # 获取traffic统计信息
         read_finish_count = completed_requests  # 暂时用完成请求数代替
         write_finish_count = 0
         trans_finish_count = completed_requests
-        
+
         # 计算传输的数据flit数量 - 基于已完成请求的burst_length
         total_data_flits = 0
         if hasattr(self, "request_tracker") and self.request_tracker:
             for req_id, req_info in self.request_tracker.completed_requests.items():
-                if hasattr(req_info, 'burst_size'):
+                if hasattr(req_info, "burst_size"):
                     total_data_flits += req_info.burst_size
         received_flits = total_data_flits
-        
+
         # 打印进度信息（中文格式）
-        print(f"时间: {int(current_time_ns)}ns, 总请求: {injected_requests}, 活跃请求: {active_requests}, "
-              f"读完成: {read_finish_count}, 写完成: {write_finish_count}, 传输完成: {trans_finish_count}, "
-              f"传输响应: {response_count}, 传输数据: {received_flits}")
+        print(
+            f"时间: {int(current_time_ns)}ns, 总请求: {injected_requests}, 活跃请求: {active_requests}, "
+            f"读完成: {read_finish_count}, 写完成: {write_finish_count}, 传输完成: {trans_finish_count}, "
+            f"传输响应: {response_count}, 传输数据: {received_flits}"
+        )
 
     def _print_traffic_statistics(self) -> None:
         """打印traffic统计信息（在仿真开始时）"""
         if not hasattr(self, "traffic_scheduler") or not self.traffic_scheduler:
             return
-            
+
         # 统计所有traffic文件的请求和flit数量
         total_read_req = 0
         total_write_req = 0
         total_read_flit = 0
         total_write_flit = 0
-        
+
         for chain in self.traffic_scheduler.parallel_chains:
             for traffic_file in chain.traffic_files:
                 try:
@@ -647,20 +673,20 @@ class BaseNoCModel(ABC):
                     with open(abs_path, "r") as f:
                         for line in f:
                             line = line.strip()
-                            if not line or line.startswith('#'):
+                            if not line or line.startswith("#"):
                                 continue
-                            
+
                             # 支持逗号和空格分隔符
-                            if ',' in line:
-                                parts = line.split(',')
+                            if "," in line:
+                                parts = line.split(",")
                             else:
                                 parts = line.split()
-                            
+
                             if len(parts) >= 7:
                                 try:
                                     op = parts[5]
                                     burst = int(parts[6])
-                                    
+
                                     if op.upper() in ["R", "READ"]:
                                         total_read_req += 1
                                         total_read_flit += burst
@@ -672,53 +698,62 @@ class BaseNoCModel(ABC):
                 except Exception as e:
                     self.logger.warning(f"无法读取traffic文件 {traffic_file}: {e}")
                     continue
-        
+
         total_req = total_read_req + total_write_req
         total_flit = total_read_flit + total_write_flit
-        
-        print(f"数据统计: 读: ({total_read_req}, {total_read_flit}), "
-              f"写: ({total_write_req}, {total_write_flit}), "
-              f"总计: ({total_req}, {total_flit})")
+
+        print(f"数据统计: 读: ({total_read_req}, {total_read_flit}), " f"写: ({total_write_req}, {total_write_flit}), " f"总计: ({total_req}, {total_flit})")
 
     def _print_final_statistics(self) -> None:
         """打印最终统计信息"""
         print("仿真完成!")
-        
+
         # 计算时间（ns） - 从配置获取网络频率
         network_freq = 1.0  # 默认1GHz
-        if hasattr(self.config, 'basic_config') and hasattr(self.config.basic_config, 'NETWORK_FREQUENCY'):
+        if hasattr(self.config, "basic_config") and hasattr(self.config.basic_config, "NETWORK_FREQUENCY"):
             network_freq = self.config.basic_config.NETWORK_FREQUENCY
-        elif hasattr(self.config, 'NETWORK_FREQUENCY'):
+        elif hasattr(self.config, "NETWORK_FREQUENCY"):
             network_freq = self.config.NETWORK_FREQUENCY
-        
+
         cycle_time_ns = 1.0 / network_freq  # ns/cycle
         current_time_ns = self.cycle * cycle_time_ns
-        
+
         # 获取最终统计信息
         active_requests = 0
         completed_requests = 0
         injected_requests = 0
         received_flits = 0
-        
+
         if hasattr(self, "request_tracker") and self.request_tracker:
             active_requests = len(self.request_tracker.active_requests)
             completed_requests = len(self.request_tracker.completed_requests)
             injected_requests = active_requests + completed_requests
-            
+
         # 计算传输的数据flit数量 - 基于已完成请求的burst_length
         total_data_flits = 0
         if hasattr(self, "request_tracker") and self.request_tracker:
             for req_id, req_info in self.request_tracker.completed_requests.items():
-                if hasattr(req_info, 'burst_size'):
+                if hasattr(req_info, "burst_size"):
                     total_data_flits += req_info.burst_size
         received_flits = total_data_flits
-            
-        print(f"时间: {int(current_time_ns)}ns, 总请求: {injected_requests}, 活跃请求: {active_requests}, "
-              f"读完成: {completed_requests}, 写完成: 0, 传输完成: {completed_requests}, "
-              f"传输响应: 0, 传输数据: {received_flits}")
+
+        print(
+            f"时间: {int(current_time_ns)}ns, 总请求: {injected_requests}, 活跃请求: {active_requests}, "
+            f"读完成: {completed_requests}, 写完成: 0, 传输完成: {completed_requests}, "
+            f"传输响应: 0, 传输数据: {received_flits}"
+        )
 
     def inject_request(
-        self, source: NodeId, destination: NodeId, req_type: str, count: int = 1, burst_length: int = 4, ip_type: str = None, source_type: str = None, destination_type: str = None, **kwargs
+        self,
+        source: NodeId,
+        destination: NodeId,
+        req_type: str,
+        count: int = 1,
+        burst_length: int = 4,
+        ip_type: str = None,
+        source_type: str = None,
+        destination_type: str = None,
+        **kwargs,
     ) -> List[str]:
         """
         注入请求
@@ -766,7 +801,14 @@ class BaseNoCModel(ABC):
             }
 
             success = ip_interface.inject_request(
-                source=source, destination=destination, req_type=req_type, burst_length=burst_length, packet_id=packet_id, source_type=source_type, destination_type=destination_type, **kwargs
+                source=source,
+                destination=destination,
+                req_type=req_type,
+                burst_length=burst_length,
+                packet_id=packet_id,
+                source_type=source_type,
+                destination_type=destination_type,
+                **kwargs,
             )
 
             if success:
@@ -937,7 +979,7 @@ class BaseNoCModel(ABC):
 
         self.logger.info(f"启用调试跟踪: flits={trace_flits}, channels={trace_channels}")
 
-    def enable_debug(self, level: int = 1, trace_packets: List[str] = None, sleep_time: float = 0.0) -> None:
+    def setup_debug(self, level: int = 1, trace_packets: List[str] = None, sleep_time: float = 0.0) -> None:
         """启用调试模式
 
         Args:

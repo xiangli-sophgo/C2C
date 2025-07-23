@@ -102,6 +102,62 @@ class CrossRingIPInterface(BaseIPInterface):
 
         # 创建分通道的pending队列，替代inject_fifos和父类pending_requests
         self.pending_by_channel = {"req": deque(), "rsp": deque(), "data": deque()}
+        
+        # ========== 初始化带宽限制 ==========
+        self._initialize_token_bucket()
+        
+    def _initialize_token_bucket(self) -> None:
+        """根据IP类型初始化令牌桶"""
+        # 获取FLIT_SIZE配置（字节）
+        flit_size = self.config.basic_config.FLIT_SIZE
+        
+        # 获取网络频率（GHz）
+        network_freq_ghz = self.config.basic_config.NETWORK_FREQUENCY
+        
+        # 根据IP类型设置带宽限制
+        if self.ip_type.startswith("ddr"):
+            # DDR通道限速
+            bw_limit_gbps = self.config.ip_config.DDR_BW_LIMIT  # GB/s
+            # 转换为每网络周期的flit数
+            # 网络频率是 GHz，即每秒 10^9 个周期
+            # 每周期的字节数 = bw_limit_gbps * 10^9 字节/秒 / (network_freq_ghz * 10^9 周期/秒)
+            #                = bw_limit_gbps / network_freq_ghz 字节/周期
+            bytes_per_cycle = bw_limit_gbps / network_freq_ghz  # 字节/周期
+            rate = bytes_per_cycle / flit_size  # flits/周期
+            self._setup_token_bucket(rate=rate, bucket_size=bw_limit_gbps)
+            
+        elif self.ip_type.startswith("l2m"):
+            # L2M通道限速
+            bw_limit_gbps = self.config.ip_config.L2M_BW_LIMIT
+            bytes_per_cycle = bw_limit_gbps / network_freq_ghz  # GB/周期
+            rate = bytes_per_cycle * 1e9 / flit_size  # flits/周期
+            self._setup_token_bucket(rate=rate, bucket_size=bw_limit_gbps)
+            
+        elif self.ip_type.startswith("gdma"):
+            # GDMA通道限速
+            bw_limit_gbps = self.config.ip_config.GDMA_BW_LIMIT
+            bytes_per_cycle = bw_limit_gbps / network_freq_ghz  # GB/周期
+            rate = bytes_per_cycle * 1e9 / flit_size  # flits/周期
+            self._setup_token_bucket(rate=rate, bucket_size=bw_limit_gbps)
+            
+        elif self.ip_type.startswith("sdma"):
+            # SDMA通道限速
+            bw_limit_gbps = self.config.ip_config.SDMA_BW_LIMIT
+            bytes_per_cycle = bw_limit_gbps / network_freq_ghz  # GB/周期
+            rate = bytes_per_cycle * 1e9 / flit_size  # flits/周期
+            self._setup_token_bucket(rate=rate, bucket_size=bw_limit_gbps)
+            
+        elif self.ip_type.startswith("cdma"):
+            # CDMA通道限速
+            bw_limit_gbps = self.config.ip_config.CDMA_BW_LIMIT
+            bytes_per_cycle = bw_limit_gbps / network_freq_ghz  # GB/周期
+            rate = bytes_per_cycle * 1e9 / flit_size  # flits/周期
+            self._setup_token_bucket(rate=rate, bucket_size=bw_limit_gbps)
+            
+        else:
+            # 默认不限速
+            self.token_bucket = None
+            self.logger.info(f"IP类型 {self.ip_type} 不使用带宽限制")
 
     def _check_and_reserve_resources(self, flit) -> bool:
         """检查并预占RN端资源"""
@@ -1004,6 +1060,10 @@ class CrossRingIPInterface(BaseIPInterface):
             "network_to_h2l": {"channel": None, "flit": None},
             "h2l_to_completion": {"channel": None, "flit": None},
         }
+        
+        # 在每个周期开始时刷新令牌桶（只刷新一次）
+        if self.token_bucket:
+            self.token_bucket.refill(current_cycle)
 
         # 1. 计算pending到l2h的传输决策
         self._compute_pending_to_l2h_decision(current_cycle)
@@ -1029,6 +1089,16 @@ class CrossRingIPInterface(BaseIPInterface):
             if self.pending_by_channel[channel] and self.l2h_fifos[channel].ready_signal():
                 flit = self.pending_by_channel[channel][0]
                 if flit.departure_cycle <= current_cycle:
+                    # 检查带宽限制（仅针对data通道）
+                    if self.token_bucket and channel == "data":
+                        # 数据传输每个flit消耗1个令牌
+                        tokens_needed = 1
+                            
+                        # 尝试消耗令牌
+                        if not self.token_bucket.consume(tokens_needed):
+                            self.logger.debug(f"🚫 带宽限制：IP {self.ip_type} 令牌不足，需要{tokens_needed}个，当前{self.token_bucket.get_tokens():.2f}个")
+                            continue  # 令牌不足时跳过此flit
+                    
                     # 对于req通道，检查RN端资源是否足够处理响应
                     if channel == "req":
                         if not self._check_and_reserve_resources(flit):
@@ -1088,6 +1158,13 @@ class CrossRingIPInterface(BaseIPInterface):
             if self.h2l_fifos[channel].valid_signal():
                 flit = self.h2l_fifos[channel].peek_output()
                 if flit:
+                    # 检查带宽限制（仅针对data通道的接收）
+                    if self.token_bucket and channel == "data":
+                        # 数据接收每个flit消耗1个令牌
+                        if not self.token_bucket.consume(1):
+                            self.logger.debug(f"🚫 带宽限制：IP {self.ip_type} 接收数据时令牌不足，当前{self.token_bucket.get_tokens():.2f}个")
+                            continue  # 令牌不足时跳过此flit
+                    
                     self._transfer_decisions["h2l_to_completion"]["channel"] = channel
                     self._transfer_decisions["h2l_to_completion"]["flit"] = flit
                     return

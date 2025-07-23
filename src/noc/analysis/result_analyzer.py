@@ -11,7 +11,15 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.patches import Rectangle, FancyArrowPatch
 from matplotlib import font_manager
+import sys
+import matplotlib
+import logging
 
+# 设置matplotlib字体管理器的日志级别为ERROR，只显示错误信息
+logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
+
+if sys.platform == "darwin":  # macOS 的系统标识是 'darwin'
+    matplotlib.use("macosx")  # 仅在 macOS 上使用该后端
 # 设置中英文字体
 plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]  # 中文字体优先使用微软雅黑
 plt.rcParams["font.serif"] = ["Times New Roman", "Times", "DejaVu Serif"]  # 英文serif字体使用Times
@@ -482,7 +490,9 @@ class ResultAnalyzer:
         mixed_data_avg = sum(m.data_latency for m in metrics) / len(metrics) if len(metrics) > 0 else 0
         mixed_data_max = max(m.data_latency for m in metrics) if len(metrics) > 0 else 0
 
-        print(f"  Data 延迟  - 读: avg {read_data_avg:.2f}, max {read_data_max}；写: avg {write_data_avg:.2f}, max {write_data_max}；混合: avg {mixed_data_avg:.2f}, max {mixed_data_max}")
+        print(
+            f"  Data 延迟  - 读: avg {read_data_avg:.2f}, max {read_data_max}；写: avg {write_data_avg:.2f}, max {write_data_max}；混合: avg {mixed_data_avg:.2f}, max {mixed_data_max}"
+        )
 
         # Trans延迟
         if read_metrics:
@@ -500,7 +510,9 @@ class ResultAnalyzer:
         mixed_trans_avg = sum(m.transaction_latency for m in metrics) / len(metrics) if len(metrics) > 0 else 0
         mixed_trans_max = max(m.transaction_latency for m in metrics) if len(metrics) > 0 else 0
 
-        print(f"  Trans 延迟  - 读: avg {read_trans_avg:.2f}, max {read_trans_max}；写: avg {write_trans_avg:.2f}, max {write_trans_max}；混合: avg {mixed_trans_avg:.2f}, max {mixed_trans_max}")
+        print(
+            f"  Trans 延迟  - 读: avg {read_trans_avg:.2f}, max {read_trans_max}；写: avg {write_trans_avg:.2f}, max {write_trans_max}；混合: avg {mixed_trans_avg:.2f}, max {mixed_trans_max}"
+        )
 
         # 总带宽显示（使用加权带宽）
         if "latency_metrics" in locals() and "总体带宽" in latency_metrics:
@@ -537,17 +549,17 @@ class ResultAnalyzer:
         # 显示各类型带宽（总带宽和RN IP平均带宽）
         if verbose:
             # 只计算RN（DMA）IP的平均带宽
-            rn_requests = [r for r in requests if hasattr(r, 'source_type') and r.source_type.lower() in ['gdma', 'dma']]
+            rn_requests = [r for r in requests if hasattr(r, "source_type") and r.source_type.lower() in ["gdma", "dma"]]
             rn_read_requests = [r for r in rn_requests if r.req_type == "read"]
             rn_write_requests = [r for r in rn_requests if r.req_type == "write"]
-            
+
             # 统计RN IP数量（去重）
             rn_ips = set()
             for r in rn_requests:
-                if hasattr(r, 'source_ip'):
+                if hasattr(r, "source_ip"):
                     rn_ips.add(r.source_ip)
             rn_ip_count = len(rn_ips) if rn_ips else 1
-            
+
             for label, metrics_data in [("读带宽", read_metrics), ("写带宽", write_metrics), ("混合带宽", overall_metrics), ("总带宽", overall_metrics)]:
                 if metrics_data and isinstance(metrics_data, dict) and "加权带宽_GB/s" in metrics_data:
                     weighted_bw = metrics_data["加权带宽_GB/s"]
@@ -568,7 +580,7 @@ class ResultAnalyzer:
         latencies = [m.transaction_latency for m in metrics]
         read_latencies = [m.transaction_latency for m in metrics if m.req_type == "read"]
         write_latencies = [m.transaction_latency for m in metrics if m.req_type == "write"]
-        
+
         # CMD、Data、Transaction延迟统计
         cmd_latencies = [m.cmd_latency for m in metrics]
         data_latencies = [m.data_latency for m in metrics]
@@ -601,14 +613,14 @@ class ResultAnalyzer:
             print("\n" + "=" * 60)
             print("网络延迟分析结果摘要")
             print("=" * 60)
-            
+
             # 总体延迟统计（分CMD、Data、Transaction）
             print("总体延迟统计:")
             print(f"  CMD延迟: 平均 {np.mean(cmd_latencies):.2f} ns, 最小 {np.min(cmd_latencies):.2f} ns, 最大 {np.max(cmd_latencies):.2f} ns")
             print(f"  Data延迟: 平均 {np.mean(data_latencies):.2f} ns, 最小 {np.min(data_latencies):.2f} ns, 最大 {np.max(data_latencies):.2f} ns")
             print(f"  Transaction延迟: 平均 {np.mean(latencies):.2f} ns, 最小 {np.min(latencies):.2f} ns, 最大 {np.max(latencies):.2f} ns")
             print(f"  P95 Transaction延迟: {np.percentile(latencies, 95):.2f} ns")
-            
+
             # 按类型分类延迟统计
             if read_latencies:
                 read_cmd = [m.cmd_latency for m in metrics if m.req_type == "read"]
@@ -617,7 +629,7 @@ class ResultAnalyzer:
                 print(f"  CMD延迟: 平均 {np.mean(read_cmd):.2f} ns, 最大 {np.max(read_cmd):.2f} ns")
                 print(f"  Data延迟: 平均 {np.mean(read_data):.2f} ns, 最大 {np.max(read_data):.2f} ns")
                 print(f"  Transaction延迟: 平均 {np.mean(read_latencies):.2f} ns, 最大 {np.max(read_latencies):.2f} ns")
-                
+
             if write_latencies:
                 write_cmd = [m.cmd_latency for m in metrics if m.req_type == "write"]
                 write_data = [m.data_latency for m in metrics if m.req_type == "write"]
@@ -671,7 +683,7 @@ class ResultAnalyzer:
             "RB_ETag统计": {"T1": 0, "T0": 0},
             "EQ_ETag统计": {"T1": 0, "T0": 0},
             "ITag统计": {"h": 0, "v": 0},
-            "Retry统计": {"read": 0, "write": 0}
+            "Retry统计": {"read": 0, "write": 0},
         }
 
         # 从NoC节点中收集统计数据
@@ -680,34 +692,34 @@ class ResultAnalyzer:
                 # 收集横向环统计数据
                 if hasattr(node, "horizontal_crosspoint"):
                     hcp = node.horizontal_crosspoint
-                    
+
                     # Circuits统计
                     tag_analysis["Circuits统计"]["req_h"] += getattr(hcp, "circuit_req_count", 0)
-                    tag_analysis["Circuits统计"]["rsp_h"] += getattr(hcp, "circuit_rsp_count", 0)  
+                    tag_analysis["Circuits统计"]["rsp_h"] += getattr(hcp, "circuit_rsp_count", 0)
                     tag_analysis["Circuits统计"]["data_h"] += getattr(hcp, "circuit_data_count", 0)
-                    
+
                     # Wait cycle统计
                     tag_analysis["Wait_cycle统计"]["req_h"] += getattr(hcp, "wait_req_cycles", 0)
                     tag_analysis["Wait_cycle统计"]["rsp_h"] += getattr(hcp, "wait_rsp_cycles", 0)
                     tag_analysis["Wait_cycle统计"]["data_h"] += getattr(hcp, "wait_data_cycles", 0)
-                    
+
                     # I-Tag统计
                     tag_analysis["ITag统计"]["h"] += getattr(hcp, "itag_trigger_count", 0)
 
-                # 收集纵向环统计数据  
+                # 收集纵向环统计数据
                 if hasattr(node, "vertical_crosspoint"):
                     vcp = node.vertical_crosspoint
-                    
+
                     # Circuits统计
                     tag_analysis["Circuits统计"]["req_v"] += getattr(vcp, "circuit_req_count", 0)
                     tag_analysis["Circuits统计"]["rsp_v"] += getattr(vcp, "circuit_rsp_count", 0)
                     tag_analysis["Circuits统计"]["data_v"] += getattr(vcp, "circuit_data_count", 0)
-                    
+
                     # Wait cycle统计
                     tag_analysis["Wait_cycle统计"]["req_v"] += getattr(vcp, "wait_req_cycles", 0)
                     tag_analysis["Wait_cycle统计"]["rsp_v"] += getattr(vcp, "wait_rsp_cycles", 0)
                     tag_analysis["Wait_cycle统计"]["data_v"] += getattr(vcp, "wait_data_cycles", 0)
-                    
+
                     # I-Tag统计
                     tag_analysis["ITag统计"]["v"] += getattr(vcp, "itag_trigger_count", 0)
 
@@ -719,7 +731,7 @@ class ResultAnalyzer:
 
                 # 收集Eject Queue E-Tag统计
                 if hasattr(node, "eject_queue"):
-                    eq = node.eject_queue  
+                    eq = node.eject_queue
                     tag_analysis["EQ_ETag统计"]["T1"] += getattr(eq, "etag_t1_count", 0)
                     tag_analysis["EQ_ETag统计"]["T0"] += getattr(eq, "etag_t0_count", 0)
 
@@ -737,26 +749,26 @@ class ResultAnalyzer:
             print("\n" + "=" * 60)
             print("绕环与Tag统计")
             print("=" * 60)
-            
+
             circuits = tag_analysis["Circuits统计"]
             print(f"  请求绕环  - 横向: {circuits['req_h']}, 纵向: {circuits['req_v']}")
             print(f"  响应绕环  - 横向: {circuits['rsp_h']}, 纵向: {circuits['rsp_v']}")
             print(f"  数据绕环  - 横向: {circuits['data_h']}, 纵向: {circuits['data_v']}")
-            
+
             wait_cycles = tag_analysis["Wait_cycle统计"]
             print(f"  请求等待时间  - 横向: {wait_cycles['req_h']}, 纵向: {wait_cycles['req_v']}")
             print(f"  响应等待时间  - 横向: {wait_cycles['rsp_h']}, 纵向: {wait_cycles['rsp_v']}")
             print(f"  数据等待时间  - 横向: {wait_cycles['data_h']}, 纵向: {wait_cycles['data_v']}")
-            
+
             rb_etag = tag_analysis["RB_ETag统计"]
             print(f"  RB ETag统计 - T1: {rb_etag['T1']}, T0: {rb_etag['T0']}")
-            
+
             eq_etag = tag_analysis["EQ_ETag统计"]
             print(f"  EQ ETag统计 - T1: {eq_etag['T1']}, T0: {eq_etag['T0']}")
-            
+
             itag = tag_analysis["ITag统计"]
             print(f"  注入标签 - 横向: {itag['h']}, 纵向: {itag['v']}")
-            
+
             retry = tag_analysis["Retry统计"]
             print(f"  Retry数量 - 读: {retry['read']}, 写: {retry['write']}")
 
@@ -853,7 +865,15 @@ class ResultAnalyzer:
                     # 在曲线末尾添加数值标注
                     if len(bandwidth_gbps) > 0:
                         final_bw = bandwidth_gbps[-1]
-                        ax.text(time_us[-1], final_bw, f"{final_bw:.2f}", va="center", color=line.get_color(), fontsize=10, bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.8))
+                        ax.text(
+                            time_us[-1],
+                            final_bw,
+                            f"{final_bw:.2f}",
+                            va="center",
+                            color=line.get_color(),
+                            fontsize=10,
+                            bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.8),
+                        )
                         total_final_bw += final_bw
 
             # 设置图表属性
@@ -867,7 +887,14 @@ class ResultAnalyzer:
             # 添加总带宽信息
             if total_final_bw > 0:
                 ax.text(
-                    0.02, 0.98, f"总带宽: {total_final_bw:.2f} GB/s", transform=ax.transAxes, fontsize=12, va="top", ha="left", bbox=dict(boxstyle="round,pad=0.3", facecolor="lightblue", alpha=0.8)
+                    0.02,
+                    0.98,
+                    f"总带宽: {total_final_bw:.2f} GB/s",
+                    transform=ax.transAxes,
+                    fontsize=12,
+                    va="top",
+                    ha="left",
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="lightblue", alpha=0.8),
                 )
 
             # 保存或显示图表
@@ -1294,7 +1321,7 @@ class ResultAnalyzer:
 
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
 
-            # 1. 三种延迟类型对比直方图
+            # 1. 三种延迟类型对比直方图（使用对数坐标轴）
             # 使用统一的线宽和透明度
             ax1.hist(cmd_latencies, bins=30, alpha=0.6, label="CMD延迟", color="blue", linewidth=1.5)
             ax1.hist(data_latencies, bins=30, alpha=0.6, label="DATA延迟", color="green", linewidth=1.5)
@@ -1304,14 +1331,27 @@ class ResultAnalyzer:
             ax1.set_title("三种延迟类型分布直方图")
             ax1.legend(prop={"family": ["Times New Roman", "Microsoft YaHei", "SimHei"], "size": 9})
             ax1.grid(True, alpha=0.3)
+            # 设置X轴为对数坐标，并调整刻度
+            ax1.set_xscale('log')
+            # 设置更密集的主要刻度和次要刻度
+            from matplotlib.ticker import LogLocator, LogFormatter
+            ax1.xaxis.set_major_locator(LogLocator(base=10, numticks=8))
+            ax1.xaxis.set_minor_locator(LogLocator(base=10, subs=np.arange(2, 10) * 0.1, numticks=100))
+            ax1.xaxis.set_major_formatter(LogFormatter(base=10, labelOnlyBase=False))
 
-            # 2. 延迟类型箱线图
+            # 2. 延迟类型箱线图（使用对数坐标轴）
             latency_data = [cmd_latencies, data_latencies, transaction_latencies]
             latency_labels = ["CMD延迟", "DATA延迟", "TRANSACTION延迟"]
             ax2.boxplot(latency_data, labels=latency_labels)
             ax2.set_ylabel("延迟 (ns)")
             ax2.set_title("延迟类型箱线图")
             ax2.grid(True, alpha=0.3)
+            # 设置Y轴为对数坐标，并调整刻度
+            ax2.set_yscale('log')
+            # 设置更密集的主要刻度和次要刻度
+            ax2.yaxis.set_major_locator(LogLocator(base=10, numticks=8))
+            ax2.yaxis.set_minor_locator(LogLocator(base=10, subs=np.arange(2, 10) * 0.1, numticks=100))
+            ax2.yaxis.set_major_formatter(LogFormatter(base=10, labelOnlyBase=False))
 
             # 删除读写分类的图表，只保留两个总体统计图
 
@@ -1386,7 +1426,9 @@ class ResultAnalyzer:
                 write_requests = ip_analysis[ip_type]["写请求数"]
 
                 # 在X轴标签下方添加请求数信息
-                ax.text(i, -max(max(read_bw), max(write_bw)) * 0.1, f"总请求: {total_requests}\n(读:{read_requests}, 写:{write_requests})", ha="center", va="top", fontsize=8, alpha=0.7)
+                ax.text(
+                    i, -max(max(read_bw), max(write_bw)) * 0.1, f"总请求: {total_requests}\n(读:{read_requests}, 写:{write_requests})", ha="center", va="top", fontsize=8, alpha=0.7
+                )
 
             plt.tight_layout()
 
@@ -1688,7 +1730,14 @@ class ResultAnalyzer:
 
                     # 绘制带箭头的连接线
                     arrow = FancyArrowPatch(
-                        (start_x, start_y), (end_x, end_y), arrowstyle="-|>", mutation_scale=dynamic_font * 1.2, color=color, linewidth=linewidth, alpha=alpha, zorder=1  # 增大箭头大小
+                        (start_x, start_y),
+                        (end_x, end_y),
+                        arrowstyle="-|>",
+                        mutation_scale=dynamic_font * 1.2,
+                        color=color,
+                        linewidth=linewidth,
+                        alpha=alpha,
+                        zorder=1,  # 增大箭头大小
                     )
                     ax.add_patch(arrow)
 

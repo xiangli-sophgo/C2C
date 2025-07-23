@@ -30,17 +30,15 @@ class BasicConfiguration:
     NETWORK_FREQUENCY: int = 2.0
     SLICE_PER_LINK: int = 8
 
+    # Flit大小配置（单位：字节）
+    FLIT_SIZE: int = 128  # 128字节 = 1024位
+
     # 路由策略配置
     ROUTING_STRATEGY: str = "XY"  # 默认使用XY路由
 
     # IP接口FIFO深度配置
-    IP_L2H_FIFO_DEPTH: int = 4
-    IP_H2L_FIFO_DEPTH: int = 4
-
-    # 环形拓扑专用配置
-    INJECT_BUFFER_DEPTH: int = 8
-    EJECT_BUFFER_DEPTH: int = 8
-    CROSSPOINT_BUFFER_DEPTH: int = 4
+    IP_L2H_FIFO_DEPTH: int = 3
+    IP_H2L_FIFO_DEPTH: int = 2
 
     # Link Slice配置 - CrossRing非环绕设计专用
     NORMAL_LINK_SLICES: int = 8  # 正常节点间连接的slice数量
@@ -108,10 +106,10 @@ class TagConfiguration:
 class TrackerConfiguration:
     """Tracker 配置数据类。"""
 
-    RN_R_TRACKER_OSTD: int = 64
+    RN_R_TRACKER_OSTD: int = 128
     RN_W_TRACKER_OSTD: int = 32
-    SN_DDR_R_TRACKER_OSTD: int = 96
-    SN_DDR_W_TRACKER_OSTD: int = 48
+    SN_DDR_R_TRACKER_OSTD: int = 32
+    SN_DDR_W_TRACKER_OSTD: int = 16
     SN_L2M_R_TRACKER_OSTD: int = 96
     SN_L2M_W_TRACKER_OSTD: int = 48
     SN_TRACKER_RELEASE_LATENCY: int = 40
@@ -121,7 +119,7 @@ class TrackerConfiguration:
 class LatencyConfiguration:
     """延迟配置数据类。"""
 
-    DDR_R_LATENCY: int = 0
+    DDR_R_LATENCY: int = 155
     DDR_R_LATENCY_VAR: int = 0
     DDR_W_LATENCY: int = 0
     DDR_W_LATENCY_VAR: int = 0
@@ -169,7 +167,6 @@ class CrossRingConfig(BaseNoCConfig):
 
         # 路由策略属性
         self.ROUTING_STRATEGY = RoutingStrategy(self.basic_config.ROUTING_STRATEGY)
-        self.ARBITRATION_TIMEOUT = getattr(self.basic_config, "ARBITRATION_TIMEOUT", 10)
 
         # 通道规格
         self.CHANNEL_SPEC = {
@@ -179,12 +176,6 @@ class CrossRingConfig(BaseNoCConfig):
             "ddr": 2,
             "l2m": 2,
         }
-
-        # Ring网络缓冲区深度配置
-        self.INJECT_BUFFER_DEPTH = self.basic_config.INJECT_BUFFER_DEPTH
-        self.EJECT_BUFFER_DEPTH = self.basic_config.EJECT_BUFFER_DEPTH
-        self.CROSSPOINT_BUFFER_DEPTH = self.basic_config.CROSSPOINT_BUFFER_DEPTH
-        self.SLICE_PER_LINK = self.basic_config.SLICE_PER_LINK
 
         # 自动生成相关配置
         self._generate_derived_config()
@@ -329,7 +320,9 @@ class CrossRingConfig(BaseNoCConfig):
                 errors.append(f"SN Tracker OSTD必须为正数 (SN_DDR_R_TRACKER_OSTD={tracker.SN_DDR_R_TRACKER_OSTD}, SN_L2M_R_TRACKER_OSTD={tracker.SN_L2M_R_TRACKER_OSTD})")
             # 缓冲区大小一致性验证
             if hasattr(self, "RN_RDB_SIZE") and self.RN_RDB_SIZE != tracker.RN_R_TRACKER_OSTD * self.basic_config.BURST:
-                errors.append(f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (RN_RDB_SIZE={self.RN_RDB_SIZE}, RN_R_TRACKER_OSTD={tracker.RN_R_TRACKER_OSTD}, BURST={self.basic_config.BURST})")
+                errors.append(
+                    f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (RN_RDB_SIZE={self.RN_RDB_SIZE}, RN_R_TRACKER_OSTD={tracker.RN_R_TRACKER_OSTD}, BURST={self.basic_config.BURST})"
+                )
         elif isinstance(tracker, dict):
             rn_r_ostd = tracker.get("RN_R_TRACKER_OSTD", 64)
             rn_w_ostd = tracker.get("RN_W_TRACKER_OSTD", 32)
