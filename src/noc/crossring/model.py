@@ -91,7 +91,15 @@ class CrossRingModel(BaseNoCModel):
         # FIFO统计收集器
         self.fifo_stats_collector = FIFOStatsCollector()
 
-        # 初始化模型（包括IP接口创建）
+        # 可视化配置
+        self._viz_config = {
+            'flow_distribution': False,
+            'bandwidth_analysis': False,
+            'save_figures': True,
+            'save_dir': 'output'
+        }
+
+        # 初始化模型（不包括IP接口创建，IP接口将在setup_traffic_scheduler中创建）
         self.initialize_model()
 
         # 初始化完成后注册FIFO统计
@@ -259,10 +267,11 @@ class CrossRingModel(BaseNoCModel):
                     self.ip_interfaces[key] = ip_interface
                     self._ip_registry[key] = ip_interface
 
-                    # 连接IP到对应的节点
+                    # 连接IP到对应的节点，使用简单的ip_type格式
+                    simple_ip_key = f"{ip_type}_{channel_id}"
                     if node_id in self.nodes:
-                        self.nodes[node_id].connect_ip(key)
-                        self.logger.debug(f"连接IP接口 {key} 到节点 {node_id}")
+                        self.nodes[node_id].connect_ip(simple_ip_key)
+                        self.logger.debug(f"连接IP接口 {key} (作为 {simple_ip_key}) 到节点 {node_id}")
                     else:
                         self.logger.warning(f"节点 {node_id} 不存在，无法连接IP接口 {key}")
 
@@ -277,6 +286,12 @@ class CrossRingModel(BaseNoCModel):
                 continue
 
             key = ip_type
+            
+            # 检查是否已经存在
+            if key in self.ip_interfaces:
+                self.logger.debug(f"IP接口 {key} 已存在，跳过创建")
+                continue
+                
             try:
                 ip_interface = CrossRingIPInterface(config=self.config, ip_type=ip_type, node_id=node_id, model=self)
                 self.ip_interfaces[key] = ip_interface
@@ -298,6 +313,54 @@ class CrossRingModel(BaseNoCModel):
         self.logger.info(f"总共创建了 {len(self.ip_interfaces)} 个IP接口")
         for key, ip_interface in self.ip_interfaces.items():
             self.logger.info(f"  {key}: node_id={ip_interface.node_id}, ip_type={ip_interface.ip_type}")
+
+    def setup_traffic_scheduler(self, traffic_chains: List[List[str]], traffic_file_path: str = None) -> None:
+        """
+        设置TrafficScheduler并根据traffic文件动态创建需要的IP接口
+        
+        Args:
+            traffic_chains: traffic链配置，每个链包含文件名列表
+            traffic_file_path: traffic文件路径，默认使用初始化时的路径
+        """
+        # 先分析traffic文件，获取需要的IP接口
+        file_path = traffic_file_path or self.traffic_file_path or "traffic_data"
+        
+        try:
+            # 分析所有traffic文件中需要的IP接口
+            all_required_ips = []
+            from src.noc.utils.traffic_scheduler import TrafficFileReader
+            
+            for chain in traffic_chains:
+                for filename in chain:
+                    self.logger.info(f"分析traffic文件: {filename}")
+                    traffic_reader = TrafficFileReader(
+                        filename=filename, 
+                        traffic_file_path=file_path, 
+                        config=self.config, 
+                        time_offset=0, 
+                        traffic_id="analysis"
+                    )
+                    
+                    ip_info = traffic_reader.get_required_ip_interfaces()
+                    required_ips = ip_info["required_ips"]
+                    all_required_ips.extend(required_ips)
+                    
+                    self.logger.info(f"文件 {filename} 需要IP接口: {required_ips}")
+            
+            # 去重
+            unique_required_ips = list(set(all_required_ips))
+            self.logger.info(f"总共需要创建 {len(unique_required_ips)} 个唯一IP接口: {unique_required_ips}")
+            
+            # 动态创建需要的IP接口
+            self._create_specific_ip_interfaces(unique_required_ips)
+            
+        except Exception as e:
+            self.logger.warning(f"动态创建IP接口失败: {e}，使用现有IP接口")
+            import traceback
+            traceback.print_exc()
+        
+        # 调用父类方法设置TrafficScheduler
+        super().setup_traffic_scheduler(traffic_chains, traffic_file_path)
 
     def _setup_topology_network(self) -> None:
         """设置拓扑网络（BaseNoCModel抽象方法的实现）"""
@@ -942,6 +1005,24 @@ class CrossRingModel(BaseNoCModel):
             self.nodes[3].enable_crosspoint_injection_debug(True)
             self.logger.info("已启用节点3的CrossPoint注入调试")
 
+    def enable_visualization(self, flow_distribution: bool = False, bandwidth_analysis: bool = False, save_figures: bool = True, save_dir: str = "output") -> None:
+        """
+        配置可视化选项
+        
+        Args:
+            flow_distribution: 是否生成流量分布图
+            bandwidth_analysis: 是否生成带宽分析图
+            save_figures: 是否保存图片文件到磁盘
+            save_dir: 保存目录
+        """
+        self._viz_config.update({
+            'flow_distribution': flow_distribution,
+            'bandwidth_analysis': bandwidth_analysis,
+            'save_figures': save_figures,
+            'save_dir': save_dir
+        })
+        self.logger.info(f"可视化配置已更新: 流量分布={flow_distribution}, 带宽分析={bandwidth_analysis}, 保存图片={save_figures}, 保存目录={save_dir}")
+
     def print_debug_status(self) -> None:
         """打印调试状态"""
         # 调用base类的调试状态打印
@@ -1091,7 +1172,7 @@ class CrossRingModel(BaseNoCModel):
             "cycle_accurate": cycle_accurate,
         }
 
-    def analyze_simulation_results(self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output") -> Dict[str, Any]:
+    def analyze_simulation_results(self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output", verbose: bool = True) -> Dict[str, Any]:
         """
         分析仿真结果 - 调用CrossRing专用分析器
 
@@ -1100,12 +1181,148 @@ class CrossRingModel(BaseNoCModel):
             enable_visualization: 是否生成可视化图表
             save_results: 是否保存结果文件
             save_dir: 保存目录
+            verbose: 是否打印详细结果
 
         Returns:
             详细的分析结果
         """
+        # 如果使用了可视化配置，则覆盖默认参数
+        viz_enabled = False
+        save_figures = True
+        
+        if hasattr(self, '_viz_config'):
+            viz_enabled = self._viz_config['flow_distribution'] or self._viz_config['bandwidth_analysis']
+            if viz_enabled:
+                save_figures = self._viz_config['save_figures']
+                save_dir = self._viz_config['save_dir']
+                # 启用可视化，ResultAnalyzer会根据save_figures参数决定保存或显示
+                enable_visualization = True
+                
         analyzer = ResultAnalyzer()
-        return analyzer.analyze_noc_results(self.request_tracker, self.config, self, results, enable_visualization, save_results, save_dir)  # 传入模型实例用于Tag数据分析
+        analysis_results = analyzer.analyze_noc_results(self.request_tracker, self.config, self, results, enable_visualization, save_results, save_dir, save_figures, verbose)
+        
+        # ResultAnalyzer现在会根据save_figures参数直接处理显示或保存
+            
+        return analysis_results
+
+    def _generate_and_display_charts(self, analysis_results: Dict[str, Any]) -> None:
+        """生成并显示图表（不保存到文件）"""
+        import matplotlib.pyplot as plt
+        
+        self.logger.info("生成并显示可视化图表...")
+        
+        try:
+            # 生成带宽分析图表
+            if self._viz_config.get('bandwidth_analysis', False):
+                self._show_bandwidth_chart(analysis_results)
+                
+            # 生成流量分布图表  
+            if self._viz_config.get('flow_distribution', False):
+                self._show_flow_distribution_chart(analysis_results)
+                
+        except Exception as e:
+            self.logger.warning(f"生成可视化图表时出错: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _show_bandwidth_chart(self, analysis_results: Dict[str, Any]) -> None:
+        """显示带宽分析图表"""
+        import matplotlib.pyplot as plt
+        
+        if "带宽指标" not in analysis_results:
+            self.logger.warning("分析结果中没有找到带宽指标数据")
+            return
+            
+        bandwidth_data = analysis_results["带宽指标"]
+        
+        # 创建带宽图表
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # 绘制总体带宽
+        if "总体带宽" in bandwidth_data:
+            overall_bw = bandwidth_data["总体带宽"]
+            non_weighted = overall_bw.get('非加权带宽_GB/s', 0)
+            weighted = overall_bw.get('加权带宽_GB/s', 0)
+            
+            categories = ['非加权带宽', '加权带宽']
+            values = [non_weighted, weighted]
+            
+            ax.bar(categories, values, color=['skyblue', 'lightcoral'])
+            ax.set_ylabel('带宽 (GB/s)')
+            ax.set_title('CrossRing总体带宽分析')
+            
+            # 添加数值标签
+            for i, v in enumerate(values):
+                ax.text(i, v + max(values) * 0.01, f'{v:.2f}', ha='center', va='bottom')
+        
+        plt.tight_layout()
+        plt.show()
+        print("📊 带宽分析图表已显示")
+
+    def _show_flow_distribution_chart(self, analysis_results: Dict[str, Any]) -> None:
+        """显示流量分布图表"""
+        import matplotlib.pyplot as plt
+        
+        if "延迟指标" not in analysis_results:
+            self.logger.warning("分析结果中没有找到延迟指标数据")
+            return
+            
+        latency_data = analysis_results["延迟指标"]
+        
+        # 创建延迟分布图表
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        if "总体延迟" in latency_data:
+            overall_lat = latency_data["总体延迟"]
+            avg_latency = overall_lat.get('平均延迟_ns', 0)
+            max_latency = overall_lat.get('最大延迟_ns', 0)
+            min_latency = overall_lat.get('最小延迟_ns', 0)
+            
+            categories = ['最小延迟', '平均延迟', '最大延迟']
+            values = [min_latency, avg_latency, max_latency]
+            
+            ax.bar(categories, values, color=['lightgreen', 'gold', 'lightcoral'])
+            ax.set_ylabel('延迟 (ns)')
+            ax.set_title('CrossRing延迟分布分析')
+            
+            # 添加数值标签
+            for i, v in enumerate(values):
+                ax.text(i, v + max(values) * 0.01, f'{v:.2f}', ha='center', va='bottom')
+        
+        plt.tight_layout()
+        plt.show()
+        print("📊 流量分布图表已显示")
+
+    def _display_visualization_results(self, analysis_results: Dict[str, Any]) -> None:
+        """显示可视化结果而不保存到文件"""
+        import matplotlib.pyplot as plt
+        
+        self.logger.info("显示可视化图表...")
+        
+        try:
+            # 检查是否有生成的图表文件
+            if "可视化文件" in analysis_results and "生成的图表" in analysis_results["可视化文件"]:
+                chart_files = analysis_results["可视化文件"]["生成的图表"]
+                
+                if chart_files:
+                    self.logger.info(f"发现 {len(chart_files)} 个图表文件，正在显示...")
+                    
+                    # 由于图片已经保存了，我们需要重新生成用于显示
+                    # 这里我们可以简单地提示用户图表已生成
+                    print("📊 图表已生成，可以在以下文件中查看:")
+                    for chart_file in chart_files:
+                        print(f"  - {chart_file}")
+                        
+                    # TODO: 未来可以增加直接显示图片的功能
+                    # 需要修改ResultAnalyzer来返回matplotlib figure对象而不仅仅是保存文件
+                    
+                else:
+                    self.logger.info("没有生成图表文件")
+            else:
+                self.logger.info("分析结果中没有找到可视化文件信息")
+                
+        except Exception as e:
+            self.logger.warning(f"显示可视化结果时出错: {e}")
 
     def _analyze_ip_interfaces(self, ip_stats: Dict[str, Any]) -> Dict[str, Any]:
         """分析IP接口统计"""
@@ -1171,7 +1388,6 @@ class CrossRingModel(BaseNoCModel):
         basic = analysis.get("basic_metrics", {})
         report.append("性能指标:")
         report.append(f"  仿真周期: {basic.get('total_cycles', 0):,}")
-        report.append(f"  有效周期: {basic.get('effective_cycles', 0):,}")
         report.append(f"  总事务数: {basic.get('total_transactions', 0):,}")
         report.append(f"  峰值活跃请求: {basic.get('peak_active_requests', 0)}")
         report.append(f"  吞吐量: {basic.get('throughput', 0):.4f} 事务/周期")

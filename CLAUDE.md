@@ -427,3 +427,105 @@ python3 test_flit_flow.py 2>&1 | grep -E "(周期|🔄|RequestTracker)"
 - 使用`examples/noc/crossring_debug_demo.py`进行flit传输跟踪
 - 关注ring_bridge仲裁日志："🎯 节点X: 从RB_XX获取到flit"
 - 验证CrossPoint重新注入："✅ CrossPoint node_X_vertical 从ring_bridge XX方向注入flit到环路"
+
+## CrossRing 带宽分析系统
+
+### 核心带宽计算公式
+
+所有带宽计算统一使用公式：
+```python
+bandwidth = burst_length * 128 / time  # 直接得到 GB/s
+```
+
+### 带宽分析组件
+
+#### ResultAnalyzer (`src/noc/analysis/result_analyzer.py`)
+主要的带宽分析工具，提供以下核心方法：
+
+1. **`calculate_bandwidth_metrics(requests, operation_type=None, endpoint_type="network")`**
+   - 统一的带宽计算方法，支持工作区间算法
+   - `endpoint_type`: 支持 "network"、"rn"、"sn" 三种端点类型
+   - 返回非加权和加权带宽指标
+
+2. **`analyze_port_bandwidth(metrics)`**
+   - 按IP类型分组的端口带宽分析
+   - 使用统一工作区间算法，确保结果一致性
+
+### 时间窗口类型
+
+#### 1. 网络时间 vs 端口时间
+- **网络结束时间**: 数据在整个网络中传输完毕
+- **RN端口时间**: 数据到达/离开RN端口（按读写区分）
+- **SN端口时间**: 数据到达/离开SN端口（按读写区分）
+
+#### 2. 端口时间的读写区分
+```python
+if req_type == "read":
+    # 读请求：RN收到数据，SN发出数据
+    rn_end_time = data_received_complete_cycle
+    sn_end_time = data_entry_noc_from_cake1_cycle
+else:  # write
+    # 写请求：RN发出数据，SN收到数据
+    rn_end_time = data_entry_noc_from_cake0_cycle  
+    sn_end_time = data_received_complete_cycle
+```
+
+### 工作区间算法
+
+#### WorkingInterval 类
+```python
+@dataclass
+class WorkingInterval:
+    start_time: int
+    end_time: int
+    duration: int
+    flit_count: int
+    total_bytes: int
+    request_count: int
+    
+    @property
+    def bandwidth(self) -> float:
+        """区间内平均带宽 (GB/s)"""
+        return self.total_bytes / self.duration
+```
+
+#### 加权 vs 非加权算法
+- **非加权带宽**: `total_bytes / total_network_time`
+- **加权带宽**: `Σ(区间带宽 × 区间flit数量) / Σ(区间flit数量)`
+
+### 可视化工具
+
+1. **累积带宽曲线**: 显示带宽随时间变化
+2. **端口带宽对比**: 按IP类型对比读写性能
+3. **流量分布图**: 节点和链路带宽可视化
+
+### 使用示例
+
+```python
+from noc.analysis.result_analyzer import ResultAnalyzer
+
+analyzer = ResultAnalyzer()
+metrics = analyzer.convert_tracker_to_request_info(request_tracker, config)
+
+# 网络整体带宽
+overall_bw = analyzer.calculate_bandwidth_metrics(metrics, endpoint_type="network")
+
+# RN端口带宽
+rn_bw = analyzer.calculate_bandwidth_metrics(metrics, endpoint_type="rn")
+
+# 端口级别分析
+port_analysis = analyzer.analyze_port_bandwidth(metrics)
+```
+
+### 关键修正 (2025-07-23)
+
+1. **端口时间处理**: 按读写操作正确区分RN/SN端口结束时间
+2. **统一算法**: 移除重复的端口带宽计算，统一使用工作区间算法
+3. **单位一致性**: 确保所有计算直接得到GB/s，无需额外转换
+4. **endpoint_type支持**: `calculate_bandwidth_metrics`支持网络、RN、SN三种端点类型
+
+### 注意事项
+
+- 所有带宽值差异源于时间计算方式不同（网络 vs 端口 vs 工作区间）
+- 推荐使用加权带宽作为主要性能指标
+- 端口带宽分析必须考虑读写操作的时间差异
