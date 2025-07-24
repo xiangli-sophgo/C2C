@@ -1766,27 +1766,28 @@ class CrossRingModel(BaseNoCModel):
                         # 获取链路性能指标
                         metrics = link.get_link_performance_metrics()
                         
-                        # 为每个通道创建一行数据
+                        # 只为data通道创建数据行（不需要req和rsp通道的统计）
                         for channel, channel_metrics in metrics.items():
-                            row_data = {
-                                'link_id': link.link_id,
-                                'source_node': link.source_node,
-                                'dest_node': link.dest_node,
-                                'direction': link.direction.value if hasattr(link, 'direction') else 'unknown',
-                                'channel': channel,
-                                'total_cycles': link.bandwidth_tracker.total_cycles,
-                                'bandwidth_gbps': channel_metrics['bandwidth_gbps'],
-                                'utilization': channel_metrics['utilization'],
-                                'idle_rate': channel_metrics['idle_rate'],
-                                'valid_slots': channel_metrics['valid_slots'],
-                                'empty_slots': channel_metrics['empty_slots'],
-                                'T0_slots': link.bandwidth_tracker.cycle_stats[channel]['T0'],
-                                'T1_slots': link.bandwidth_tracker.cycle_stats[channel]['T1'],
-                                'T2_slots': link.bandwidth_tracker.cycle_stats[channel]['T2'],
-                                'ITag_slots': link.bandwidth_tracker.cycle_stats[channel]['ITag'],
-                                'total_bytes': channel_metrics['total_bytes']
-                            }
-                            all_link_stats.append(row_data)
+                            if channel == 'data':  # 只保存data通道的统计
+                                row_data = {
+                                    'link_id': link.link_id,
+                                    'source_node': link.source_node,
+                                    'dest_node': link.dest_node,
+                                    'direction': link.direction.value if hasattr(link, 'direction') else 'unknown',
+                                    'channel': channel,
+                                    'total_cycles': link.bandwidth_tracker.total_cycles,
+                                    'bandwidth_gbps': channel_metrics['bandwidth_gbps'],
+                                    'utilization': channel_metrics['utilization'],
+                                    'idle_rate': channel_metrics['idle_rate'],
+                                    'valid_slots': channel_metrics['valid_slots'],
+                                    'empty_slots': channel_metrics['empty_slots'],
+                                    'T0_slots': link.bandwidth_tracker.cycle_stats[channel]['T0'],
+                                    'T1_slots': link.bandwidth_tracker.cycle_stats[channel]['T1'],
+                                    'T2_slots': link.bandwidth_tracker.cycle_stats[channel]['T2'],
+                                    'ITag_slots': link.bandwidth_tracker.cycle_stats[channel]['ITag'],
+                                    'total_bytes': channel_metrics['total_bytes']
+                                }
+                                all_link_stats.append(row_data)
             
             # 写入CSV文件
             if all_link_stats:

@@ -798,12 +798,23 @@ class ResultAnalyzer:
             return ""
 
         try:
-            # 按端口类型分组数据（仿照老版本的rn_bandwidth_time_series）
+            # 按IP类型组合分组数据，合并相同类型的操作
+            # 例如：所有节点的GDMA读DDR操作合并为一条曲线
             port_time_series = defaultdict(lambda: {"time": [], "start_times": [], "bytes": []})
 
             for metric in metrics:
-                # 构造端口标识：格式为 "SOURCE_TYPE REQUEST_TYPE DEST_TYPE"，例如 "GDMA READ DDR"
-                port_key = f"{metric.source_type.upper()} {metric.req_type.upper()} {metric.dest_type.upper()}"
+                # 提取并清理IP类型名称，去掉编号后缀
+                def clean_ip_type(ip_type_str):
+                    """清理IP类型名称，去掉编号后缀 (如 GDMA_0 -> GDMA, DDR_3 -> DDR)"""
+                    # 使用下划线分割，取第一部分
+                    return ip_type_str.split('_')[0].upper()
+                
+                clean_source = clean_ip_type(metric.source_type)
+                clean_dest = clean_ip_type(metric.dest_type)
+                
+                # 构造合并键：格式为 "SOURCE_TYPE REQUEST_TYPE DEST_TYPE"，例如 "GDMA READ DDR"
+                # 所有GDMA_x读DDR_y的操作都会合并到"GDMA READ DDR"
+                port_key = f"{clean_source} {metric.req_type.upper()} {clean_dest}"
 
                 port_time_series[port_key]["time"].append(metric.end_time)
                 port_time_series[port_key]["start_times"].append(metric.start_time)
@@ -868,7 +879,7 @@ class ResultAnalyzer:
                             va="center",
                             color=line.get_color(),
                             fontsize=10,
-                            bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.8),
+                            bbox=dict(boxstyle="round,pad=0.2", facecolor="none", alpha=0),
                         )
                         total_final_bw += final_bw
 
@@ -890,7 +901,7 @@ class ResultAnalyzer:
                     fontsize=12,
                     va="top",
                     ha="left",
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor="lightblue", alpha=0.8),
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="none", alpha=0),
                 )
 
             # 保存或显示图表
@@ -1577,6 +1588,7 @@ class ResultAnalyzer:
 
             # 计算链路带宽：使用模型中链路对象的实际统计数据
             link_bandwidth = {}
+            self_loop_bandwidth = {}  # 专门存储自环链路带宽
             
             # 获取模型中的链路统计数据
             if hasattr(model, 'links') and model.links:
@@ -1602,11 +1614,18 @@ class ResultAnalyzer:
                                         dest_node = int(parts[3])
                                         link_key = (source_node, dest_node)
                                         link_bandwidth[link_key] = total_bandwidth
-                                    elif len(parts) == 5:  # 自环链路：link_0_TU_TD_0
+                                    elif len(parts) == 5:  # 自环链路：link_0_TU_TD_0 或 link_0_TL_TR_0
                                         source_node = int(parts[1])
                                         dest_node = int(parts[4])
-                                        # 自环链路不显示在可视化中
-                                        continue
+                                        if source_node == dest_node and total_bandwidth > 0:
+                                            # 存储自环链路带宽，按方向分类
+                                            direction1 = parts[2]  # TU, TD, TL, TR
+                                            direction2 = parts[3]  # TD, TU, TR, TL
+                                            if source_node not in self_loop_bandwidth:
+                                                self_loop_bandwidth[source_node] = {}
+                                            # 使用方向组合作为key
+                                            direction_key = f"{direction1}_{direction2}"
+                                            self_loop_bandwidth[source_node][direction_key] = total_bandwidth
                                 except (ValueError, IndexError):
                                     # 解析失败时跳过该链路
                                     if verbose:
@@ -1687,12 +1706,6 @@ class ResultAnalyzer:
 
                     link_bandwidth[link_key] = bandwidth_gbps
 
-            # 计算总IP类型带宽（用于汇总显示）
-            # 动态计算所有IP类型的总带宽
-            ip_type_totals = defaultdict(float)
-            for node_data in node_ip_bandwidth.values():
-                for ip_type, bandwidth in node_data.items():
-                    ip_type_totals[ip_type] += bandwidth
 
             # 计算节点位置（网格对齐，不交错）
             pos = {}
@@ -1701,17 +1714,52 @@ class ResultAnalyzer:
                 col = node_id % num_cols
                 pos[node_id] = (col * 3, -row * 2)  # 规整网格，不偏移
 
+            # 根据网络规模调整图形大小，确保不超出屏幕
+            if num_nodes <= 9:  # 3x3及以下
+                figsize = (10, 8)
+            elif num_nodes <= 25:  # 5x5
+                figsize = (12, 9)
+            elif num_nodes <= 64:  # 8x8
+                figsize = (14, 10)
+            else:  # 更大的网络
+                figsize = (16, 12)
+            
             # 创建图形
-            fig, ax = plt.subplots(figsize=(14, 10))
+            fig, ax = plt.subplots(figsize=figsize)
             ax.set_aspect("equal")
 
-            # 动态计算字体大小
-            base_font = 10
-            dynamic_font = min(14, max(6, base_font * (65 / num_nodes) ** 0.5))
+            # 根据网络规模动态计算所有尺寸参数
+            # 字体大小：随节点数量动态缩放，小网络用大字体，大网络用小字体
+            base_font = 12
+            if num_nodes <= 9:  # 3x3及以下
+                dynamic_font = 14
+                arrow_scale = 15  # 减小箭头大小
+                node_size_factor = 1.2
+                link_label_font_factor = 0.9
+                node_label_font_factor = 1.0
+            elif num_nodes <= 25:  # 5x5
+                dynamic_font = 11
+                arrow_scale = 12  # 减小箭头大小
+                node_size_factor = 1.0
+                link_label_font_factor = 0.8
+                node_label_font_factor = 0.9
+            elif num_nodes <= 64:  # 8x8
+                dynamic_font = 9
+                arrow_scale = 10  # 减小箭头大小
+                node_size_factor = 0.8
+                link_label_font_factor = 0.7
+                node_label_font_factor = 0.8
+            else:  # 更大的网络
+                dynamic_font = 7
+                arrow_scale = 8   # 减小箭头大小
+                node_size_factor = 0.6
+                link_label_font_factor = 0.6
+                node_label_font_factor = 0.7
 
-            # 节点大小
-            node_size = 4000  # 增大节点
-            square_size = np.sqrt(node_size) / 60  # 调整节点大小，更大的方框
+            # 节点大小：根据网络规模调整
+            base_node_size = 4000
+            node_size = base_node_size * node_size_factor
+            square_size = np.sqrt(node_size) / 60
 
             # 添加所有可能的链路（包括没有流量的）
             all_links = set()
@@ -1772,29 +1820,29 @@ class ResultAnalyzer:
                     end_x = offset_x2 - dx * square_size / 2
                     end_y = offset_y2 - dy * square_size / 2
 
-                    # 绘制带箭头的连接线
+                    # 绘制带箭头的连接线，箭头大小根据网络规模调整
                     arrow = FancyArrowPatch(
                         (start_x, start_y),
                         (end_x, end_y),
                         arrowstyle="-|>",
-                        mutation_scale=dynamic_font * 1.2,
+                        mutation_scale=arrow_scale,
                         color=color,
                         linewidth=linewidth,
                         alpha=alpha,
-                        zorder=1,  # 增大箭头大小
+                        zorder=1,
                     )
                     ax.add_patch(arrow)
 
                     # 如果有带宽，在箭头旁边添加标签
                     if bandwidth > 0:
-                        # 判断链路方向并决定标签位置（更靠近链路，字体更大）
+                        # 判断链路方向并决定标签位置，增加与箭头的距离
                         if abs(dx) > abs(dy):  # 水平链路
-                            # 水平链路标签放在上下
+                            # 水平链路标签放在上下，增加距离
                             label_offset_x = 0
-                            label_offset_y = 0.2 if src < dst else -0.2  # 减小距离
+                            label_offset_y = 0.35 if src < dst else -0.35
                         else:  # 垂直链路
-                            # 垂直链路标签放在左右
-                            label_offset_x = 0.2 if src < dst else -0.2  # 减小距离
+                            # 垂直链路标签放在左右，增加距离
+                            label_offset_x = 0.35 if src < dst else -0.35
                             label_offset_y = 0
 
                         mid_x = (start_x + end_x) / 2 + label_offset_x
@@ -1806,8 +1854,8 @@ class ResultAnalyzer:
                             f"{bandwidth:.1f}",
                             ha="center",
                             va="center",
-                            fontsize=dynamic_font * 0.7,  # 增大字体
-                            bbox=dict(boxstyle="round,pad=0.1", facecolor="white", alpha=0.8),
+                            fontsize=dynamic_font * link_label_font_factor,
+                            bbox=dict(boxstyle="round,pad=0.1", facecolor="none", alpha=0),
                             color=color,
                             fontweight="bold",
                         )
@@ -1829,8 +1877,21 @@ class ResultAnalyzer:
                     """获取IP类型的首字母缩写"""
                     return ip_type.upper()[0] if ip_type else ""
 
-                # 找出该节点有带宽的IP类型
+                # 定义IP类型的固定显示顺序
+                ip_type_order = ['gdma', 'sdma', 'cdma', 'ddr', 'l2m', 'pcie', 'ethernet']
+                
+                # 找出该节点有带宽的IP类型并按固定顺序排序
                 active_ips = [(ip_type, bw) for ip_type, bw in node_ip_data.items() if bw > 0]
+                
+                # 按预定义顺序排序，未知类型排在最后
+                def get_sort_key(item):
+                    ip_type, _ = item
+                    try:
+                        return ip_type_order.index(ip_type.lower())
+                    except ValueError:
+                        return len(ip_type_order)  # 未知类型排在最后
+                
+                active_ips.sort(key=get_sort_key)
 
                 if len(active_ips) == 0:
                     ip_text = ""  # 无流量时不显示任何文字
@@ -1839,7 +1900,7 @@ class ResultAnalyzer:
                     ip_abbrev = get_ip_abbreviation(ip_type)
                     ip_text = f"{ip_abbrev}: {bw:.1f}"
                 else:
-                    # 多个IP类型，每个IP类型分行显示
+                    # 多个IP类型，每个IP类型分行显示，按固定顺序
                     ip_lines = []
                     for ip_type, bw in active_ips:
                         ip_abbrev = get_ip_abbreviation(ip_type)
@@ -1851,37 +1912,75 @@ class ResultAnalyzer:
                     node_text = f"{node_id}\n{ip_text}"
                 else:
                     node_text = f"{node_id}"
-                ax.text(x, y, node_text, ha="center", va="center", fontsize=dynamic_font * 0.8, fontweight="bold")  # 增大字体
+                ax.text(x, y, node_text, ha="center", va="center", fontsize=dynamic_font * node_label_font_factor, fontweight="bold")
+                
+                # 添加自环链路带宽标注
+                if node_id in self_loop_bandwidth:
+                    loop_data = self_loop_bandwidth[node_id]
+                    
+                    # TL_TR (水平自环) - 标在节点左右两边，竖着写
+                    if "TL_TR" in loop_data:
+                        bandwidth = loop_data["TL_TR"]
+                        # 左侧标注
+                        ax.text(x - square_size/2 - 0.3, y, f"{bandwidth:.1f}", 
+                               ha="center", va="center", 
+                               fontsize=dynamic_font * link_label_font_factor,
+                               rotation=90, fontweight="bold", color="red",
+                               bbox=dict(boxstyle="round,pad=0.1", facecolor="none", alpha=0))
+                    
+                    if "TR_TL" in loop_data:
+                        bandwidth = loop_data["TR_TL"]
+                        # 右侧标注
+                        ax.text(x + square_size/2 + 0.3, y, f"{bandwidth:.1f}", 
+                               ha="center", va="center", 
+                               fontsize=dynamic_font * link_label_font_factor,
+                               rotation=90, fontweight="bold", color="red",
+                               bbox=dict(boxstyle="round,pad=0.1", facecolor="none", alpha=0))
+                    
+                    # TU_TD (垂直自环) - 标在节点上下两边，正常写
+                    if "TU_TD" in loop_data:
+                        bandwidth = loop_data["TU_TD"]
+                        # 上侧标注
+                        ax.text(x, y + square_size/2 + 0.3, f"{bandwidth:.1f}", 
+                               ha="center", va="center", 
+                               fontsize=dynamic_font * link_label_font_factor,
+                               fontweight="bold", color="red",
+                               bbox=dict(boxstyle="round,pad=0.1", facecolor="none", alpha=0))
+                    
+                    if "TD_TU" in loop_data:
+                        bandwidth = loop_data["TD_TU"]
+                        # 下侧标注
+                        ax.text(x, y - square_size/2 - 0.3, f"{bandwidth:.1f}", 
+                               ha="center", va="center", 
+                               fontsize=dynamic_font * link_label_font_factor,
+                               fontweight="bold", color="red",
+                               bbox=dict(boxstyle="round,pad=0.1", facecolor="none", alpha=0))
 
-            # 添加总结信息框（动态显示所有IP类型）
-            summary_lines = ["总带宽统计:"]
-            for ip_type, total_bw in sorted(ip_type_totals.items()):
-                ip_display = ip_type.upper()  # 显示大写
-                summary_lines.append(f"{ip_display}: {total_bw:.2f} GB/s")
-
-            summary_text = "\n".join(summary_lines)
-            ax.text(0.02, 0.98, summary_text, transform=ax.transAxes, fontsize=12, verticalalignment="top", bbox=dict(boxstyle="round,pad=0.5", facecolor="lightgray", alpha=0.9))
+            # 移除总结信息框，保持图表简洁
 
             # 设置标题和布局
             title = f"CrossRing NoC 流量分布图 ({mode.upper()}模式)"
             ax.set_title(title, fontsize=16, fontweight="bold")
 
-            # 设置坐标轴范围
+            # 设置坐标轴范围，为图例预留更多空间
             all_x = [x for x, y in pos.values()]
             all_y = [y for x, y in pos.values()]
             margin = 1.5
-            ax.set_xlim(min(all_x) - margin, max(all_x) + margin)
+            # 右侧预留更多空间给图例
+            ax.set_xlim(min(all_x) - margin, max(all_x) + margin + 1.5)
             ax.set_ylim(min(all_y) - margin, max(all_y) + margin)
             ax.axis("off")
 
-            # 添加图例
+            # 添加图例，移除"带宽统计"项，调整到右上角外侧
             legend_elements = [
                 mpatches.Patch(color="lightblue", label="节点(含IP信息)"),
                 mpatches.Patch(color="red", label="高带宽链路"),
                 mpatches.Patch(color="gray", label="无流量链路"),
-                mpatches.Patch(color="lightgray", label="带宽统计"),
             ]
-            ax.legend(handles=legend_elements, loc="upper right", prop={"family": ["Times New Roman", "Microsoft YaHei", "SimHei"], "size": 10})
+            ax.legend(handles=legend_elements, 
+                     bbox_to_anchor=(1.02, 1), 
+                     loc='upper left',
+                     prop={"family": ["Times New Roman", "Microsoft YaHei", "SimHei"], "size": 10})
 
             # 保存或显示图表
             if save_figures:

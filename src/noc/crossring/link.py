@@ -67,20 +67,26 @@ class LinkBandwidthTracker:
         if slot is None:
             self.cycle_stats[channel]["empty"] += 1
         else:
-            self.cycle_stats[channel]["valid"] += 1
+            # 检查slot是否真的包含有效的flit
+            if hasattr(slot, "is_occupied") and slot.is_occupied and slot.flit is not None:
+                # 有效的flit传输
+                self.cycle_stats[channel]["valid"] += 1
 
-            # 统计ETag状态
-            if hasattr(slot, "etag_priority") and slot.etag_priority:
-                etag_value = slot.etag_priority.value if hasattr(slot.etag_priority, "value") else str(slot.etag_priority)
-                if etag_value in ["T0", "T1", "T2"]:
-                    self.cycle_stats[channel][etag_value] += 1
+                # 统计ETag状态
+                if hasattr(slot, "etag_priority") and slot.etag_priority:
+                    etag_value = slot.etag_priority.value if hasattr(slot.etag_priority, "value") else str(slot.etag_priority)
+                    if etag_value in ["T0", "T1", "T2"]:
+                        self.cycle_stats[channel][etag_value] += 1
 
-            # 统计ITag状态
-            if hasattr(slot, "itag_reserved") and slot.itag_reserved:
-                self.cycle_stats[channel]["ITag"] += 1
+                # 统计ITag状态
+                if hasattr(slot, "itag_reserved") and slot.itag_reserved:
+                    self.cycle_stats[channel]["ITag"] += 1
 
-            # 统计字节数 - 每个flit固定128字节
-            self.cycle_stats[channel]["bytes"] += 128  # 每个flit固定128字节
+                # 统计字节数 - 每个flit固定128字节
+                self.cycle_stats[channel]["bytes"] += 128  # 每个flit固定128字节
+            else:
+                # 空slot，即使slot对象存在但没有有效flit
+                self.cycle_stats[channel]["empty"] += 1
 
     def increment_cycle(self) -> None:
         """增加周期计数"""
@@ -345,7 +351,12 @@ class RingSlice:
         self.downstream_slice: Optional["RingSlice"] = None
 
         # 统计信息
-        self.stats = {"slots_received": {"req": 0, "rsp": 0, "data": 0}, "slots_transmitted": {"req": 0, "rsp": 0, "data": 0}, "empty_cycles": {"req": 0, "rsp": 0, "data": 0}, "total_cycles": 0}
+        self.stats = {
+            "slots_received": {"req": 0, "rsp": 0, "data": 0},
+            "slots_transmitted": {"req": 0, "rsp": 0, "data": 0},
+            "empty_cycles": {"req": 0, "rsp": 0, "data": 0},
+            "total_cycles": 0,
+        }
 
     def receive_slot(self, slot: Optional[CrossRingSlot], channel: str) -> bool:
         """
@@ -366,7 +377,9 @@ class RingSlice:
         if self.input_buffer[channel] is not None:
             existing_slot = self.input_buffer[channel]
             # 如果是空slot且新slot有效，允许覆盖
-            if (not existing_slot.is_occupied and not hasattr(existing_slot, "flit") or existing_slot.flit is None) and (slot is not None and slot.is_occupied and slot.flit is not None):
+            if (not existing_slot.is_occupied and not hasattr(existing_slot, "flit") or existing_slot.flit is None) and (
+                slot is not None and slot.is_occupied and slot.flit is not None
+            ):
                 # 允许覆盖空slot
                 pass
             else:
@@ -806,7 +819,7 @@ class CrossRingLink(BaseLink):
         self.bandwidth_tracker.increment_cycle()
 
         # 对每个通道的观测点slice进行统计
-        for channel in ["req", "rsp", "data"]:
+        for channel in ["data"]:
             slices = self.ring_slices.get(channel, [])
             if not slices:
                 continue
@@ -961,7 +974,12 @@ class CrossRingLink(BaseLink):
                 idle_rate = stats["empty"] / total_cycles
 
                 # 计算ETag分布
-                etag_distribution = {"T0_rate": stats["T0"] / total_cycles, "T1_rate": stats["T1"] / total_cycles, "T2_rate": stats["T2"] / total_cycles, "ITag_rate": stats["ITag"] / total_cycles}
+                etag_distribution = {
+                    "T0_rate": stats["T0"] / total_cycles,
+                    "T1_rate": stats["T1"] / total_cycles,
+                    "T2_rate": stats["T2"] / total_cycles,
+                    "ITag_rate": stats["ITag"] / total_cycles,
+                }
 
                 metrics[channel] = {
                     "bandwidth_gbps": bandwidth_gbps,

@@ -529,3 +529,104 @@ port_analysis = analyzer.analyze_port_bandwidth(metrics)
 - 所有带宽值差异源于时间计算方式不同（网络 vs 端口 vs 工作区间）
 - 推荐使用加权带宽作为主要性能指标
 - 端口带宽分析必须考虑读写操作的时间差异
+
+## CrossRing Request-Response Retry机制
+
+### 整体机制概述
+
+NoC系统的retry机制基于请求-响应模式，当SN端（Server Node，目标节点）资源不足时，会发送negative响应给RN端（Request Node，请求节点），RN端收到后将请求标记为retry并重新注入网络，关键要求是retry请求必须放到IP内部inject_fifo的队首以获得优先处理。
+
+### 核心逻辑流程
+
+#### 1. 初始请求处理
+- RN端发送读/写请求到SN端
+- SN端检查资源状态（tracker、WDB等）
+- 资源充足：正常处理并发送positive/datasend响应
+- 资源不足：发送negative响应，并将请求放入本地等待队列
+
+#### 2. Negative响应处理（触发retry）
+- RN端收到negative响应时，retry计数器+1
+- 将原请求标记为"old"属性（区别于新请求的"new"）
+- 请求状态设为"invalid"，等待资源可用信号
+
+#### 3. 资源释放与Positive响应
+- SN端完成其他请求时释放资源
+- 从等待队列按FIFO顺序取出等待的请求
+- 为等待请求分配资源并发送positive响应
+
+#### 4. Retry请求重新注入（关键优先级逻辑）
+- RN端收到positive响应，表示SN端现在有资源了
+- **核心要求：将retry请求插入到inject_fifo的队首而非队尾**
+- 这确保retry请求优先于新请求被处理，避免饥饿现象
+
+### 响应类型说明
+
+#### Negative响应
+- **含义**：资源不足，请求被拒绝
+- **触发条件**：
+  - 读请求：SN端tracker资源不足
+  - 写请求：SN端tracker或WDB（写数据缓冲）资源不足
+- **后续动作**：请求进入SN端等待队列，RN端准备retry
+
+#### Positive响应
+- **含义**：资源已分配，可以重新发送请求
+- **触发条件**：SN端资源释放后，从等待队列分配资源给等待请求
+- **后续动作**：RN端将retry请求放到inject_fifo队首重新注入
+
+#### Datasend响应
+- **含义**：写操作数据传输完成
+- **用途**：仅用于写请求的正常完成流程
+
+### 关键数据结构
+
+#### SN端
+- **等待队列**：`sn_req_wait[req_type][ip_type][ip_pos]` - 存储因资源不足的等待请求
+- **资源计数器**：跟踪tracker、WDB等资源的可用数量
+
+#### RN端
+- **Inject FIFO**：IP内部的请求注入队列，retry请求需插入队首
+- **请求状态跟踪**：区分新请求("new")与retry请求("old")
+
+### 优先级处理逻辑
+
+#### 队首插入的重要性
+1. **避免饥饿**：确保retry请求不会被持续到来的新请求阻塞
+2. **公平性**：已经等待过的请求应该获得更高优先级
+3. **性能**：减少请求的总体延迟和重试次数
+
+#### 实现要点
+- 使用支持队首插入的数据结构（如deque）
+- retry请求调用队首插入方法而非普通的队尾插入
+- 在请求对象中标记retry属性以便识别和统计
+
+### 状态管理逻辑
+
+#### 请求状态转换
+1. **新请求**：`req_attr="new", req_state="valid"`
+2. **收到negative**：`req_attr="old", req_state="invalid"`
+3. **收到positive**：`req_attr="old", req_state="valid"`，重新注入到队首
+
+#### 防重复处理
+- 检查req_attr避免同一请求多次进入retry流程
+- 确保每个negative响应只触发一次retry操作
+
+### 统计监控
+
+#### 基本统计
+- `read_retry_num_stat`：读请求retry次数
+- `write_retry_num_stat`：写请求retry次数
+
+#### 统计时机
+- 每次收到negative响应时计数器+1
+- 在系统级别汇总所有IP接口的retry统计
+
+### 与网络仲裁的交互
+
+Ring_Bridge_arbitration等网络仲裁机制处理所有inject_fifo中的请求，包括retry请求。由于retry请求被放在队首，它们会被优先选中进行仲裁和转发，从而实现端到端的优先级处理。
+
+### 实现关键点
+1. **SN端资源释放时必须发送positive响应**
+2. **RN端收到positive响应后将retry请求插入inject_fifo队首**
+3. **维护完整的三维等待队列结构**
+4. **正确的请求状态管理和转换**
+5. **防重复处理的保护机制**
