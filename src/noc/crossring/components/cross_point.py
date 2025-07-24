@@ -915,19 +915,21 @@ class CrossRingCrossPoint:
         current_slot = departure_slice.peek_current_slot(channel)
 
         # 添加详细的调试输出
-        if hasattr(self, '_debug_injection_check') and self._debug_injection_check:
+        if hasattr(self, "_debug_injection_check") and self._debug_injection_check:
             downstream_info = "None"
-            if hasattr(departure_slice, 'downstream_slice') and departure_slice.downstream_slice:
+            if hasattr(departure_slice, "downstream_slice") and departure_slice.downstream_slice:
                 downstream_info = f"slice_{departure_slice.downstream_slice.slice_id if hasattr(departure_slice.downstream_slice, 'slice_id') else 'unknown'}"
-            
+
             output_buffer_status = "None"
-            if hasattr(departure_slice, 'output_buffer') and departure_slice.output_buffer.get(channel):
+            if hasattr(departure_slice, "output_buffer") and departure_slice.output_buffer.get(channel):
                 output_buffer_status = f"occupied"
-            
-            self.logger.debug(f"🔍 CrossPoint {self.crosspoint_id} can_inject检查 {direction}:{channel} - "
-                            f"current_slot: {'occupied' if current_slot else 'None'}, "
-                            f"downstream: {downstream_info}, "
-                            f"output_buffer: {output_buffer_status}")
+
+            self.logger.debug(
+                f"🔍 CrossPoint {self.crosspoint_id} can_inject检查 {direction}:{channel} - "
+                f"current_slot: {'occupied' if current_slot else 'None'}, "
+                f"downstream: {downstream_info}, "
+                f"output_buffer: {output_buffer_status}"
+            )
 
         # 如果当前没有slot或是空slot，可以注入
         if current_slot is None:
@@ -1130,30 +1132,24 @@ class CrossRingCrossPoint:
 
     def _get_flit_actual_direction(self, flit: CrossRingFlit, arrival_direction: str) -> str:
         """
-        计算flit应该写入Ring Bridge的输入方向
-        
-        关键修复：从水平环弹出的flit应该写入RB_TR/RB_TL输入，而不是RB_TU/RB_TD
-        Ring Bridge内部会处理维度转换逻辑
+        计算flit的实际传输方向（基于其路由目标）
 
         Args:
             flit: 要分析的flit
             arrival_direction: 到达slice的方向
 
         Returns:
-            Ring Bridge输入方向
+            flit的实际传输方向
         """
-        # 对于水平CrossPoint，flit应该写入对应的水平方向输入
-        if self.direction == CrossPointDirection.HORIZONTAL:
-            # 水平环弹出 -> 写入RB_TR或RB_TL（基于到达方向）
-            return arrival_direction  # TR或TL
-            
-        # 对于垂直CrossPoint，flit应该写入对应的垂直方向输入  
-        elif self.direction == CrossPointDirection.VERTICAL:
-            # 垂直环弹出 -> 写入RB_TU或RB_TD（基于到达方向）
-            return arrival_direction  # TU或TD
-            
-        # 默认使用到达方向
-        return arrival_direction
+        # 计算flit的下一个路由方向
+        next_direction = self.parent_node._calculate_routing_direction(flit) if self.parent_node else "TR"
+
+        # 如果是EQ（本地），则使用到达方向
+        if next_direction == "EQ":
+            return arrival_direction
+
+        # 否则使用路由计算的方向
+        return next_direction
 
     def add_to_ring_bridge_input(self, flit: CrossRingFlit, from_direction: str, channel: str) -> bool:
         """
@@ -1279,7 +1275,6 @@ class CrossRingCrossPoint:
         # 初始化传输计划
         self._injection_transfer_plan = []
         self._ejection_transfer_plan = []
-        
 
         # 计算下环可能性：检查每个管理方向的到达slice
         for direction in self.managed_directions:
@@ -1322,8 +1317,8 @@ class CrossRingCrossPoint:
 
                     if direction_fifo.valid_signal():
                         flit = direction_fifo.peek_output()
-                        flit_id = getattr(flit, 'packet_id', 'unknown') if flit else 'unknown'
-                        
+                        flit_id = getattr(flit, "packet_id", "unknown") if flit else "unknown"
+
                         if self.can_inject_flit(direction, channel):
                             # 环路可以接受，计划传输
                             self._injection_transfer_plan.append({"type": "fifo_pipeline_read", "direction": direction, "channel": channel, "source_fifo": direction_fifo})
@@ -1375,7 +1370,7 @@ class CrossRingCrossPoint:
                 # compute阶段已经确定了可以注入，update阶段应该执行
                 flit = transfer["source_fifo"].read_output()
                 if flit:
-                    flit_id = getattr(flit, 'packet_id', 'unknown')
+                    flit_id = getattr(flit, "packet_id", "unknown")
                     if self.try_inject_flit(transfer["direction"], flit, transfer["channel"]):
                         self.logger.info(f"✅ CrossPoint {self.crosspoint_id} 成功注入 {transfer['direction']} flit {flit_id}")
                     else:

@@ -433,9 +433,7 @@ class CrossRingModel(BaseNoCModel):
 
                 # 创建链接
                 try:
-                    link = CrossRingLink(
-                        link_id=link_id, source_node=node_id, dest_node=neighbor_id, direction=direction, config=self.config, num_slices=num_slices, logger=self.logger
-                    )
+                    link = CrossRingLink(link_id=link_id, source_node=node_id, dest_node=neighbor_id, direction=direction, config=self.config, num_slices=num_slices, logger=self.logger)
                     self.links[link_id] = link
                     link_count += 1
                 except Exception as e:
@@ -915,15 +913,16 @@ class CrossRingModel(BaseNoCModel):
 
     def _step_topology_network_update(self) -> None:
         """CrossRing网络组件更新阶段"""
-        # 1. 先执行节点更新阶段（包括CrossPoint注入）
-        for node_id, node in self.nodes.items():
-            if hasattr(node, "step_update_phase"):
-                node.step_update_phase(self.cycle)
-
-        # 2. 然后执行链路更新阶段（slice内部移动，但不传输）
+        # 正确执行顺序：先让Link移动腾空slot，再让CrossPoint注入
+        # 1. 先执行链路更新阶段（环路移动，腾空slot[0]位置）
         for link_id, link in self.links.items():
             if hasattr(link, "step_update_phase"):
                 link.step_update_phase(self.cycle)
+
+        # 2. 然后执行节点更新阶段（CrossPoint注入到腾空的slot）
+        for node_id, node in self.nodes.items():
+            if hasattr(node, "step_update_phase"):
+                node.step_update_phase(self.cycle)
 
     def get_congestion_statistics(self) -> Dict[str, Any]:
         """获取拥塞统计信息"""
@@ -992,11 +991,6 @@ class CrossRingModel(BaseNoCModel):
         # 调用base类的enable_debug
         super().setup_debug(level, trace_packets, sleep_time)
 
-        # 启用CrossPoint注入调试（仅对节点3，因为第6个请求从那里开始卡住）
-        if 3 in self.nodes:
-            self.nodes[3].enable_crosspoint_injection_debug(True)
-            self.logger.info("已启用节点3的CrossPoint注入调试")
-
     def setup_result_analysis(self, flow_distribution: bool = False, bandwidth_analysis: bool = False, save_figures: bool = True, save_dir: str = "output") -> None:
         """
         配置结果分析
@@ -1007,6 +1001,7 @@ class CrossRingModel(BaseNoCModel):
             save_figures: 是否保存图片文件到磁盘
             save_dir: 保存目录
         """
+        save_dir = f"{save_dir}{self.traffic_scheduler.get_save_filename()}"
         self._viz_config.update({"flow_distribution": flow_distribution, "bandwidth_analysis": bandwidth_analysis, "save_figures": save_figures, "save_dir": save_dir})
         self.logger.info(f"可视化配置已更新: 流量分布={flow_distribution}, 带宽分析={bandwidth_analysis}, 保存图片={save_figures}, 保存目录={save_dir}")
 
@@ -1159,9 +1154,7 @@ class CrossRingModel(BaseNoCModel):
             "cycle_accurate": cycle_accurate,
         }
 
-    def analyze_simulation_results(
-        self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output", verbose: bool = True
-    ) -> Dict[str, Any]:
+    def analyze_simulation_results(self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output", verbose: bool = True) -> Dict[str, Any]:
         """
         分析仿真结果 - 调用CrossRing专用分析器
 
@@ -1594,12 +1587,7 @@ class CrossRingModel(BaseNoCModel):
 
     def __repr__(self) -> str:
         """字符串表示"""
-        return (
-            f"CrossRingModel({self.config.config_name}, "
-            f"{self.config.NUM_ROW}x{self.config.NUM_COL}, "
-            f"cycle={self.cycle}, "
-            f"active_requests={self.get_total_active_requests()})"
-        )
+        return f"CrossRingModel({self.config.config_name}, " f"{self.config.NUM_ROW}x{self.config.NUM_COL}, " f"cycle={self.cycle}, " f"active_requests={self.get_total_active_requests()})"
 
     # ========== 统一接口方法（用于兼容性） ==========
 

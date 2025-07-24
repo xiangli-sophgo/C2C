@@ -102,18 +102,18 @@ class CrossRingIPInterface(BaseIPInterface):
 
         # 创建分通道的pending队列，替代inject_fifos和父类pending_requests
         self.pending_by_channel = {"req": deque(), "rsp": deque(), "data": deque()}
-        
+
         # ========== 初始化带宽限制 ==========
         self._initialize_token_bucket()
-        
+
     def _initialize_token_bucket(self) -> None:
         """根据IP类型初始化令牌桶"""
         # 获取FLIT_SIZE配置（字节）
         flit_size = self.config.basic_config.FLIT_SIZE
-        
+
         # 获取网络频率（GHz）
         network_freq_ghz = self.config.basic_config.NETWORK_FREQUENCY
-        
+
         # 根据IP类型设置带宽限制
         if self.ip_type.startswith("ddr"):
             # DDR通道限速
@@ -125,35 +125,35 @@ class CrossRingIPInterface(BaseIPInterface):
             bytes_per_cycle = bw_limit_gbps / network_freq_ghz  # 字节/周期
             rate = bytes_per_cycle / flit_size  # flits/周期
             self._setup_token_bucket(rate=rate, bucket_size=bw_limit_gbps)
-            
+
         elif self.ip_type.startswith("l2m"):
             # L2M通道限速
             bw_limit_gbps = self.config.ip_config.L2M_BW_LIMIT
             bytes_per_cycle = bw_limit_gbps / network_freq_ghz  # GB/周期
             rate = bytes_per_cycle * 1e9 / flit_size  # flits/周期
             self._setup_token_bucket(rate=rate, bucket_size=bw_limit_gbps)
-            
+
         elif self.ip_type.startswith("gdma"):
             # GDMA通道限速
             bw_limit_gbps = self.config.ip_config.GDMA_BW_LIMIT
             bytes_per_cycle = bw_limit_gbps / network_freq_ghz  # GB/周期
             rate = bytes_per_cycle * 1e9 / flit_size  # flits/周期
             self._setup_token_bucket(rate=rate, bucket_size=bw_limit_gbps)
-            
+
         elif self.ip_type.startswith("sdma"):
             # SDMA通道限速
             bw_limit_gbps = self.config.ip_config.SDMA_BW_LIMIT
             bytes_per_cycle = bw_limit_gbps / network_freq_ghz  # GB/周期
             rate = bytes_per_cycle * 1e9 / flit_size  # flits/周期
             self._setup_token_bucket(rate=rate, bucket_size=bw_limit_gbps)
-            
+
         elif self.ip_type.startswith("cdma"):
             # CDMA通道限速
             bw_limit_gbps = self.config.ip_config.CDMA_BW_LIMIT
             bytes_per_cycle = bw_limit_gbps / network_freq_ghz  # GB/周期
             rate = bytes_per_cycle * 1e9 / flit_size  # flits/周期
             self._setup_token_bucket(rate=rate, bucket_size=bw_limit_gbps)
-            
+
         else:
             # 默认不限速
             self.token_bucket = None
@@ -615,11 +615,14 @@ class CrossRingIPInterface(BaseIPInterface):
         """创建写数据flits"""
         self.logger.info(f"🔧 开始创建写数据flits: packet_id={req.packet_id}, burst_length={req.burst_length}")
         for i in range(req.burst_length):
-            # 计算发送延迟
+            # 计算发送延迟 (将ns转换为cycles)
+            network_freq_ghz = self.config.basic_config.NETWORK_FREQUENCY
             if req.destination_type and req.destination_type.startswith("ddr"):
-                latency = self.config.latency_config.DDR_W_LATENCY
+                latency_ns = self.config.latency_config.DDR_W_LATENCY
+                latency = int(latency_ns * network_freq_ghz)  # ns * GHz = cycles
             else:
-                latency = self.config.latency_config.L2M_W_LATENCY
+                latency_ns = self.config.latency_config.L2M_W_LATENCY
+                latency = int(latency_ns * network_freq_ghz)  # ns * GHz = cycles
 
             # 计算完整路径
             path = self.model.topology.calculate_shortest_path(req.source, req.destination)
@@ -649,11 +652,14 @@ class CrossRingIPInterface(BaseIPInterface):
     def _create_read_packet(self, req: CrossRingFlit) -> None:
         """创建读数据包，使用现有的pending_by_channel机制"""
         for i in range(req.burst_length):
-            # 计算发送延迟
+            # 计算发送延迟 (将ns转换为cycles)
+            network_freq_ghz = self.config.basic_config.NETWORK_FREQUENCY
             if req.destination_type and req.destination_type.startswith("ddr"):
-                latency = self.config.latency_config.DDR_R_LATENCY
+                latency_ns = self.config.latency_config.DDR_R_LATENCY
+                latency = int(latency_ns * network_freq_ghz)  # ns * GHz = cycles
             else:
-                latency = self.config.latency_config.L2M_R_LATENCY
+                latency_ns = self.config.latency_config.L2M_R_LATENCY
+                latency = int(latency_ns * network_freq_ghz)  # ns * GHz = cycles
 
             # 计算完整路径（SN到RN）
             path = self.model.topology.calculate_shortest_path(req.destination, req.source)
@@ -1060,7 +1066,7 @@ class CrossRingIPInterface(BaseIPInterface):
             "network_to_h2l": {"channel": None, "flit": None},
             "h2l_to_completion": {"channel": None, "flit": None},
         }
-        
+
         # 在每个周期开始时刷新令牌桶（只刷新一次）
         if self.token_bucket:
             self.token_bucket.refill(current_cycle)
@@ -1093,12 +1099,12 @@ class CrossRingIPInterface(BaseIPInterface):
                     if self.token_bucket and channel == "data":
                         # 数据传输每个flit消耗1个令牌
                         tokens_needed = 1
-                            
+
                         # 尝试消耗令牌
                         if not self.token_bucket.consume(tokens_needed):
                             self.logger.debug(f"🚫 带宽限制：IP {self.ip_type} 令牌不足，需要{tokens_needed}个，当前{self.token_bucket.get_tokens():.2f}个")
                             continue  # 令牌不足时跳过此flit
-                    
+
                     # 对于req通道，检查RN端资源是否足够处理响应
                     if channel == "req":
                         if not self._check_and_reserve_resources(flit):
@@ -1164,7 +1170,7 @@ class CrossRingIPInterface(BaseIPInterface):
                         if not self.token_bucket.consume(1):
                             self.logger.debug(f"🚫 带宽限制：IP {self.ip_type} 接收数据时令牌不足，当前{self.token_bucket.get_tokens():.2f}个")
                             continue  # 令牌不足时跳过此flit
-                    
+
                     self._transfer_decisions["h2l_to_completion"]["channel"] = channel
                     self._transfer_decisions["h2l_to_completion"]["flit"] = flit
                     return
@@ -1233,7 +1239,7 @@ class CrossRingIPInterface(BaseIPInterface):
 
             # 从l2h FIFO读取并注入到node
             self.l2h_fifos[channel].read_output()
-            self._inject_to_node(flit, channel)
+            self._inject_to_topology_network(flit, channel)
 
         # 3. 执行network到h2l的传输
         if self._transfer_decisions["network_to_h2l"]["channel"]:

@@ -16,7 +16,7 @@ import matplotlib
 import logging
 
 # 设置matplotlib字体管理器的日志级别为ERROR，只显示错误信息
-logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
+logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 
 if sys.platform == "darwin":  # macOS 的系统标识是 'darwin'
     matplotlib.use("macosx")  # 仅在 macOS 上使用该后端
@@ -490,9 +490,7 @@ class ResultAnalyzer:
         mixed_data_avg = sum(m.data_latency for m in metrics) / len(metrics) if len(metrics) > 0 else 0
         mixed_data_max = max(m.data_latency for m in metrics) if len(metrics) > 0 else 0
 
-        print(
-            f"  Data 延迟  - 读: avg {read_data_avg:.2f}, max {read_data_max}；写: avg {write_data_avg:.2f}, max {write_data_max}；混合: avg {mixed_data_avg:.2f}, max {mixed_data_max}"
-        )
+        print(f"  Data 延迟  - 读: avg {read_data_avg:.2f}, max {read_data_max}；写: avg {write_data_avg:.2f}, max {write_data_max}；混合: avg {mixed_data_avg:.2f}, max {mixed_data_max}")
 
         # Trans延迟
         if read_metrics:
@@ -510,9 +508,7 @@ class ResultAnalyzer:
         mixed_trans_avg = sum(m.transaction_latency for m in metrics) / len(metrics) if len(metrics) > 0 else 0
         mixed_trans_max = max(m.transaction_latency for m in metrics) if len(metrics) > 0 else 0
 
-        print(
-            f"  Trans 延迟  - 读: avg {read_trans_avg:.2f}, max {read_trans_max}；写: avg {write_trans_avg:.2f}, max {write_trans_max}；混合: avg {mixed_trans_avg:.2f}, max {mixed_trans_max}"
-        )
+        print(f"  Trans 延迟  - 读: avg {read_trans_avg:.2f}, max {read_trans_max}；写: avg {write_trans_avg:.2f}, max {write_trans_max}；混合: avg {mixed_trans_avg:.2f}, max {mixed_trans_max}")
 
         # 总带宽显示（使用加权带宽）
         if "latency_metrics" in locals() and "总体带宽" in latency_metrics:
@@ -566,7 +562,7 @@ class ResultAnalyzer:
                     try:
                         total_bw = float(weighted_bw)
                         rn_avg_bw = total_bw / rn_ip_count if rn_ip_count > 0 else 0
-                        print(f"  {label}: {total_bw:.3f} GB/s (总), {rn_avg_bw:.6f} GB/s (RN平均)")
+                        print(f"  {label}: {total_bw:.2f} GB/s (总), {rn_avg_bw:.2f} GB/s (平均)")
                     except (ValueError, TypeError):
                         print(f"  {label}: {weighted_bw} GB/s")
 
@@ -619,7 +615,7 @@ class ResultAnalyzer:
             print(f"  CMD延迟: 平均 {np.mean(cmd_latencies):.2f} ns, 最小 {np.min(cmd_latencies):.2f} ns, 最大 {np.max(cmd_latencies):.2f} ns")
             print(f"  Data延迟: 平均 {np.mean(data_latencies):.2f} ns, 最小 {np.min(data_latencies):.2f} ns, 最大 {np.max(data_latencies):.2f} ns")
             print(f"  Transaction延迟: 平均 {np.mean(latencies):.2f} ns, 最小 {np.min(latencies):.2f} ns, 最大 {np.max(latencies):.2f} ns")
-            print(f"  P95 Transaction延迟: {np.percentile(latencies, 95):.2f} ns")
+            # print(f"  P95 Transaction延迟: {np.percentile(latencies, 95):.2f} ns")
 
             # 按类型分类延迟统计
             if read_latencies:
@@ -1332,9 +1328,10 @@ class ResultAnalyzer:
             ax1.legend(prop={"family": ["Times New Roman", "Microsoft YaHei", "SimHei"], "size": 9})
             ax1.grid(True, alpha=0.3)
             # 设置X轴为对数坐标，并调整刻度
-            ax1.set_xscale('log')
+            ax1.set_xscale("log")
             # 设置更密集的主要刻度和次要刻度
             from matplotlib.ticker import LogLocator, LogFormatter
+
             ax1.xaxis.set_major_locator(LogLocator(base=10, numticks=8))
             ax1.xaxis.set_minor_locator(LogLocator(base=10, subs=np.arange(2, 10) * 0.1, numticks=100))
             ax1.xaxis.set_major_formatter(LogFormatter(base=10, labelOnlyBase=False))
@@ -1347,7 +1344,7 @@ class ResultAnalyzer:
             ax2.set_title("延迟类型箱线图")
             ax2.grid(True, alpha=0.3)
             # 设置Y轴为对数坐标，并调整刻度
-            ax2.set_yscale('log')
+            ax2.set_yscale("log")
             # 设置更密集的主要刻度和次要刻度
             ax2.yaxis.set_major_locator(LogLocator(base=10, numticks=8))
             ax2.yaxis.set_minor_locator(LogLocator(base=10, subs=np.arange(2, 10) * 0.1, numticks=100))
@@ -1426,9 +1423,7 @@ class ResultAnalyzer:
                 write_requests = ip_analysis[ip_type]["写请求数"]
 
                 # 在X轴标签下方添加请求数信息
-                ax.text(
-                    i, -max(max(read_bw), max(write_bw)) * 0.1, f"总请求: {total_requests}\n(读:{read_requests}, 写:{write_requests})", ha="center", va="top", fontsize=8, alpha=0.7
-                )
+                ax.text(i, -max(max(read_bw), max(write_bw)) * 0.1, f"总请求: {total_requests}\n(读:{read_requests}, 写:{write_requests})", ha="center", va="top", fontsize=8, alpha=0.7)
 
             plt.tight_layout()
 
@@ -1981,5 +1976,28 @@ class ResultAnalyzer:
                     **output_files,
                     "保存时间": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
                 }
+                
+                # 输出文件保存路径总结
+                print("\n" + "="*60)
+                print("📁 结果文件保存总结")
+                print("="*60)
+                
+                # 统计请求数量
+                read_count = len([req for req in metrics if getattr(req, "req_type", None) == "read"])
+                write_count = len([req for req in metrics if getattr(req, "req_type", None) == "write"])
+                
+                print("详细请求记录统计:")
+                if "读请求CSV" in output_files:
+                    print(f"  读请求CSV, {read_count} 条记录:  {output_files['读请求CSV']}")
+                if "写请求CSV" in output_files:
+                    print(f"  写请求CSV, {write_count} 条记录:  {output_files['写请求CSV']}")
+                    
+                if "分析结果文件" in output_files:
+                    print(f"分析配置已保存: {output_files['分析结果文件']}")
+                    
+                if "端口带宽CSV" in output_files:
+                    print(f"具体端口的统计CSV： {output_files['端口带宽CSV']}")
+                    
+                print("="*60)
 
         return analysis

@@ -74,10 +74,10 @@ class IPConfiguration:
 class FIFOConfiguration:
     """FIFO缓冲区配置数据类。"""
 
-    RB_IN_DEPTH: int = 16
-    RB_OUT_DEPTH: int = 8
-    IQ_OUT_DEPTH: int = 8
-    EQ_IN_DEPTH: int = 16
+    RB_IN_FIFO_DEPTH: int = 16
+    RB_OUT_FIFO_DEPTH: int = 8
+    IQ_OUT_FIFO_DEPTH: int = 8
+    EQ_IN_FIFO_DEPTH: int = 16
     IQ_CH_DEPTH: int = 10
     EQ_CH_DEPTH: int = 10
 
@@ -252,10 +252,10 @@ class CrossRingConfig(BaseNoCConfig):
         # FIFO深度验证 - 安全地访问属性
         fifo_cfg = self.fifo_config
         if hasattr(fifo_cfg, "RB_IN_DEPTH"):
-            if fifo_cfg.RB_IN_DEPTH <= 0:
-                errors.append(f"RB输入FIFO深度必须为正数 (RB_IN_DEPTH={fifo_cfg.RB_IN_DEPTH})")
-            if fifo_cfg.EQ_IN_DEPTH <= 0:
-                errors.append(f"EQ输入FIFO深度必须为正数 (EQ_IN_DEPTH={fifo_cfg.EQ_IN_DEPTH})")
+            if fifo_cfg.RB_IN_FIFO_DEPTH <= 0:
+                errors.append(f"RB输入FIFO深度必须为正数 (RB_IN_DEPTH={fifo_cfg.RB_IN_FIFO_DEPTH})")
+            if fifo_cfg.EQ_IN_FIFO_DEPTH <= 0:
+                errors.append(f"EQ输入FIFO深度必须为正数 (EQ_IN_DEPTH={fifo_cfg.EQ_IN_FIFO_DEPTH})")
         elif isinstance(fifo_cfg, dict):
             if fifo_cfg.get("RB_IN_DEPTH", 0) <= 0:
                 errors.append(f"RB输入FIFO深度必须为正数 (RB_IN_DEPTH={fifo_cfg.get('RB_IN_DEPTH', 0)})")
@@ -285,8 +285,8 @@ class CrossRingConfig(BaseNoCConfig):
 
         # 安全地获取FIFO深度
         if hasattr(fifo_cfg, "RB_IN_DEPTH"):
-            rb_depth = fifo_cfg.RB_IN_DEPTH
-            eq_depth = fifo_cfg.EQ_IN_DEPTH
+            rb_depth = fifo_cfg.RB_IN_FIFO_DEPTH
+            eq_depth = fifo_cfg.EQ_IN_FIFO_DEPTH
         elif isinstance(fifo_cfg, dict):
             rb_depth = fifo_cfg.get("RB_IN_DEPTH", 16)
             eq_depth = fifo_cfg.get("EQ_IN_DEPTH", 16)
@@ -320,9 +320,7 @@ class CrossRingConfig(BaseNoCConfig):
                 errors.append(f"SN Tracker OSTD必须为正数 (SN_DDR_R_TRACKER_OSTD={tracker.SN_DDR_R_TRACKER_OSTD}, SN_L2M_R_TRACKER_OSTD={tracker.SN_L2M_R_TRACKER_OSTD})")
             # 缓冲区大小一致性验证
             if hasattr(self, "RN_RDB_SIZE") and self.RN_RDB_SIZE != tracker.RN_R_TRACKER_OSTD * self.basic_config.BURST:
-                errors.append(
-                    f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (RN_RDB_SIZE={self.RN_RDB_SIZE}, RN_R_TRACKER_OSTD={tracker.RN_R_TRACKER_OSTD}, BURST={self.basic_config.BURST})"
-                )
+                errors.append(f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (RN_RDB_SIZE={self.RN_RDB_SIZE}, RN_R_TRACKER_OSTD={tracker.RN_R_TRACKER_OSTD}, BURST={self.basic_config.BURST})")
         elif isinstance(tracker, dict):
             rn_r_ostd = tracker.get("RN_R_TRACKER_OSTD", 64)
             rn_w_ostd = tracker.get("RN_W_TRACKER_OSTD", 32)
@@ -775,10 +773,10 @@ class CrossRingConfig(BaseNoCConfig):
                 "tracker_release_latency": self.tracker_config.SN_TRACKER_RELEASE_LATENCY,
             },
             "fifo_depths": {
-                "rb_in": self.fifo_config.RB_IN_DEPTH,
-                "rb_out": self.fifo_config.RB_OUT_DEPTH,
-                "iq_out": self.fifo_config.IQ_OUT_DEPTH,
-                "eq_in": self.fifo_config.EQ_IN_DEPTH,
+                "rb_in": self.fifo_config.RB_IN_FIFO_DEPTH,
+                "rb_out": self.fifo_config.RB_OUT_FIFO_DEPTH,
+                "iq_out": self.fifo_config.IQ_OUT_FIFO_DEPTH,
+                "eq_in": self.fifo_config.EQ_IN_FIFO_DEPTH,
                 "iq_ch": self.fifo_config.IQ_CH_DEPTH,
                 "eq_ch": self.fifo_config.EQ_CH_DEPTH,
             },
