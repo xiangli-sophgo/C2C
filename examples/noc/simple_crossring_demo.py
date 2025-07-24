@@ -20,10 +20,10 @@ def create_config(rows=2, cols=3, config_name="demo"):
 
     config.tracker_config.RN_R_TRACKER_OSTD = 128
     config.tracker_config.RN_W_TRACKER_OSTD = 64
-    config.tracker_config.SN_DDR_R_TRACKER_OSTD = 32
-    config.tracker_config.SN_DDR_W_TRACKER_OSTD = 64
-    config.tracker_config.SN_L2M_R_TRACKER_OSTD = 64
-    config.tracker_config.SN_L2M_W_TRACKER_OSTD = 64
+    config.tracker_config.SN_DDR_R_TRACKER_OSTD = 2  # 减少资源以触发negative响应
+    config.tracker_config.SN_DDR_W_TRACKER_OSTD = 2  # 减少资源以触发negative响应
+    config.tracker_config.SN_L2M_R_TRACKER_OSTD = 2
+    config.tracker_config.SN_L2M_W_TRACKER_OSTD = 2
 
     config.latency_config.DDR_R_LATENCY = 0
     config.latency_config.DDR_R_LATENCY_VAR = 0
@@ -53,7 +53,12 @@ def main():
 
     # 1. 设置traffic文件
     traffic_file_path = r"../../traffic_data"
-    traffic_chains = [["sample_traffic.txt"]]
+    traffic_chains = [
+        [
+            # "LLama2_AllReduce.txt",
+            "test1.txt",
+        ]
+    ]
 
     # 2. 创建模型（不传递traffic_file_path，IP接口将在setup_traffic_scheduler中动态创建）
     rows = 3
@@ -63,12 +68,12 @@ def main():
 
     # 3. 配置各种选项
     model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)  # Traffic文件设置，节点的IP会根据数据流连接。
-    # model.setup_debug(level=1, trace_packets=["1"], sleep_time=0.3)  # debug设置，跟踪特定请求
-    model.setup_result_analysis(flow_distribution=True, bandwidth_analysis=True, save_figures=0, save_dir="../../output/noc/CrossRing/")  # 可视化设置
+    model.setup_debug(level=2, trace_packets=["1", "2", "3"], sleep_time=0.0)  # debug设置，跟踪多个写请求
+    model.setup_result_analysis(flow_distribution=True, bandwidth_analysis=True, save_figures=1, save_dir="../../output/noc/CrossRing/")  # 可视化设置
 
-    # 4. 运行仿真
+    # 4. 运行仿真 - 减小仿真时间进行调试
     print("▶️  开始仿真")
-    model.run_simulation(max_time_ns=2000.0, progress_interval_ns=1000.0, results_analysis=True, verbose=1)
+    model.run_simulation(max_time_ns=400.0, progress_interval_ns=100.0, results_analysis=True, verbose=1)
 
 
 if __name__ == "__main__":
