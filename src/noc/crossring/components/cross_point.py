@@ -1015,28 +1015,32 @@ class CrossRingCrossPoint:
 
     def should_eject_flit(self, flit: CrossRingFlit, current_direction: str = None) -> Tuple[bool, str]:
         """
-        判断flit的下环决策：下环到IP、ring_bridge或继续在环上
-        整合了原来的should_eject_to_ip, should_eject_to_ring_bridge等多个函数
+        判断flit的下环决策：基于flit来源方向而非目标坐标
+
+        正确的CrossPoint弹出规则：
+        1. 水平CrossPoint:
+           - 从水平环来的flit (TR/TL) → 弹出到Ring Bridge (RB_TR/RB_TL)
+           - 从Ring Bridge来的flit → 弹出到IP (EQ)
+        2. 垂直CrossPoint:
+           - 从垂直环来的flit (TU/TD) → 弹出到Ring Bridge (RB_TU/RB_TD)
+           - 从Ring Bridge来的flit → 弹出到IP (EQ)
 
         Args:
             flit: 要判断的flit
-            current_direction: 当前到达的方向（可选）
+            current_direction: 当前到达的方向
 
         Returns:
-            (是否下环, 下环目标: "IP" 或 "RB" 或 "")
+            (是否下环, 下环目标: "EQ" 或 "RB" 或 "")
         """
-        if not self.parent_node:
+        if not self.parent_node or not current_direction:
             return False, ""
 
         # 首先检查是否到达最终目的地
         if hasattr(flit, "should_eject_at_node") and flit.should_eject_at_node(self.parent_node.node_id):
-            # 根据CrossPoint方向选择下环方式
-            if self.direction == CrossPointDirection.HORIZONTAL:
-                return True, "RB"  # 横向环通过RB下环
-            else:
-                return True, "EQ"  # 纵向环直接下环
+            # 到达目标节点，必须下环到IP
+            return True, "EQ"
 
-        # 获取坐标信息（直角坐标系，原点在左下角）
+        # 获取坐标信息用于路由判断
         if hasattr(flit, "dest_coordinates"):
             dest_x, dest_y = flit.dest_coordinates
         else:
@@ -1051,49 +1055,48 @@ class CrossRingCrossPoint:
         if hasattr(routing_strategy, "value"):
             routing_strategy = routing_strategy.value
 
-        # 根据CrossPoint方向、路由策略和维度匹配判断下环策略
-        if current_direction:
-            if self.direction == CrossPointDirection.HORIZONTAL and current_direction in ["TR", "TL"]:
-                # 水平CrossPoint: 处理水平环上的flit（x方向移动）
+        # 基于来源方向的弹出逻辑
+        if self.direction == CrossPointDirection.HORIZONTAL:
+            # 水平CrossPoint处理
+            if current_direction in ["TR", "TL"]:
+                # 从水平环来的flit
                 if dest_x == curr_x and dest_y == curr_y:
-                    # 到达目标节点，横向环需要通过RB下环到IP
+                    # 到达目标节点，弹出到Ring Bridge然后到IP
                     return True, "RB"
-                elif dest_y == curr_y and dest_x != curr_x:
-                    # Y维度匹配但X维度不匹配，继续在水平环传输
-                    return False, ""
                 elif dest_y != curr_y:
-                    # Y维度不匹配，需要维度转换
-                    if routing_strategy == "XY":
-                        # XY路由：先完成X维度，再转换到Y维度
-                        if dest_x == curr_x:
-                            return True, "RB"  # X维度已完成，转换到垂直环
-                        else:
-                            return False, ""  # X维度未完成，继续在水平环传输
-                    else:  # YX路由
-                        return True, "RB"  # YX路由需要通过RB转换到垂直环
-                # 默认情况：继续在水平环传输
+                    # 需要维度转换到垂直环
+                    if routing_strategy == "XY" and dest_x == curr_x:
+                        # XY路由且X维度已完成，转换到垂直环
+                        return True, "RB"
+                    elif routing_strategy == "YX":
+                        # YX路由需要立即转换到垂直环
+                        return True, "RB"
+                # 继续在水平环传输
                 return False, ""
+            else:
+                # 从Ring Bridge或其他来源，直接弹出到IP
+                return True, "EQ"
 
-            elif self.direction == CrossPointDirection.VERTICAL and current_direction in ["TU", "TD"]:
-                # 垂直CrossPoint: 处理垂直环上的flit（y方向移动）
+        elif self.direction == CrossPointDirection.VERTICAL:
+            # 垂直CrossPoint处理
+            if current_direction in ["TU", "TD"]:
+                # 从垂直环来的flit
                 if dest_y == curr_y and dest_x == curr_x:
-                    # 到达目标节点，纵向环直接下环到IP
-                    return True, "EQ"
-                elif dest_x == curr_x and dest_y != curr_y:
-                    # X维度匹配但Y维度不匹配，继续在垂直环传输
-                    return False, ""
+                    # 到达目标节点，弹出到Ring Bridge然后到IP
+                    return True, "RB"
                 elif dest_x != curr_x:
-                    # X维度不匹配，需要维度转换
-                    if routing_strategy == "YX":
-                        # YX路由：先完成Y维度，再转换到X维度
-                        if dest_y == curr_y:
-                            return True, "RB"  # Y维度已完成，转换到水平环
-                        else:
-                            return False, ""  # Y维度未完成，继续在垂直环传输
-                    else:  # XY路由
-                        return True, "RB"  # XY路由需要通过RB转换到水平环
-                # 默认情况：继续在垂直环传输
+                    # 需要维度转换到水平环
+                    if routing_strategy == "YX" and dest_y == curr_y:
+                        # YX路由且Y维度已完成，转换到水平环
+                        return True, "RB"
+                    elif routing_strategy == "XY":
+                        # XY路由需要立即转换到水平环
+                        return True, "RB"
+                # 继续在垂直环传输
                 return False, ""
+            else:
+                # 从Ring Bridge或其他来源，直接弹出到IP
+                return True, "EQ"
 
         return False, ""
 
@@ -1132,24 +1135,23 @@ class CrossRingCrossPoint:
 
     def _get_flit_actual_direction(self, flit: CrossRingFlit, arrival_direction: str) -> str:
         """
-        计算flit的实际传输方向（基于其路由目标）
+        根据flit来源方向确定Ring Bridge输入端口
+
+        关键修正：CrossPoint弹出到Ring Bridge时，应该根据flit的来源方向（不是目标方向）
+        决定Ring Bridge的输入端口：
+        - 从水平环来的flit (TR/TL) → 进入RB_TR/RB_TL
+        - 从垂直环来的flit (TU/TD) → 进入RB_TU/RB_TD
 
         Args:
             flit: 要分析的flit
-            arrival_direction: 到达slice的方向
+            arrival_direction: 到达slice的方向（即flit的来源方向）
 
         Returns:
-            flit的实际传输方向
+            Ring Bridge输入端口方向
         """
-        # 计算flit的下一个路由方向
-        next_direction = self.parent_node._calculate_routing_direction(flit) if self.parent_node else "TR"
-
-        # 如果是EQ（本地），则使用到达方向
-        if next_direction == "EQ":
-            return arrival_direction
-
-        # 否则使用路由计算的方向
-        return next_direction
+        # 直接使用到达方向作为Ring Bridge输入端口
+        # 这确保了：TR→RB_TR, TL→RB_TL, TU→RB_TU, TD→RB_TD
+        return arrival_direction
 
     def add_to_ring_bridge_input(self, flit: CrossRingFlit, from_direction: str, channel: str) -> bool:
         """

@@ -118,14 +118,26 @@ class BaseNoCModel(ABC):
         """设置拓扑网络（拓扑特定）"""
         pass
 
+    # ========== 四阶段执行抽象方法 ==========
+
     @abstractmethod
-    def _step_topology_network_compute(self) -> None:
-        """拓扑网络计算阶段（拓扑特定）"""
+    def _step_link_compute_phase(self) -> None:
+        """Link层计算阶段：计算slice移动规划，不实际移动flit"""
         pass
 
     @abstractmethod
-    def _step_topology_network_update(self) -> None:
-        """拓扑网络更新阶段（拓扑特定）"""
+    def _step_link_update_phase(self) -> None:
+        """Link层更新阶段：执行slice移动，腾空slot[0]位置"""
+        pass
+
+    @abstractmethod
+    def _step_node_compute_phase(self) -> None:
+        """Node层计算阶段：计算注入/弹出/转发决策，不实际传输flit"""
+        pass
+
+    @abstractmethod
+    def _step_node_update_phase(self) -> None:
+        """Node层更新阶段：执行flit传输，包括注入到腾空的slot[0]"""
         pass
 
     @abstractmethod
@@ -280,11 +292,22 @@ class BaseNoCModel(ABC):
                 if injected > 0:
                     print(f"🎯 周期{self.cycle}: 从traffic文件注入了{injected}个请求")
 
-        # 阶段1：组合逻辑阶段 - 所有组件计算传输决策
-        self._step_compute_phase()
+        # 步骤1：IP接口处理（请求生成和处理）
+        for ip_interface in self.ip_interfaces.values():
+            ip_interface.step_compute_phase(self.cycle)
 
-        # 阶段2：时序逻辑阶段 - 所有组件执行传输和状态更新
-        self._step_update_phase()
+        for ip_interface in self.ip_interfaces.values():
+            ip_interface.step_update_phase(self.cycle)
+
+        # 步骤2：Node层处理（节点内注入和仲裁）
+        self._step_node_compute_phase()
+
+        self._step_node_update_phase()
+
+        # 步骤3：Link层传输（环路slice移动）
+        self._step_link_compute_phase()
+
+        self._step_link_update_phase()
 
         # 更新全局统计
         self._update_global_statistics()
@@ -298,24 +321,6 @@ class BaseNoCModel(ABC):
             self._log_periodic_status()
 
         # Debug休眠已移至具体模型的_print_debug_info中，只有在打印信息时才执行
-
-    def _step_compute_phase(self) -> None:
-        """阶段1：组合逻辑阶段 - 所有组件计算传输决策，不修改状态"""
-        # 1. 所有IP接口计算阶段
-        for ip_interface in self.ip_interfaces.values():
-            ip_interface.step_compute_phase(self.cycle)
-
-        # 2. 拓扑网络组件计算阶段
-        self._step_topology_network_compute()
-
-    def _step_update_phase(self) -> None:
-        """阶段2：时序逻辑阶段 - 所有组件执行传输和状态更新"""
-        # 1. 所有IP接口更新阶段
-        for ip_interface in self.ip_interfaces.values():
-            ip_interface.step_update_phase(self.cycle)
-
-        # 2. 拓扑网络组件更新阶段
-        self._step_topology_network_update()
 
     def _sync_global_clock(self) -> None:
         """时钟同步阶段：确保所有组件使用统一的时钟值"""
@@ -348,14 +353,14 @@ class BaseNoCModel(ABC):
             network_freq = self.config.NETWORK_FREQUENCY
         elif hasattr(self.config, "clock_frequency"):
             network_freq = self.config.clock_frequency
-        
+
         # ns转换为cycle：cycle = time_ns * frequency_GHz
         max_cycles = int(max_time_ns * network_freq)
         stats_start_cycle = int(stats_start_time_ns * network_freq)
         progress_interval = int(progress_interval_ns * network_freq)
-        
+
         cycle_time_ns = 1.0 / network_freq  # 1个周期的纳秒数
-        
+
         self.logger.info(f"开始NoC仿真: max_time={max_time_ns}ns (max_cycles={max_cycles}), 网络频率={network_freq}GHz")
 
         # 如果启用详细模式，打印traffic统计信息
@@ -394,9 +399,7 @@ class BaseNoCModel(ABC):
                         # 计算时间（ns）
                         current_time_ns = cycle * cycle_time_ns
 
-                        self.logger.info(
-                            f"仿真进度: {current_time_ns:.1f}ns/{max_time_ns:.1f}ns (周期 {cycle}/{max_cycles}), 活跃请求={active_requests}, 完成请求={completed_requests}"
-                        )
+                        self.logger.info(f"仿真进度: {current_time_ns:.1f}ns/{max_time_ns:.1f}ns (周期 {cycle}/{max_cycles}), 活跃请求={active_requests}, 完成请求={completed_requests}")
 
         except KeyboardInterrupt:
             self.logger.warning("仿真被用户中断")
@@ -599,9 +602,7 @@ class BaseNoCModel(ABC):
     def _log_periodic_status(self) -> None:
         """定期状态日志"""
         active_requests = self.get_total_active_requests()
-        self.logger.debug(
-            f"周期 {self.cycle}: " f"活跃请求={active_requests}, " f"总吞吐={self.global_stats['throughput']:.2f}, " f"平均延迟={self.global_stats['average_latency']:.2f}"
-        )
+        self.logger.debug(f"周期 {self.cycle}: " f"活跃请求={active_requests}, " f"总吞吐={self.global_stats['throughput']:.2f}, " f"平均延迟={self.global_stats['average_latency']:.2f}")
 
     def get_total_active_requests(self) -> int:
         """获取总活跃请求数"""

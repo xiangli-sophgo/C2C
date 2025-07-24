@@ -10,7 +10,7 @@ CrossRing链路实现，继承BaseLink，实现CrossRing特有的ETag/ITag机制
 
 from typing import Dict, List, Any, Optional, Tuple
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from ..base.link import BaseLink, LinkSlot, BasicPriority, BasicDirection
@@ -21,17 +21,70 @@ from .flit import CrossRingFlit
 
 class PriorityLevel(Enum):
     """CrossRing特定的ETag优先级"""
+
     T0 = "T0"  # 最高优先级
-    T1 = "T1"  # 中等优先级  
+    T1 = "T1"  # 中等优先级
     T2 = "T2"  # 最低优先级
 
 
 class Direction(Enum):
     """CrossRing特定的传输方向"""
+
     TR = "TR"  # 向右(To Right)
     TL = "TL"  # 向左(To Left)
     TU = "TU"  # 向上(To Up)
     TD = "TD"  # 向下(To Down)
+
+
+@dataclass
+class LinkBandwidthTracker:
+    """链路带宽统计跟踪器 - 在链路末端slice观测点统计slot状态"""
+
+    # 每个通道的cycle统计数据
+    cycle_stats: Dict[str, Dict[str, int]] = field(
+        default_factory=lambda: {
+            "req": {"empty": 0, "valid": 0, "T0": 0, "T1": 0, "T2": 0, "ITag": 0, "bytes": 0},
+            "rsp": {"empty": 0, "valid": 0, "T0": 0, "T1": 0, "T2": 0, "ITag": 0, "bytes": 0},
+            "data": {"empty": 0, "valid": 0, "T0": 0, "T1": 0, "T2": 0, "ITag": 0, "bytes": 0},
+        }
+    )
+
+    # 总周期数
+    total_cycles: int = 0
+
+    # 观测点信息
+    observer_info: Dict[str, str] = field(default_factory=dict)
+
+    def reset_stats(self) -> None:
+        """重置统计数据"""
+        for channel in ["req", "rsp", "data"]:
+            self.cycle_stats[channel] = {"empty": 0, "valid": 0, "T0": 0, "T1": 0, "T2": 0, "ITag": 0, "bytes": 0}
+        self.total_cycles = 0
+        self.observer_info.clear()
+
+    def record_slot_state(self, channel: str, slot: Optional["CrossRingSlot"]) -> None:
+        """记录通过观测点的slot状态"""
+        if slot is None:
+            self.cycle_stats[channel]["empty"] += 1
+        else:
+            self.cycle_stats[channel]["valid"] += 1
+
+            # 统计ETag状态
+            if hasattr(slot, "etag_priority") and slot.etag_priority:
+                etag_value = slot.etag_priority.value if hasattr(slot.etag_priority, "value") else str(slot.etag_priority)
+                if etag_value in ["T0", "T1", "T2"]:
+                    self.cycle_stats[channel][etag_value] += 1
+
+            # 统计ITag状态
+            if hasattr(slot, "itag_reserved") and slot.itag_reserved:
+                self.cycle_stats[channel]["ITag"] += 1
+
+            # 统计字节数 - 每个flit固定128字节
+            self.cycle_stats[channel]["bytes"] += 128  # 每个flit固定128字节
+
+    def increment_cycle(self) -> None:
+        """增加周期计数"""
+        self.total_cycles += 1
 
 
 @dataclass
@@ -48,7 +101,7 @@ class CrossRingSlot(LinkSlot):
 
     # CrossRing特有的槽位内容
     valid: bool = False  # Valid位
-    
+
     # I-Tag信息 (注入预约机制)
     itag_reserved: bool = False  # 是否被预约
     itag_direction: Optional[str] = None  # 预约方向(TR/TL/TU/TD)
@@ -61,7 +114,7 @@ class CrossRingSlot(LinkSlot):
 
     # 额外的计数器
     starvation_counter: int = 0
-    
+
     # 重写flit类型提示以支持CrossRingFlit
     flit: Optional["CrossRingFlit"] = None
 
@@ -76,7 +129,7 @@ class CrossRingSlot(LinkSlot):
     def is_occupied(self) -> bool:
         """检查slot是否被占用 - CrossRing使用valid字段"""
         return self.valid and self.flit is not None
-    
+
     @is_occupied.setter
     def is_occupied(self, value: bool) -> None:
         """设置占用状态 - 为了与父类兼容"""
@@ -313,9 +366,7 @@ class RingSlice:
         if self.input_buffer[channel] is not None:
             existing_slot = self.input_buffer[channel]
             # 如果是空slot且新slot有效，允许覆盖
-            if (not existing_slot.is_occupied and 
-                not hasattr(existing_slot, 'flit') or existing_slot.flit is None) and \
-               (slot is not None and slot.is_occupied and slot.flit is not None):
+            if (not existing_slot.is_occupied and not hasattr(existing_slot, "flit") or existing_slot.flit is None) and (slot is not None and slot.is_occupied and slot.flit is not None):
                 # 允许覆盖空slot
                 pass
             else:
@@ -339,7 +390,7 @@ class RingSlice:
                     parts = self.slice_id.split("_")
                     if len(parts) >= 7:
                         source = int(parts[1])  # 源节点总是在第2个位置
-                        
+
                         # 根据parts数量判断链路类型
                         if len(parts) == 8:  # 自环链路：link_0_TR_TL_0_req_slice_2
                             dest = int(parts[4])  # 目标节点在第5个位置
@@ -349,7 +400,7 @@ class RingSlice:
                             # 未知格式，尝试从link_id中提取
                             link_parts = parts[:4]  # 取link_id部分
                             dest = int(link_parts[-1])  # 最后一个数字部分作为目标
-                        
+
                         slot.flit.link_source_node = source
                         slot.flit.link_dest_node = dest
                         # 使用位置特定格式：source->dest:slice_index
@@ -395,57 +446,54 @@ class RingSlice:
     def step_compute_phase(self, cycle: int) -> None:
         """
         计算阶段：确定传输决策，不修改状态
-        
+
         计算哪些slot需要移动，但不执行实际的移动操作
-        
+
         Args:
             cycle: 当前周期
         """
         # 计算传输决策，存储在临时变量中
         # 这里只需要确定传输的可行性，不修改状态
         self._next_cycle = cycle
-        
+
         # 预计算传输决策，但不执行
         self._transfer_plan = {}
         for channel in ["req", "rsp", "data"]:
             self._transfer_plan[channel] = {
                 "can_move_to_output": True,  # 当前槽总是可以移动到输出缓存
                 "can_move_to_current": True,  # 输入缓存总是可以移动到当前槽
-                "can_transmit_downstream": False  # 默认不能传输
+                "can_transmit_downstream": False,  # 默认不能传输
             }
-            
+
             # 检查是否可以向下游传输
             # 应该基于current_slots（将要移动到output_buffer的内容）来判断
-            if (self.downstream_slice and 
-                self.current_slots[channel] is not None and
-                self.downstream_slice.input_buffer.get(channel) is None):
+            if self.downstream_slice and self.current_slots[channel] is not None and self.downstream_slice.input_buffer.get(channel) is None:
                 self._transfer_plan[channel]["can_transmit_downstream"] = True
 
     def step_update_phase(self, cycle: int) -> None:
         """
         更新阶段：基于计算阶段的决策执行状态修改
-        
+
         遵循两阶段执行模型：在单个update周期内完成所有传输
-        
+
         Args:
             cycle: 当前周期
         """
         self.stats["total_cycles"] += 1
-        
+
         # 两阶段模型：同时执行传输和更新操作
         for channel in ["req", "rsp", "data"]:
             current_slot = self.current_slots[channel]
             input_slot = self.input_buffer[channel]
-            
+
             # 第一步：向下游传输当前slot（如果可以）
             downstream_transmitted = False
-            if (self._transfer_plan[channel]["can_transmit_downstream"] and
-                self.downstream_slice and current_slot is not None):
-                
+            if self._transfer_plan[channel]["can_transmit_downstream"] and self.downstream_slice and current_slot is not None:
+
                 if self.downstream_slice.receive_slot(current_slot, channel):
                     downstream_transmitted = True
                     self.stats["slots_transmitted"][channel] += 1
-            
+
             # 第二步：同时进行内部移动
             if downstream_transmitted:
                 # 当前slot已传输，输入slot移动到当前位置
@@ -455,7 +503,7 @@ class RingSlice:
                 # 当前slot未传输，移动到输出缓存，输入slot移动到当前位置
                 if current_slot is not None and self._transfer_plan[channel]["can_move_to_output"]:
                     self.output_buffer[channel] = current_slot
-                
+
                 if self._transfer_plan[channel]["can_move_to_current"]:
                     self.current_slots[channel] = input_slot
                     self.input_buffer[channel] = None
@@ -468,25 +516,21 @@ class RingSlice:
     def step_downstream_transmission(self, cycle: int) -> None:
         """
         下游传输阶段：向下游slice传输数据
-        
+
         这个方法应该在所有slice完成update阶段后调用
-        
+
         Args:
             cycle: 当前周期
         """
         for channel in ["req", "rsp", "data"]:
             # Step 4: 向下游传输slot（基于compute阶段的决策）
-            if (hasattr(self, '_transfer_plan') and 
-                self._transfer_plan[channel]["can_transmit_downstream"] and
-                self.downstream_slice and 
-                self.output_buffer[channel] is not None):
-                
+            if hasattr(self, "_transfer_plan") and self._transfer_plan[channel]["can_transmit_downstream"] and self.downstream_slice and self.output_buffer[channel] is not None:
+
                 transmitted_slot = self.output_buffer[channel]
                 if self.downstream_slice.receive_slot(transmitted_slot, channel):
                     self.output_buffer[channel] = None
                     self.stats["slots_transmitted"][channel] += 1
                     self.logger.debug(f"RingSlice {self.slice_id} 向下游传输slot {transmitted_slot.slot_id}")
-
 
     def peek_current_slot(self, channel: str) -> Optional[CrossRingSlot]:
         """
@@ -592,7 +636,7 @@ class CrossRingLink(BaseLink):
         """
         # 调用父类构造函数
         super().__init__(link_id, source_node, dest_node, num_slices, logger)
-        
+
         # CrossRing特有属性
         self.direction = direction
         self.config = config
@@ -610,13 +654,18 @@ class CrossRingLink(BaseLink):
         # 初始化Slot池
         self._initialize_slot_pools()
 
+        # 初始化带宽统计跟踪器
+        self.bandwidth_tracker = LinkBandwidthTracker()
+
         # 扩展父类统计信息，添加CrossRing特有的统计
-        self.stats.update({
-            "slots_created": {"req": 0, "rsp": 0, "data": 0},
-            "slots_destroyed": {"req": 0, "rsp": 0, "data": 0},
-            "utilization": {"req": 0.0, "rsp": 0.0, "data": 0.0},
-            "total_cycles": 0,
-        })
+        self.stats.update(
+            {
+                "slots_created": {"req": 0, "rsp": 0, "data": 0},
+                "slots_destroyed": {"req": 0, "rsp": 0, "data": 0},
+                "utilization": {"req": 0.0, "rsp": 0.0, "data": 0.0},
+                "total_cycles": 0,
+            }
+        )
 
         self.logger.info(f"CrossRingLink {link_id} 初始化完成: {source_node} -> {dest_node}, 方向: {direction.value}")
 
@@ -725,44 +774,69 @@ class CrossRingLink(BaseLink):
     def step_compute_phase(self, cycle: int) -> None:
         """
         计算阶段：让所有Ring Slice执行compute阶段
-        
+
         Args:
             cycle: 当前周期
         """
         # 处理每个通道的传输计算
         for channel in ["req", "rsp", "data"]:
             self._step_channel_compute(channel, cycle)
-    
+
     def step_update_phase(self, cycle: int) -> None:
         """
         更新阶段：让所有Ring Slice执行update阶段
-        
+
         优化：移除单独的下游传输阶段，传输在slice的update阶段完成
-        
+
         Args:
             cycle: 当前周期
         """
         self.stats["total_cycles"] += 1
-        
+
         # 处理每个通道的传输更新（现在包含下游传输）
         for channel in ["req", "rsp", "data"]:
             self._step_channel_update(channel, cycle)
-        
-        # 注意：下游传输现在在slice的update阶段完成，不需要单独调用
 
-        # 更新利用率统计
-        self._update_utilization_stats()
+        # 在固定观测点收集带宽统计数据（在处理传输之前）
+        self._collect_bandwidth_stats(cycle)
+
+    def _collect_bandwidth_stats(self, cycle: int) -> None:
+        """在链路末端观测点收集带宽统计数据"""
+        # 增加周期计数
+        self.bandwidth_tracker.increment_cycle()
+
+        # 对每个通道的观测点slice进行统计
+        for channel in ["req", "rsp", "data"]:
+            slices = self.ring_slices.get(channel, [])
+            if not slices:
+                continue
+
+            # 使用最后一个slice作为观测点（更能反映链路实际传输情况）
+            observer_position = len(slices) - 1
+            observer_slice = self.get_ring_slice(channel, observer_position)
+
+            # 记录观测点信息（仅在第一次记录）
+            if channel not in self.bandwidth_tracker.observer_info:
+                self.bandwidth_tracker.observer_info[channel] = f"slice[{observer_position}]/{len(slices)}"
+
+            if observer_slice is not None:
+                # 获取当前cycle通过观测点的slot
+                # 观测slice的当前slots状态（实际传输的数据）
+                current_slot = observer_slice.current_slots.get(channel, None)
+
+                # 记录slot状态到带宽跟踪器
+                self.bandwidth_tracker.record_slot_state(channel, current_slot)
 
     def _step_channel_compute(self, channel: str, cycle: int) -> None:
         """
         处理单个通道的计算阶段
-        
+
         Args:
             channel: 通道类型
             cycle: 当前周期
         """
         slices = self.ring_slices[channel]
-        
+
         # 让所有Ring Slice执行compute阶段
         for ring_slice in slices:
             ring_slice.step_compute_phase(cycle)
@@ -770,13 +844,13 @@ class CrossRingLink(BaseLink):
     def _step_channel_update(self, channel: str, cycle: int) -> None:
         """
         处理单个通道的更新阶段
-        
+
         Args:
             channel: 通道类型
             cycle: 当前周期
         """
         slices = self.ring_slices[channel]
-        
+
         # 让所有Ring Slice执行update阶段
         for ring_slice in slices:
             ring_slice.step_update_phase(cycle)
@@ -784,17 +858,16 @@ class CrossRingLink(BaseLink):
     def _step_channel_downstream_transmission(self, channel: str, cycle: int) -> None:
         """
         处理单个通道的下游传输阶段
-        
+
         Args:
             channel: 通道类型
             cycle: 当前周期
         """
         slices = self.ring_slices[channel]
-        
+
         # 让所有Ring Slice执行下游传输
         for ring_slice in slices:
             ring_slice.step_downstream_transmission(cycle)
-
 
     def _update_utilization_stats(self) -> None:
         """更新利用率统计"""
@@ -869,12 +942,69 @@ class CrossRingLink(BaseLink):
             "stats": self.stats.copy(),
         }
 
+    def get_link_performance_metrics(self) -> Dict[str, Any]:
+        """计算链路性能指标"""
+        metrics = {}
+
+        for channel in ["req", "rsp", "data"]:
+            stats = self.bandwidth_tracker.cycle_stats[channel]
+            total_cycles = self.bandwidth_tracker.total_cycles
+
+            if total_cycles > 0:
+                # 计算带宽 (GB/s)
+                cycle_time_ns = 1000.0 / (self.config.basic_config.NETWORK_FREQUENCY * 1000)  # frequency是GHz，转换为ns
+                total_time_ns = total_cycles * cycle_time_ns
+                bandwidth_gbps = stats["bytes"] / total_time_ns if total_time_ns > 0 else 0.0
+
+                # 计算利用率
+                utilization = stats["valid"] / total_cycles
+                idle_rate = stats["empty"] / total_cycles
+
+                # 计算ETag分布
+                etag_distribution = {"T0_rate": stats["T0"] / total_cycles, "T1_rate": stats["T1"] / total_cycles, "T2_rate": stats["T2"] / total_cycles, "ITag_rate": stats["ITag"] / total_cycles}
+
+                metrics[channel] = {
+                    "bandwidth_gbps": bandwidth_gbps,
+                    "utilization": utilization,
+                    "idle_rate": idle_rate,
+                    "total_bytes": stats["bytes"],
+                    "valid_slots": stats["valid"],
+                    "empty_slots": stats["empty"],
+                    "etag_distribution": etag_distribution,
+                }
+            else:
+                # 没有数据的情况
+                metrics[channel] = {
+                    "bandwidth_gbps": 0.0,
+                    "utilization": 0.0,
+                    "idle_rate": 0.0,
+                    "total_bytes": 0,
+                    "valid_slots": 0,
+                    "empty_slots": 0,
+                    "etag_distribution": {"T0_rate": 0.0, "T1_rate": 0.0, "T2_rate": 0.0, "ITag_rate": 0.0},
+                }
+
+        return metrics
+
+    def print_link_bandwidth_summary(self) -> None:
+        """打印链路带宽汇总信息"""
+        metrics = self.get_link_performance_metrics()
+
+        print(f"📊 链路 {self.link_id} ({self.source_node}→{self.dest_node}) 带宽统计:")
+
+        # 打印观测点信息
+        if hasattr(self.bandwidth_tracker, "observer_info") and self.bandwidth_tracker.observer_info:
+            print(f"   观测点信息: {self.bandwidth_tracker.observer_info}")
+
+        for channel, data in metrics.items():
+            print(f"  {channel}: {data['bandwidth_gbps']:.2f}GB/s, 利用率{data['utilization']:.1%}, 空载率{data['idle_rate']:.1%}")
+
     def reset_stats(self) -> None:
         """重置统计信息，重写父类方法以添加CrossRing特有的重置"""
         # 调用父类的reset_stats（如果有的话）
-        if hasattr(super(), 'reset_stats'):
+        if hasattr(super(), "reset_stats"):
             super().reset_stats()
-        
+
         # 重置CrossRing特有的统计
         for channel in ["req", "rsp", "data"]:
             self.stats["slots_created"][channel] = 0
@@ -886,6 +1016,9 @@ class CrossRingLink(BaseLink):
                 ring_slice.reset_stats()
 
         self.stats["total_cycles"] = 0
+
+        # 重置带宽统计跟踪器
+        self.bandwidth_tracker.reset_stats()
 
     def get_slots(self, channel: str) -> List[CrossRingSlot]:
         """
@@ -900,7 +1033,7 @@ class CrossRingLink(BaseLink):
         return self.slot_pools.get(channel, [])
 
     # ========== BaseLink抽象方法实现 ==========
-    
+
     def _get_link_direction(self) -> Direction:
         """获取链路方向"""
         return self.direction
@@ -919,12 +1052,12 @@ class CrossRingLink(BaseLink):
         """
         # CrossRing的ETag升级策略
         utilization = self.stats.get("utilization", {}).get(channel, 0.0)
-        
+
         if from_level == PriorityLevel.T2 and to_level == PriorityLevel.T1:
             return utilization > 0.7  # 利用率超过70%可升级T1
         elif from_level == PriorityLevel.T1 and to_level == PriorityLevel.T0:
             return utilization > 0.9  # 利用率超过90%可升级T0
-        
+
         return False
 
     def should_trigger_itag(self, channel: str, direction: str) -> bool:

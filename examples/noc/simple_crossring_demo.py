@@ -19,15 +19,15 @@ def create_config(rows=2, cols=3, config_name="demo"):
     # config.ip_config.GDMA_BW_LIMIT = 20
 
     config.tracker_config.RN_R_TRACKER_OSTD = 128
-    config.tracker_config.RN_W_TRACKER_OSTD = 32
+    config.tracker_config.RN_W_TRACKER_OSTD = 64
     config.tracker_config.SN_DDR_R_TRACKER_OSTD = 32
-    config.tracker_config.SN_DDR_W_TRACKER_OSTD = 16
+    config.tracker_config.SN_DDR_W_TRACKER_OSTD = 64
     config.tracker_config.SN_L2M_R_TRACKER_OSTD = 64
     config.tracker_config.SN_L2M_W_TRACKER_OSTD = 64
 
-    config.latency_config.DDR_R_LATENCY = 155
+    config.latency_config.DDR_R_LATENCY = 0
     config.latency_config.DDR_R_LATENCY_VAR = 0
-    config.latency_config.DDR_W_LATENCY = 16
+    config.latency_config.DDR_W_LATENCY = 0
     config.latency_config.L2M_R_LATENCY = 12
     config.latency_config.L2M_W_LATENCY = 16
 
@@ -53,7 +53,7 @@ def main():
 
     # 1. 设置traffic文件
     traffic_file_path = r"../../traffic_data"
-    traffic_chains = [["test1.txt"]]
+    traffic_chains = [["sample_traffic.txt"]]
 
     # 2. 创建模型（不传递traffic_file_path，IP接口将在setup_traffic_scheduler中动态创建）
     rows = 3
@@ -63,7 +63,7 @@ def main():
 
     # 3. 配置各种选项
     model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)  # Traffic文件设置，节点的IP会根据数据流连接。
-    model.setup_debug(level=1, trace_packets=["1"], sleep_time=0.1)  # debug设置，跟踪特定请求
+    # model.setup_debug(level=1, trace_packets=["1"], sleep_time=0.3)  # debug设置，跟踪特定请求
     model.setup_result_analysis(flow_distribution=True, bandwidth_analysis=True, save_figures=0, save_dir="../../output/noc/CrossRing/")  # 可视化设置
 
     # 4. 运行仿真

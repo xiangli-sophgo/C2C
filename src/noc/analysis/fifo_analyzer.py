@@ -6,6 +6,7 @@ FIFO统计分析器
 
 import csv
 import os
+import time
 from datetime import datetime
 from typing import Dict, List, Any
 from pathlib import Path
@@ -49,9 +50,9 @@ class FIFOStatsCollector:
         # 确保输出目录存在
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         
-        # 生成文件名
+        # 生成文件名（统一使用Unix时间戳格式）
         if filename is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = int(time.time())
             filename = f"fifo_statistics_{timestamp}"
             
         filepath = os.path.join(output_dir, f"{filename}.csv")

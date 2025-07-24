@@ -1575,68 +1575,117 @@ class ResultAnalyzer:
 
                     node_ip_bandwidth[node_id][ip_type] = bandwidth_gbps
 
-            # 计算链路带宽：使用通过该链路的请求计算工作区间带宽
+            # 计算链路带宽：使用模型中链路对象的实际统计数据
             link_bandwidth = {}
-            for link_key, total_bytes in link_bytes.items():
-                # 找到通过该链路的所有请求
-                link_requests = []
-                curr_node, next_node = link_key
+            
+            # 获取模型中的链路统计数据
+            if hasattr(model, 'links') and model.links:
+                for link_id, link in model.links.items():
+                    # 获取链路的性能指标
+                    try:
+                        performance_metrics = link.get_link_performance_metrics()
+                        
+                        # 计算该链路的总带宽（所有通道的带宽之和）
+                        total_bandwidth = 0.0
+                        for channel in ["req", "rsp", "data"]:
+                            if channel in performance_metrics:
+                                total_bandwidth += performance_metrics[channel].get("bandwidth_gbps", 0.0)
+                        
+                        # 解析链路ID获取源和目标节点
+                        # 处理不同的链路ID格式
+                        if link_id.startswith("link_"):
+                            parts = link_id.split("_")
+                            if len(parts) >= 4:
+                                try:
+                                    if len(parts) == 4:  # 普通链路：link_0_TR_1
+                                        source_node = int(parts[1])
+                                        dest_node = int(parts[3])
+                                        link_key = (source_node, dest_node)
+                                        link_bandwidth[link_key] = total_bandwidth
+                                    elif len(parts) == 5:  # 自环链路：link_0_TU_TD_0
+                                        source_node = int(parts[1])
+                                        dest_node = int(parts[4])
+                                        # 自环链路不显示在可视化中
+                                        continue
+                                except (ValueError, IndexError):
+                                    # 解析失败时跳过该链路
+                                    if verbose:
+                                        print(f"警告：无法解析链路ID {link_id}")
+                                    continue
+                        
+                        if verbose and total_bandwidth > 0:
+                            print(f"链路 {link_id}: {total_bandwidth:.3f} GB/s")
+                            
+                    except Exception as e:
+                        if verbose:
+                            print(f"警告：获取链路 {link_id} 统计数据时出错: {e}")
+                        continue
+                        
+            # 如果没有从模型获得链路数据，回退到基于请求的计算
+            if not link_bandwidth:
+                if verbose:
+                    print("警告：未能从模型获取链路统计数据，使用请求数据计算")
+                
+                for link_key, total_bytes in link_bytes.items():
+                    # 找到通过该链路的所有请求
+                    link_requests = []
+                    curr_node, next_node = link_key
 
-                for metric in metrics:
-                    if metric.source_node != metric.dest_node:
-                        # 检查该请求是否通过这条链路
-                        src_row = metric.source_node // num_cols
-                        src_col = metric.source_node % num_cols
-                        dst_row = metric.dest_node // num_cols
-                        dst_col = metric.dest_node % num_cols
+                    for metric in metrics:
+                        if metric.source_node != metric.dest_node:
+                            # 检查该请求是否通过这条链路
+                            src_row = metric.source_node // num_cols
+                            src_col = metric.source_node % num_cols
+                            dst_row = metric.dest_node // num_cols
+                            dst_col = metric.dest_node % num_cols
 
-                        passes_through_link = False
+                            passes_through_link = False
 
-                        # 水平路由检查
-                        if src_row == dst_row:
-                            step = 1 if dst_col > src_col else -1
-                            for col in range(src_col, dst_col, step):
-                                check_curr = src_row * num_cols + col
-                                check_next = src_row * num_cols + col + step
-                                if (check_curr, check_next) == link_key:
-                                    passes_through_link = True
-                                    break
+                            # 水平路由检查
+                            if src_row == dst_row:
+                                step = 1 if dst_col > src_col else -1
+                                for col in range(src_col, dst_col, step):
+                                    check_curr = src_row * num_cols + col
+                                    check_next = src_row * num_cols + col + step
+                                    if (check_curr, check_next) == link_key:
+                                        passes_through_link = True
+                                        break
 
-                        # 垂直路由检查
-                        elif src_col == dst_col:
-                            step = 1 if dst_row > src_row else -1
-                            for row in range(src_row, dst_row, step):
-                                check_curr = row * num_cols + src_col
-                                check_next = (row + step) * num_cols + src_col
-                                if (check_curr, check_next) == link_key:
-                                    passes_through_link = True
-                                    break
+                            # 垂直路由检查
+                            elif src_col == dst_col:
+                                step = 1 if dst_row > src_row else -1
+                                for row in range(src_row, dst_row, step):
+                                    check_curr = row * num_cols + src_col
+                                    check_next = (row + step) * num_cols + src_col
+                                    if (check_curr, check_next) == link_key:
+                                        passes_through_link = True
+                                        break
 
-                        if passes_through_link:
-                            link_requests.append(metric)
+                            if passes_through_link:
+                                link_requests.append(metric)
 
-                if link_requests:
-                    # 使用工作区间计算链路加权带宽
-                    working_intervals = self.calculate_working_intervals(link_requests, min_gap_threshold=200)
+                    if link_requests:
+                        # 使用工作区间计算链路加权带宽
+                        working_intervals = self.calculate_working_intervals(link_requests, min_gap_threshold=200)
 
-                    if working_intervals:
-                        total_weighted_bandwidth = 0.0
-                        total_weight = 0
+                        if working_intervals:
+                            total_weighted_bandwidth = 0.0
+                            total_weight = 0
 
-                        for interval in working_intervals:
-                            weight = interval.flit_count
-                            bandwidth = interval.bandwidth  # GB/s
-                            total_weighted_bandwidth += bandwidth * weight
-                            total_weight += weight
+                            for interval in working_intervals:
+                                weight = interval.flit_count
+                                bandwidth = interval.bandwidth  # GB/s
+                                total_weighted_bandwidth += bandwidth * weight
+                                total_weight += weight
 
-                        weighted_bandwidth = (total_weighted_bandwidth / total_weight) if total_weight > 0 else 0.0
-                        bandwidth_gbps = weighted_bandwidth  # 直接使用，已经是GB/s
+                            weighted_bandwidth = (total_weighted_bandwidth / total_weight) if total_weight > 0 else 0.0
+                            bandwidth_gbps = weighted_bandwidth  # 直接使用，已经是GB/s
+                        else:
+                            bandwidth_gbps = 0.0
                     else:
                         bandwidth_gbps = 0.0
-                else:
-                    bandwidth_gbps = 0.0
 
-                link_bandwidth[link_key] = bandwidth_gbps
+                    link_bandwidth[link_key] = bandwidth_gbps
 
             # 计算总IP类型带宽（用于汇总显示）
             # 动态计算所有IP类型的总带宽

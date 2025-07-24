@@ -43,7 +43,7 @@ class CrossRingTopology(BaseNoCTopology):
         #     raise ValueError(f"CrossRing配置无效: {error_msg}")
 
         # 设置拓扑类型
-        if hasattr(config, 'topology_type'):
+        if hasattr(config, "topology_type"):
             config.topology_type = TopologyType.CROSSRING
 
         # CrossRing特有属性
@@ -57,7 +57,6 @@ class CrossRingTopology(BaseNoCTopology):
         self._logger.info(f"初始化CrossRing拓扑: {self.NUM_ROW}×{self.NUM_COL}")
 
         super().__init__(config)
-
 
     def build_topology(self) -> None:
         """构建CrossRing拓扑结构。"""
@@ -170,8 +169,6 @@ class CrossRingTopology(BaseNoCTopology):
 
         # 如果没有找到路径，返回空路径
         return []
-
-
 
     def validate_topology(self) -> ValidationResult:
         """
@@ -296,11 +293,11 @@ class CrossRingTopology(BaseNoCTopology):
         routing_strategy = getattr(self.crossring_config, "ROUTING_STRATEGY", "XY")
         if hasattr(routing_strategy, "value"):
             routing_strategy = routing_strategy.value
-        
+
         # 确保路由策略是字符串
         if routing_strategy not in ["XY", "YX"]:
             routing_strategy = "XY"  # 默认为XY路由
-        
+
         for src in range(self.NUM_NODE):
             self.routing_table[src] = {}
             for dst in range(self.NUM_NODE):
@@ -315,10 +312,10 @@ class CrossRingTopology(BaseNoCTopology):
         """根据路由策略计算路径"""
         src_col, src_row = self.get_node_position(src)
         dst_col, dst_row = self.get_node_position(dst)
-        
+
         path = [src]
         current_col, current_row = src_col, src_row
-        
+
         if strategy == "XY":
             # 先水平移动
             while current_col != dst_col:
@@ -328,7 +325,7 @@ class CrossRingTopology(BaseNoCTopology):
                     current_col -= 1
                 node_id = self._position_to_node_id(current_col, current_row)
                 path.append(node_id)
-            
+
             # 再垂直移动
             while current_row != dst_row:
                 if current_row < dst_row:
@@ -337,7 +334,7 @@ class CrossRingTopology(BaseNoCTopology):
                     current_row -= 1
                 node_id = self._position_to_node_id(current_col, current_row)
                 path.append(node_id)
-        
+
         elif strategy == "YX":
             # 先垂直移动
             while current_row != dst_row:
@@ -347,7 +344,7 @@ class CrossRingTopology(BaseNoCTopology):
                     current_row -= 1
                 node_id = self._position_to_node_id(current_col, current_row)
                 path.append(node_id)
-            
+
             # 再水平移动
             while current_col != dst_col:
                 if current_col < dst_col:
@@ -371,10 +368,10 @@ class CrossRingTopology(BaseNoCTopology):
     def get_next_direction(self, src: NodeId, dst: NodeId) -> str:
         """获取从src到dst的下一跳方向"""
         path = self.routing_table[src][dst]
-        
+
         if len(path) <= 1:
             return "EQ"  # 已到达目标
-        
+
         next_node = path[1]  # 下一跳节点
         return self._get_direction_to_neighbor(src, next_node)
 
@@ -382,7 +379,7 @@ class CrossRingTopology(BaseNoCTopology):
         """计算从src到相邻节点dst的方向"""
         src_col, src_row = self.get_node_position(src)
         dst_col, dst_row = self.get_node_position(dst)
-        
+
         if dst_col > src_col:
             return "TR"  # 向右
         elif dst_col < src_col:
@@ -398,7 +395,7 @@ class CrossRingTopology(BaseNoCTopology):
         """打印3x3路由表 - 显示完整路径"""
         print("=== CrossRing 3x3 路由表 ===")
         print("格式: src->dst: [完整路径]")
-        
+
         for src in range(self.NUM_NODE):
             for dst in range(self.NUM_NODE):
                 if src != dst:
