@@ -248,15 +248,17 @@ import logging
 
 # 配置NoC模块的日志记录器
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+# 默认设置为CRITICAL级别，只有在明确调用setup_debug时才显示信息
+logger.setLevel(logging.CRITICAL)
 
 # 如果没有处理器，添加控制台处理器
 if not logger.handlers:
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(logging.CRITICAL)
     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-logger.info(f"NoC抽象层已加载 - 版本 {__version__}")
-logger.info(f"支持的拓扑类型: {[t.value for t in get_supported_topologies()]}")
+# 只在明确启用调试模式时才显示这些信息
+# logger.info(f"NoC抽象层已加载 - 版本 {__version__}")
+# logger.info(f"支持的拓扑类型: {[t.value for t in get_supported_topologies()]}")

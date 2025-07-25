@@ -1400,10 +1400,20 @@ class ResultAnalyzer:
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
 
             # 1. 三种延迟类型对比直方图（使用对数坐标轴）
-            # 使用统一的线宽和透明度
-            ax1.hist(cmd_latencies, bins=30, alpha=0.6, label="CMD延迟", color="blue", linewidth=1.5)
-            ax1.hist(data_latencies, bins=30, alpha=0.6, label="DATA延迟", color="green", linewidth=1.5)
-            ax1.hist(transaction_latencies, bins=30, alpha=0.6, label="TRANSACTION延迟", color="red", linewidth=1.5)
+            # 计算统一的bin边界，确保柱状图宽度一致
+            all_latencies = cmd_latencies + data_latencies + transaction_latencies
+            if all_latencies:
+                # 使用对数空间创建统一的bin边界
+                min_val = min([x for x in all_latencies if x > 0])  # 排除0值
+                max_val = max(all_latencies)
+                bins = np.logspace(np.log10(min_val), np.log10(max_val), 31)  # 30个区间
+            else:
+                bins = 30
+            
+            # 使用统一的bin边界和样式
+            ax1.hist(cmd_latencies, bins=bins, alpha=0.6, label="CMD延迟", color="blue", linewidth=1.5, rwidth=0.8)
+            ax1.hist(data_latencies, bins=bins, alpha=0.6, label="DATA延迟", color="green", linewidth=1.5, rwidth=0.8)
+            ax1.hist(transaction_latencies, bins=bins, alpha=0.6, label="TRANSACTION延迟", color="red", linewidth=1.5, rwidth=0.8)
             ax1.set_xlabel("延迟 (ns)")
             ax1.set_ylabel("频次")
             ax1.set_title("三种延迟类型分布直方图")
@@ -1421,7 +1431,37 @@ class ResultAnalyzer:
             # 2. 延迟类型箱线图（使用对数坐标轴）
             latency_data = [cmd_latencies, data_latencies, transaction_latencies]
             latency_labels = ["CMD延迟", "DATA延迟", "TRANSACTION延迟"]
-            ax2.boxplot(latency_data, labels=latency_labels)
+            
+            # 创建箱线图，隐藏异常值
+            box_plot = ax2.boxplot(latency_data, labels=latency_labels, 
+                                  patch_artist=True,  # 允许填充颜色
+                                  showfliers=False)  # 隐藏异常值
+            
+            # 为每个箱子设置不同颜色
+            colors = ['lightblue', 'lightgreen', 'lightcoral']
+            for patch, color in zip(box_plot['boxes'], colors):
+                patch.set_facecolor(color)
+                patch.set_alpha(0.7)
+            
+            # 为每个箱线图添加对应的统计信息（放在各自右边）
+            for i, (data, label) in enumerate(zip(latency_data, latency_labels)):
+                if len(data) > 0:
+                    mean_val = np.mean(data)
+                    median_val = np.median(data)
+                    std_val = np.std(data)
+                    max_val = np.max(data)
+                    
+                    # 计算统计信息位置（在每个箱子右侧）
+                    x_pos = i + 1.3  # 箱子位置是1,2,3，右侧偏移0.3
+                    
+                    # 使用箱子的中位数高度作为文本垂直位置
+                    median_y = np.median(data)
+                    
+                    stats_text = f"均值: {mean_val:.1f}ns\n中位数: {median_val:.1f}ns\n最大值: {max_val:.1f}ns\n标准差: {std_val:.1f}ns"
+                    ax2.text(x_pos, median_y, stats_text, 
+                            ha='left', va='center', fontsize=8,
+                            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8, edgecolor="gray"))
+            
             ax2.set_ylabel("延迟 (ns)")
             ax2.set_title("延迟类型箱线图")
             ax2.grid(True, alpha=0.3)

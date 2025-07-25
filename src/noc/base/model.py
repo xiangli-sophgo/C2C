@@ -86,8 +86,9 @@ class BaseNoCModel(ABC):
         # 事件队列（可选）
         self.event_queue = []
 
-        # 日志配置
+        # 日志配置 - 默认设置为CRITICAL级别，只有在明确调用setup_debug时才显示信息
         self.logger = logging.getLogger(f"{self.__class__.__name__}_{model_name}")
+        self.logger.setLevel(logging.CRITICAL)  # 默认不显示任何信息
 
         # 调试配置
         self.debug_config = {
@@ -109,7 +110,8 @@ class BaseNoCModel(ABC):
         self.next_packet_id = 1
         self.packet_id_map = {}  # {packet_id: {source, destination, req_type, burst_length}}
 
-        self.logger.info(f"NoC模型初始化: {model_name}")
+        # 只在明确启用调试模式时才显示这些信息
+        # self.logger.info(f"NoC模型初始化: {model_name}")
 
     # ========== 抽象方法（拓扑特定实现） ==========
 
@@ -167,34 +169,44 @@ class BaseNoCModel(ABC):
         """注册所有FIFO到统计收集器（子类可重写）"""
         # 基类提供默认实现，子类可以重写此方法
         fifos = self._get_all_fifos_for_statistics()
-        self.logger.info(f"注册了 {len(fifos)} 个FIFO到统计收集器")
+        if self.debug_enabled:
+            self.logger.info(f"注册了 {len(fifos)} 个FIFO到统计收集器")
 
     # ========== 通用方法 ==========
 
     def initialize_model(self) -> None:
         """初始化模型"""
         try:
-            self.logger.info("开始初始化NoC模型...")
+            if self.debug_enabled:
+                self.logger.info("开始初始化NoC模型...")
 
             # 创建拓扑实例
-            self.logger.info("创建拓扑实例...")
+            if self.debug_enabled:
+                self.logger.info("创建拓扑实例...")
             self.topology = self._create_topology_instance(self.config)
-            self.logger.info(f"拓扑实例创建成功: {type(self.topology).__name__}")
+            if self.debug_enabled:
+                self.logger.info(f"拓扑实例创建成功: {type(self.topology).__name__}")
 
             # 设置拓扑网络
-            self.logger.info("调用_setup_topology_network...")
+            if self.debug_enabled:
+                self.logger.info("调用_setup_topology_network...")
             self._setup_topology_network()
-            self.logger.info("_setup_topology_network完成")
+            if self.debug_enabled:
+                self.logger.info("_setup_topology_network完成")
 
             # IP接口创建延后到setup_traffic_scheduler中进行
-            self.logger.info("IP接口创建将在setup_traffic_scheduler时根据traffic文件动态进行")
+            if self.debug_enabled:
+                self.logger.info("IP接口创建将在setup_traffic_scheduler时根据traffic文件动态进行")
 
             # 初始化Flit对象池
-            self.logger.info("调用_setup_flit_pools...")
+            if self.debug_enabled:
+                self.logger.info("调用_setup_flit_pools...")
             self._setup_flit_pools()
-            self.logger.info("_setup_flit_pools完成")
+            if self.debug_enabled:
+                self.logger.info("_setup_flit_pools完成")
 
-            self.logger.info(f"NoC模型初始化完成: {len(self.ip_interfaces)}个IP接口")
+            if self.debug_enabled:
+                self.logger.info(f"NoC模型初始化完成: {len(self.ip_interfaces)}个IP接口")
         except Exception as e:
             self.logger.error(f"NoC模型初始化失败: {e}")
             import traceback
@@ -214,7 +226,8 @@ class BaseNoCModel(ABC):
         """基于traffic文件分析，只创建需要的IP接口"""
         from src.noc.utils.traffic_scheduler import TrafficFileReader
 
-        self.logger.info(f"开始优化IP接口创建，分析traffic文件: {self.traffic_file_path}")
+        if self.debug_enabled:
+            self.logger.info(f"开始优化IP接口创建，分析traffic文件: {self.traffic_file_path}")
 
         try:
             # 分析traffic文件获取需要的IP接口
@@ -229,14 +242,16 @@ class BaseNoCModel(ABC):
             ip_info = traffic_reader.get_required_ip_interfaces()
             required_ips = ip_info["required_ips"]
 
-            self.logger.info(f"Traffic文件分析完成: 需要 {len(required_ips)} 个IP接口，涉及 {len(ip_info['used_nodes'])} 个节点")
-            self.logger.info(f"Required IPs: {required_ips}")
+            if self.debug_enabled:
+                self.logger.info(f"Traffic文件分析完成: 需要 {len(required_ips)} 个IP接口，涉及 {len(ip_info['used_nodes'])} 个节点")
+                self.logger.info(f"Required IPs: {required_ips}")
 
             # 调用子类实现的创建方法
             self._create_specific_ip_interfaces(required_ips)
 
         except Exception as e:
-            self.logger.warning(f"Traffic文件分析失败: {e}，回退到全量创建模式")
+            if self.debug_enabled:
+                self.logger.warning(f"Traffic文件分析失败: {e}，回退到全量创建模式")
             import traceback
 
             traceback.print_exc()
@@ -245,12 +260,14 @@ class BaseNoCModel(ABC):
     def _setup_all_ip_interfaces(self) -> None:
         """创建所有IP接口（传统模式）- 由子类实现"""
         # 默认实现为空，由子类重写
-        self.logger.debug("使用默认的IP接口创建（需要子类实现）")
+        if self.debug_enabled:
+            self.logger.debug("使用默认的IP接口创建（需要子类实现）")
 
     def _create_specific_ip_interfaces(self, required_ips: List[Tuple[int, str]]) -> None:
         """创建特定的IP接口 - 由子类实现"""
         # 默认实现为空，由子类重写
-        self.logger.debug("创建特定IP接口（需要子类实现）")
+        if self.debug_enabled:
+            self.logger.debug("创建特定IP接口（需要子类实现）")
 
     def _setup_flit_pools(self) -> None:
         """设置Flit对象池"""
@@ -266,16 +283,19 @@ class BaseNoCModel(ABC):
         """
         # 验证IP接口的属性
         if not hasattr(ip_interface, "ip_type") or not ip_interface.ip_type:
-            self.logger.warning(f"IP接口缺少ip_type属性: {ip_interface}")
+            if self.debug_enabled:
+                self.logger.warning(f"IP接口缺少ip_type属性: {ip_interface}")
             return
 
         if not hasattr(ip_interface, "node_id") or ip_interface.node_id is None:
-            self.logger.warning(f"IP接口缺少node_id属性: {ip_interface}")
+            if self.debug_enabled:
+                self.logger.warning(f"IP接口缺少node_id属性: {ip_interface}")
             return
 
         key = f"{ip_interface.ip_type}_{ip_interface.node_id}"
         self._ip_registry[key] = ip_interface
-        self.logger.debug(f"注册IP接口: {key}")
+        if self.debug_enabled:
+            self.logger.debug(f"注册IP接口: {key}")
 
     def step(self) -> None:
         """执行一个仿真周期（使用两阶段执行模型）"""
@@ -1025,6 +1045,9 @@ class BaseNoCModel(ABC):
             trace_packets: 要追踪的特定包ID列表
             sleep_time: 每步的睡眠时间(秒)
         """
+        # 设置logger级别为INFO，这样调试信息才能显示
+        self.logger.setLevel(logging.INFO)
+        
         self.debug_enabled = True
         self.debug_config["sleep_time"] = sleep_time
 
@@ -1038,6 +1061,8 @@ class BaseNoCModel(ABC):
         if hasattr(self.request_tracker, "enable_debug"):
             self.request_tracker.enable_debug(level, trace_packets)
 
+        # 显示模型初始化信息（之前被注释的）
+        self.logger.info(f"NoC模型初始化: {self.model_name}")
         self.logger.info(f"调试模式已启用，级别: {level}")
         if trace_packets:
             self.logger.info(f"追踪包: {trace_packets}")

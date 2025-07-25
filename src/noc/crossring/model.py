@@ -1031,12 +1031,21 @@ class CrossRingModel(BaseNoCModel):
         
         numeric_level = level_mapping.get(logging_level, logging.INFO)
         
-        # 配置logging
+        # 配置全局logging
         logging.basicConfig(
             level=numeric_level,
             format="%(name)s - %(levelname)s - %(message)s",
             force=True  # 覆盖已有的配置
         )
+        
+        # 配置所有相关logger的级别
+        self._configure_all_loggers(numeric_level)
+        
+        # 在启用debug时显示模块加载信息
+        if logging_level <= 1:
+            noc_logger = logging.getLogger("src.noc")
+            noc_logger.info(f"NoC抽象层已加载 - 版本 1.2.0")
+            noc_logger.info(f"支持的拓扑类型: ['crossring']")
         
         # 输出设置信息
         logging_desc = {
@@ -1058,6 +1067,40 @@ class CrossRingModel(BaseNoCModel):
         
         # 调用base类的enable_debug，传递level=1作为兼容参数
         super().setup_debug(1, trace_packets, sleep_time)
+    
+    def _configure_all_loggers(self, level):
+        """配置所有相关logger的级别"""
+        # 获取所有需要配置的logger名称
+        logger_names = [
+            "src.noc",
+            "CrossRingModel", 
+            "BaseNoCModel",
+            self.logger.name,  # 模型自己的logger
+        ]
+        
+        # 还需要配置所有IP接口的logger
+        for ip_interface in self.ip_interfaces.values():
+            if hasattr(ip_interface, 'logger'):
+                logger_names.append(ip_interface.logger.name)
+        
+        # 配置节点和链路的logger
+        if hasattr(self, 'nodes'):
+            for node in self.nodes.values():
+                if hasattr(node, 'logger'):
+                    logger_names.append(node.logger.name)
+        
+        # 设置所有logger的级别
+        for logger_name in set(logger_names):  # 去重
+            logger = logging.getLogger(logger_name)
+            logger.setLevel(level)
+            
+            # 确保logger有处理器
+            if not logger.handlers:
+                console_handler = logging.StreamHandler()
+                console_handler.setLevel(level)
+                formatter = logging.Formatter("%(name)s - %(levelname)s - %(message)s")
+                console_handler.setFormatter(formatter)
+                logger.addHandler(console_handler)
 
     def setup_result_analysis(self, flow_distribution: bool = False, bandwidth_analysis: bool = False, save_figures: bool = True, save_dir: str = "") -> None:
         """

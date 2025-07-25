@@ -170,18 +170,23 @@ class CrossRingIPInterface(BaseIPInterface):
                 if hasattr(existing_req, "packet_id") and hasattr(flit, "packet_id") and existing_req.packet_id == flit.packet_id:
                     return True  # 已经预占过资源，直接返回成功
 
-            # 检查读资源：tracker + rdb + reserve
-            rdb_available = self.rn_rdb_count >= flit.burst_length
+            # 检查读资源：tracker + rdb（包含预留空间）
+            rdb_available = self.rn_rdb_count >= flit.burst_length + self.rn_rdb_reserve
             tracker_available = self.rn_tracker_count["read"] > 0
-            reserve_ok = self.rn_rdb_count > self.rn_rdb_reserve * flit.burst_length
 
-            if not (rdb_available and tracker_available and reserve_ok):
+            if not (rdb_available and tracker_available):
                 return False
 
             # 预占资源
             self.rn_rdb_count -= flit.burst_length
             self.rn_tracker_count["read"] -= 1
-            self.rn_rdb[flit.packet_id] = []
+            
+            # ✅ 修复：检查RDB条目是否已存在（retry场景下可能已有数据）
+            if flit.packet_id not in self.rn_rdb:
+                self.rn_rdb[flit.packet_id] = []
+            else:
+                self.logger.debug(f"📝 读请求{flit.packet_id}重新注入，RDB条目已存在（包含{len(self.rn_rdb[flit.packet_id])}个数据flit）")
+            
             self.rn_tracker["read"].append(flit)
             self.rn_tracker_pointer["read"] += 1
 
@@ -201,7 +206,7 @@ class CrossRingIPInterface(BaseIPInterface):
             # 预占资源
             self.rn_wdb_count -= flit.burst_length
             self.rn_tracker_count["write"] -= 1
-            self.rn_wdb[flit.packet_id] = []
+            self.rn_wdb[flit.packet_id] = []  # 只创建空的WDB条目
             self.rn_tracker["write"].append(flit)
             self.rn_tracker_pointer["write"] += 1
 
@@ -256,6 +261,7 @@ class CrossRingIPInterface(BaseIPInterface):
                                 self.model.request_tracker.add_data_flit(flit.packet_id, flit)
 
                         # ✅ 写数据完成检查：如果是写请求的最后一个数据flit，释放RN tracker
+                        # 注意：现在改为在datasend响应处理后，数据实际发送完成时才释放
                         if (channel == "data" and hasattr(flit, "req_type") and flit.req_type == "write" 
                             and hasattr(flit, "is_last_flit") and flit.is_last_flit):
                             self._release_write_tracker_on_completion(flit)
@@ -472,9 +478,9 @@ class CrossRingIPInterface(BaseIPInterface):
 
         if flit.req_type == "read":
             # 读数据到达RN端
-            # 确保RDB条目存在（防止KeyError）
+            # 确保RDB条目存在（retry场景下数据可能在请求重新注入前到达）
             if flit.packet_id not in self.rn_rdb:
-                self.logger.warning(f"⚠️ 收到数据时RDB中没有packet_id {flit.packet_id}，正在创建条目")
+                self.logger.debug(f"📥 数据先于请求到达，为packet_id {flit.packet_id}创建RDB条目（可能是retry场景）")
                 self.rn_rdb[flit.packet_id] = []
 
             self.rn_rdb[flit.packet_id].append(flit)
@@ -565,46 +571,45 @@ class CrossRingIPInterface(BaseIPInterface):
     def _handle_read_response(self, rsp: CrossRingFlit, req: CrossRingFlit) -> None:
         """处理读响应（negative和positive响应）"""
         if rsp.rsp_type == "negative":
-            # 读重试逻辑：标记为等待状态
+            # ✅ 新逻辑：如果请求已经发出去了，就不需要再处理
             if req.req_attr == "old":
-                return  # 已经在重试中
+                self.logger.debug(f"读请求{req.packet_id}已经发出，忽略negative响应")
+                return  # 请求已经在retry中，不需要再处理
 
-            # ✅ 修复：设置正确的状态转换 (valid -> invalid)
-            req.reset_for_retry()
+            # 标记为retry状态但不立即重发（等待positive响应）
+            req.req_attr = "old" 
             req.req_state = "invalid"  # 等待positive响应
-            req.req_attr = "old"
             
-            # 恢复资源占用
-            self.rn_rdb_count += req.burst_length
-            if req.packet_id in self.rn_rdb:
-                del self.rn_rdb[req.packet_id]
-            self.rn_rdb_reserve += 1
+            # 为retry预留RDB空间
+            self.rn_rdb_reserve += req.burst_length
 
-            self.logger.info(f"🔄 读请求{req.packet_id}收到negative响应，等待positive响应重新注入")
-            self.rn_rdb_reserve -= 1
+            self.logger.info(f"🔄 读请求{req.packet_id}收到negative响应，标记为retry状态，等待positive响应")
 
         elif rsp.rsp_type == "positive":
-            # ✅ 关键修复：positive响应表示SN端资源已分配，执行retry请求重新注入
+            # ✅ 新逻辑：如果请求不是retry状态，将请求标为retry并重新发送
             if req.req_attr != "old":
-                self.logger.warning(f"⚠️ 收到positive响应但读请求{req.packet_id}不是retry状态")
-                return
+                self.logger.info(f"读请求{req.packet_id}收到positive响应但不是retry状态，转为retry请求")
+                req.req_attr = "old"
+                req.req_state = "valid"
             
-            self.logger.info(f"🔄 RN端收到positive响应，retry读请求{req.packet_id}重新注入（队首优先级）")
-            
-            # ✅ 修复：设置正确的状态转换 (invalid -> valid)
-            req.req_state = "valid"
+            # 重置请求状态并重新发送
+            req.reset_for_retry()
             req.is_injected = False
             req.path_index = 0
             req.is_new_on_network = True
             req.is_arrive = False
             
-            # ✅ 关键修复：清除重复处理标记，允许retry请求重新处理
+            # 清除重复处理标记
             if hasattr(req, "_request_processed"):
                 delattr(req, "_request_processed")
             
-            # ✅ 关键修复：将retry请求插入到pending队列队首，通过正常流程处理
+            # 释放为retry预留的RDB空间
+            if self.rn_rdb_reserve >= req.burst_length:
+                self.rn_rdb_reserve -= req.burst_length
+            
+            # 重新注入到队首
             self.pending_by_channel["req"].appendleft(req)
-            self.logger.info(f"✅ retry读请求{req.packet_id}已插入到pending队列队首，通过正常流程重新处理")
+            self.logger.info(f"✅ retry读请求{req.packet_id}重新注入到队首")
 
         else:
             # 其他类型的响应不应该出现在读请求中
@@ -613,82 +618,77 @@ class CrossRingIPInterface(BaseIPInterface):
     def _handle_write_response(self, rsp: CrossRingFlit, req: CrossRingFlit) -> None:
         """处理写响应"""
         if rsp.rsp_type == "negative":
-            # 写重试逻辑：标记为等待状态
+            # ✅ 新逻辑：如果请求已经发出去了，就不需要再处理
             if req.req_attr == "old":
-                return  # 已经在重试中
+                self.logger.debug(f"写请求{req.packet_id}已经发出，忽略negative响应")
+                return  # 请求已经在retry中，不需要再处理
             
-            # ✅ 修复：设置正确的状态转换 (valid -> invalid)
-            req.reset_for_retry()
-            req.req_state = "invalid"  # 等待positive响应
+            # 标记为retry状态但不立即重发（等待positive响应）
             req.req_attr = "old"
+            req.req_state = "invalid"  # 等待positive响应
             
-            self.logger.info(f"🔄 写请求{req.packet_id}收到negative响应，等待positive响应重新注入")
+            self.logger.info(f"🔄 写请求{req.packet_id}收到negative响应，标记为retry状态，等待positive响应")
 
         elif rsp.rsp_type == "positive":
-            # ✅ 关键修复：positive响应表示SN端资源已分配，执行retry请求重新注入
+            # ✅ 新逻辑：如果请求不是retry状态，将请求标为retry并重新发送
             if req.req_attr != "old":
-                self.logger.warning(f"⚠️ 收到positive响应但请求{req.packet_id}不是retry状态")
-                return
+                self.logger.info(f"写请求{req.packet_id}收到positive响应但不是retry状态，转为retry请求")
+                req.req_attr = "old"
+                req.req_state = "valid"
             
-            self.logger.info(f"🔄 RN端收到positive响应，retry请求{req.packet_id}重新注入（队首优先级）")
-            
-            # 重置请求状态以便重新处理
-            req.req_state = "valid"
+            # 重置请求状态并重新发送
+            req.reset_for_retry()
             req.is_injected = False
             req.path_index = 0
             req.is_new_on_network = True
             req.is_arrive = False
             
-            # ✅ 关键修复：清除重复处理标记，允许retry请求重新处理
+            # 清除重复处理标记
             if hasattr(req, "_request_processed"):
                 delattr(req, "_request_processed")
             
-            # ✅ 关键修复：将retry请求插入到pending队列队首，通过正常流程处理
+            # 重新注入到队首
             self.pending_by_channel["req"].appendleft(req)
-            self.logger.info(f"✅ retry写请求{req.packet_id}已插入到pending队列队首，通过正常流程重新处理")
+            self.logger.info(f"✅ retry写请求{req.packet_id}重新注入到队首")
 
         elif rsp.rsp_type == "datasend":
-            # ✅ 修复：收到datasend响应后才创建并发送写数据
+            # ✅ 正确逻辑：收到datasend响应时才创建写数据（正确计算写延迟）
             self.logger.debug(f"处理datasend响应: packet_id={rsp.packet_id}")
             
-            # 注意：重复处理检查已在_handle_received_response方法开头统一处理
-
-            # 确保WDB条目存在
-            if rsp.packet_id not in self.rn_wdb:
-                self.logger.error(f"⚠️ 没有{rsp.packet_id}对应的请求")
-
-            # 检查请求对象是否有效
-            if req is None:
-                self.logger.error(f"❌ datasend响应{rsp.packet_id}找不到对应的请求对象")
-                self.logger.error(f"当前RN tracker中的写请求: {[r.packet_id for r in self.rn_tracker['write']]}")
-                self.logger.error(f"当前WDB中的条目: {list(self.rn_wdb.keys())}")
-                return
-
-            # 获取已存在的写数据flits（它们应该在发送写请求时已经创建）
+            # 检查是否已经有数据（可能是重复的datasend响应）
             data_flits = self.rn_wdb.get(rsp.packet_id, [])
-
-            # 如果WDB中没有数据flit，则创建它们
-            if not data_flits:
-                self.logger.debug(f"WDB中没有数据flit，创建新的: packet_id={rsp.packet_id}")
-                self._create_write_data_flits(req)
+            if data_flits:
+                self.logger.debug(f"数据已存在，直接发送 {len(data_flits)} 个DATA flit for packet {rsp.packet_id}")
+            else:
+                # 数据不存在，现在创建（这样可以正确计算从datasend响应开始的写延迟）
+                if rsp.packet_id not in self.rn_wdb:
+                    # WDB条目不存在，可能是重复响应或时序问题
+                    if req:
+                        self.logger.debug(f"重新创建WDB条目并生成写数据: packet_id={rsp.packet_id}")
+                        self.rn_wdb[rsp.packet_id] = []
+                        self._create_write_data_flits(req)
+                    else:
+                        self.logger.debug(f"datasend响应{rsp.packet_id}既无WDB也无请求，忽略重复响应")
+                        return
+                else:
+                    # WDB条目存在但是空的，正常情况，创建数据
+                    if req:
+                        self.logger.debug(f"为datasend响应{rsp.packet_id}创建写数据")
+                        self._create_write_data_flits(req)
+                    else:
+                        self.logger.warning(f"WDB条目存在但无法找到请求对象来创建数据: packet_id={rsp.packet_id}")
+                        return
+                
                 data_flits = self.rn_wdb.get(rsp.packet_id, [])
-
-            self.logger.info(f"🔶 准备发送 {len(data_flits)} 个DATA flit for packet {rsp.packet_id}")
-
-            for flit in data_flits:
-                # 检查是否已经在pending队列中，避免重复添加
-                if flit not in self.pending_by_channel["data"]:
-                    self.pending_by_channel["data"].append(flit)
-                    # 注意：不在这里添加到RequestTracker，避免重复
-                    # RequestTracker会在flit实际发送时统一管理
-
-            # 标记写数据已经开始发送（用于后续tracker释放）
-            self.logger.debug(f"写请求{rsp.packet_id}的数据flit已加入发送队列，共{len(data_flits)}个")
-
-            # 注意：对于写请求，此时不释放RN write tracker
-            # tracker只有在所有数据flit发送完成后才释放
-            # 这里只是发送数据到pending队列，还没有真正完成传输
-            self.logger.debug(f"保留写请求{rsp.packet_id}的tracker，等待数据传输完成")
+            
+            # 发送数据
+            if data_flits:
+                self.logger.info(f"🔶 发送 {len(data_flits)} 个DATA flit for packet {rsp.packet_id}")
+                for flit in data_flits:
+                    if flit not in self.pending_by_channel["data"]:
+                        self.pending_by_channel["data"].append(flit)
+            else:
+                self.logger.warning(f"无法为datasend响应{rsp.packet_id}创建或找到写数据")
 
     def _create_write_data_flits(self, req: CrossRingFlit) -> None:
         """创建写数据flits"""
