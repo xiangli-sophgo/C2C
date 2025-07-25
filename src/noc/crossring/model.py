@@ -282,34 +282,38 @@ class CrossRingModel(BaseNoCModel):
                 self.logger.warning(f"无效的IP类型: {ip_type} for node {node_id}")
                 continue
 
-            key = ip_type
-
-            # 检查是否已经存在
-            if key in self.ip_interfaces:
-                self.logger.debug(f"IP接口 {key} 已存在，跳过创建")
+            # 使用多维字典结构 [node_id][ip_type]
+            if node_id not in self.ip_interfaces:
+                self.ip_interfaces[node_id] = {}
+            
+            # 检查该节点是否已有此类型IP
+            if ip_type in self.ip_interfaces[node_id]:
+                self.logger.debug(f"节点{node_id}的IP接口 {ip_type} 已存在，跳过创建")
                 continue
 
             try:
                 ip_interface = CrossRingIPInterface(config=self.config, ip_type=ip_type, node_id=node_id, model=self)
-                self.ip_interfaces[key] = ip_interface
-                self._ip_registry[key] = ip_interface
+                self.ip_interfaces[node_id][ip_type] = ip_interface
+                self._ip_registry[f"{ip_type}_{node_id}"] = ip_interface  # 注册时使用组合键以保证唯一性
 
                 # 连接IP到对应的节点
                 if node_id in self.nodes:
-                    self.nodes[node_id].connect_ip(key)
-                    self.logger.info(f"连接优化IP接口 {key} 到节点 {node_id}")
+                    self.nodes[node_id].connect_ip(ip_type)
+                    self.logger.info(f"连接优化IP接口 {ip_type} 到节点 {node_id}")
                 else:
-                    self.logger.warning(f"节点 {node_id} 不存在，无法连接IP接口 {key}")
+                    self.logger.warning(f"节点 {node_id} 不存在，无法连接IP接口 {ip_type}")
 
-                self.logger.info(f"创建优化IP接口: {key} at node {node_id} (ip_type={ip_type})")
+                self.logger.info(f"创建优化IP接口: {ip_type} at node {node_id} (ip_type={ip_type})")
             except Exception as e:
-                self.logger.error(f"创建IP接口失败: {key} - {e}")
+                self.logger.error(f"创建IP接口失败: {ip_type} - {e}")
                 continue
 
         # 打印所有创建的IP接口
-        self.logger.info(f"总共创建了 {len(self.ip_interfaces)} 个IP接口")
-        for key, ip_interface in self.ip_interfaces.items():
-            self.logger.info(f"  {key}: node_id={ip_interface.node_id}, ip_type={ip_interface.ip_type}")
+        total_ips = sum(len(node_ips) for node_ips in self.ip_interfaces.values())
+        self.logger.info(f"总共创建了 {total_ips} 个IP接口")
+        for node_id, node_ips in self.ip_interfaces.items():
+            for ip_type, ip_interface in node_ips.items():
+                self.logger.info(f"  节点{node_id}.{ip_type}: ip_type={ip_interface.ip_type}")
 
     def setup_traffic_scheduler(self, traffic_chains: List[List[str]], traffic_file_path: str = None) -> None:
         """
@@ -881,11 +885,13 @@ class CrossRingModel(BaseNoCModel):
                 injected = self._inject_traffic_requests(ready_requests)
 
         # 步骤1：IP接口处理（请求生成和处理）
-        for ip_interface in self.ip_interfaces.values():
-            ip_interface.step_compute_phase(self.cycle)
+        for node_interfaces in self.ip_interfaces.values():
+            for ip_interface in node_interfaces.values():
+                ip_interface.step_compute_phase(self.cycle)
 
-        for ip_interface in self.ip_interfaces.values():
-            ip_interface.step_update_phase(self.cycle)
+        for node_interfaces in self.ip_interfaces.values():
+            for ip_interface in node_interfaces.values():
+                ip_interface.step_update_phase(self.cycle)
 
         # 步骤2：Node层处理（节点内注入和仲裁）
         self._step_node_compute_phase()
@@ -1000,12 +1006,60 @@ class CrossRingModel(BaseNoCModel):
             }
         return status
 
-    def setup_debug(self, level: int = 1, trace_packets: List[str] = None, sleep_time: float = 0.0) -> None:
-        """启用调试模式（CrossRing扩展版本）"""
-        # 调用base类的enable_debug
-        super().setup_debug(level, trace_packets, sleep_time)
+    def setup_debug(self, logging_level: int = 2, trace_packets: List[str] = None, sleep_time: float = 0.0) -> None:
+        """
+        启用调试模式（CrossRing扩展版本）
+        
+        Args:
+            logging_level: 日志级别，数字越大显示越重要的信息
+                4: CRITICAL - 只显示严重错误
+                3: ERROR - 只显示错误  
+                2: WARNING - 显示警告和错误
+                1: INFO - 显示基本信息、警告和错误
+                0: DEBUG - 显示所有调试信息
+            trace_packets: 要跟踪的请求ID列表，设置后启用请求跟踪功能
+            sleep_time: 每个周期的暂停时间（用于实时观察）
+        """
+        # 将简单级别映射到Python logging级别
+        level_mapping = {
+            4: logging.CRITICAL,  # 50
+            3: logging.ERROR,     # 40  
+            2: logging.WARNING,   # 30
+            1: logging.INFO,      # 20
+            0: logging.DEBUG      # 10
+        }
+        
+        numeric_level = level_mapping.get(logging_level, logging.INFO)
+        
+        # 配置logging
+        logging.basicConfig(
+            level=numeric_level,
+            format="%(name)s - %(levelname)s - %(message)s",
+            force=True  # 覆盖已有的配置
+        )
+        
+        # 输出设置信息
+        logging_desc = {
+            4: "CRITICAL - 只显示严重错误",
+            3: "ERROR - 只显示错误",
+            2: "WARNING - 显示警告和错误", 
+            1: "INFO - 显示基本信息、警告和错误",
+            0: "DEBUG - 显示所有调试信息"
+        }
+        
+        # 只在INFO级别以下才输出设置信息
+        if logging_level <= 1:
+            self.logger.info(f"调试模式已启用，日志级别: {logging_level} ({logging_desc.get(logging_level, '未知级别')})")
+            
+            if trace_packets:
+                self.logger.info(f"🎯 请求跟踪已启用，追踪包: {trace_packets}")
+            if sleep_time > 0:
+                self.logger.info(f"每周期暂停: {sleep_time}秒")
+        
+        # 调用base类的enable_debug，传递level=1作为兼容参数
+        super().setup_debug(1, trace_packets, sleep_time)
 
-    def setup_result_analysis(self, flow_distribution: bool = False, bandwidth_analysis: bool = False, save_figures: bool = True, save_dir: str = "output") -> None:
+    def setup_result_analysis(self, flow_distribution: bool = False, bandwidth_analysis: bool = False, save_figures: bool = True, save_dir: str = "") -> None:
         """
         配置结果分析
 
@@ -1013,11 +1067,21 @@ class CrossRingModel(BaseNoCModel):
             flow_distribution: 是否生成流量分布图
             bandwidth_analysis: 是否生成带宽分析图
             save_figures: 是否保存图片文件到磁盘
-            save_dir: 保存目录
+            save_dir: 保存目录，如果为None或空字符串则不保存任何文件
         """
-        save_dir = f"{save_dir}{self.traffic_scheduler.get_save_filename()}"
-        self._viz_config.update({"flow_distribution": flow_distribution, "bandwidth_analysis": bandwidth_analysis, "save_figures": save_figures, "save_dir": save_dir})
-        self.logger.info(f"可视化配置已更新: 流量分布={flow_distribution}, 带宽分析={bandwidth_analysis}, 保存图片={save_figures}, 保存目录={save_dir}")
+        # 如果save_dir为None或空字符串，禁用所有保存功能
+        if not save_dir:
+            save_dir = ""
+            self.logger.info("save_dir为空，禁用所有文件保存（包括结果文件和图片）")
+        else:
+            save_dir = f"{save_dir}{self.traffic_scheduler.get_save_filename()}"
+            self.logger.info(f"save_dir不为空，将保存结果文件到: {save_dir}")
+            
+        # 图片保存需要同时满足save_dir不为空且save_figures为True
+        actual_save_figures = bool(save_dir) and save_figures
+
+        self._viz_config.update({"flow_distribution": flow_distribution, "bandwidth_analysis": bandwidth_analysis, "save_figures": actual_save_figures, "save_dir": save_dir})
+        self.logger.info(f"可视化配置已更新: 流量分布={flow_distribution}, 带宽分析={bandwidth_analysis}, 保存图片={actual_save_figures}, 保存目录={save_dir}")
 
     def print_debug_status(self) -> None:
         """打印调试状态"""
@@ -1053,21 +1117,22 @@ class CrossRingModel(BaseNoCModel):
             找到的IP接口，未找到返回None
         """
         if ip_type:
-            # 精确匹配指定IP类型
-            target_key = ip_type
-            if target_key in self._ip_registry:
-                return self._ip_registry[target_key]
+            # 使用多维字典结构查找
+            if node_id in self.ip_interfaces and ip_type in self.ip_interfaces[node_id]:
+                return self.ip_interfaces[node_id][ip_type]
 
-            # 精确匹配失败，报错而不是模糊匹配
-            self.logger.error(f"未找到指定IP接口: {target_key}")
+            # 精确匹配失败，报错
+            self.logger.error(f"未找到指定IP接口: 节点{node_id}的{ip_type}")
             return None
         else:
             # 获取该节点所有IP接口
-            matching_ips = [ip for key, ip in self._ip_registry.items() if ip.node_id == node_id]
-            if not matching_ips:
-                self.logger.error(f"节点{node_id}没有任何IP接口")
-
-        return matching_ips[0] if matching_ips else None
+            if node_id in self.ip_interfaces:
+                node_interfaces = list(self.ip_interfaces[node_id].values())
+                if node_interfaces:
+                    return node_interfaces[0]
+            
+            self.logger.error(f"节点{node_id}没有任何IP接口")
+            return None
 
     def _find_ip_interface_for_request(self, node_id: NodeId, req_type: str, ip_type: str = None) -> Optional[CrossRingIPInterface]:
         """为请求查找合适的IP接口（优先DMA类）"""
@@ -1194,13 +1259,17 @@ class CrossRingModel(BaseNoCModel):
                 # 启用可视化，ResultAnalyzer会根据save_figures参数决定保存或显示
                 enable_visualization = True
 
-        # 创建基于时间戳的分析结果目录
-        timestamp = int(time.time())
-        timestamped_dir = os.path.join(save_dir, f"analysis_{timestamp}")
-        
-        # 收集链路带宽统计数据并导出CSV
-        self._collect_and_export_link_statistics(timestamped_dir, timestamp)
-        
+        # 只要save_dir不为空就保存结果文件
+        if save_dir:
+            # 创建基于时间戳的分析结果目录
+            timestamp = int(time.time())
+            timestamped_dir = os.path.join(save_dir, f"analysis_{timestamp}")
+
+            # 收集链路带宽统计数据并导出CSV
+            self._collect_and_export_link_statistics(timestamped_dir, timestamp)
+        else:
+            timestamped_dir = ""
+
         analyzer = ResultAnalyzer()
         analysis_results = analyzer.analyze_noc_results(self.request_tracker, self.config, self, results, enable_visualization, save_results, timestamped_dir, save_figures, verbose)
 
@@ -1267,36 +1336,30 @@ class CrossRingModel(BaseNoCModel):
         """显示流量分布图表，包含节点IP带宽和链路带宽"""
         try:
             from src.noc.analysis.result_analyzer import ResultAnalyzer
-            
+
             # 重新生成请求度量数据（因为分析结果中没有直接存储）
             analyzer = ResultAnalyzer()
             metrics = analyzer.convert_tracker_to_request_info(self.request_tracker, self.config)
-            
+
             if not metrics:
                 self.logger.warning("无法生成请求度量数据，无法绘制流量分布图")
                 self._show_simple_latency_chart(analysis_results)
                 return
-            
+
             # 使用ResultAnalyzer绘制真正的流量分布图（包含链路带宽）
             # 显示模式，不保存到文件
-            chart_path = analyzer.plot_traffic_distribution(
-                model=self,
-                metrics=metrics,
-                save_dir="",  # 不保存
-                mode="total",
-                save_figures=False,  # 不保存，直接显示
-                verbose=True
-            )
-            
+            chart_path = analyzer.plot_traffic_distribution(model=self, metrics=metrics, save_dir="", mode="total", save_figures=False, verbose=True)  # 不保存  # 不保存，直接显示
+
             self.logger.info("📊 流量分布图表已显示（包含节点IP带宽和链路带宽）")
-            
+
         except Exception as e:
             self.logger.warning(f"显示流量分布图表失败: {e}")
             import traceback
+
             self.logger.debug(f"错误详情: {traceback.format_exc()}")
             # 回退到简单的延迟图表
             self._show_simple_latency_chart(analysis_results)
-    
+
     def _show_simple_latency_chart(self, analysis_results: Dict[str, Any]) -> None:
         """显示简单的延迟分布图表（回退方案）"""
         import matplotlib.pyplot as plt
@@ -1747,115 +1810,121 @@ class CrossRingModel(BaseNoCModel):
         try:
             import csv
             from pathlib import Path
-            
+
             # 确保保存目录存在
             Path(save_dir).mkdir(parents=True, exist_ok=True)
-            
+
             # CSV文件路径（使用传入的时间戳或生成新的）
             if timestamp is None:
                 timestamp = int(time.time())
             csv_file_path = os.path.join(save_dir, f"link_bandwidth_stats_{timestamp}.csv")
-            
+
             # 收集所有链路的统计数据
             all_link_stats = []
-            
+
             # 遍历模型中的所有链路
-            if hasattr(self, 'links') and self.links:
+            if hasattr(self, "links") and self.links:
                 for link in self.links.values():
-                    if hasattr(link, 'get_link_performance_metrics'):
+                    if hasattr(link, "get_link_performance_metrics"):
                         # 获取链路性能指标
                         metrics = link.get_link_performance_metrics()
-                        
+
                         # 只为data通道创建数据行（不需要req和rsp通道的统计）
                         for channel, channel_metrics in metrics.items():
-                            if channel == 'data':  # 只保存data通道的统计
+                            if channel == "data":  # 只保存data通道的统计
                                 row_data = {
-                                    'link_id': link.link_id,
-                                    'source_node': link.source_node,
-                                    'dest_node': link.dest_node,
-                                    'direction': link.direction.value if hasattr(link, 'direction') else 'unknown',
-                                    'channel': channel,
-                                    'total_cycles': link.bandwidth_tracker.total_cycles,
-                                    'bandwidth_gbps': channel_metrics['bandwidth_gbps'],
-                                    'utilization': channel_metrics['utilization'],
-                                    'idle_rate': channel_metrics['idle_rate'],
-                                    'valid_slots': channel_metrics['valid_slots'],
-                                    'empty_slots': channel_metrics['empty_slots'],
-                                    'T0_slots': link.bandwidth_tracker.cycle_stats[channel]['T0'],
-                                    'T1_slots': link.bandwidth_tracker.cycle_stats[channel]['T1'],
-                                    'T2_slots': link.bandwidth_tracker.cycle_stats[channel]['T2'],
-                                    'ITag_slots': link.bandwidth_tracker.cycle_stats[channel]['ITag'],
-                                    'total_bytes': channel_metrics['total_bytes']
+                                    "link_id": link.link_id,
+                                    "source_node": link.source_node,
+                                    "dest_node": link.dest_node,
+                                    "direction": link.direction.value if hasattr(link, "direction") else "unknown",
+                                    "channel": channel,
+                                    "total_cycles": link.bandwidth_tracker.total_cycles,
+                                    "bandwidth_gbps": channel_metrics["bandwidth_gbps"],
+                                    "utilization": channel_metrics["utilization"],
+                                    "idle_rate": channel_metrics["idle_rate"],
+                                    "valid_slots": channel_metrics["valid_slots"],
+                                    "empty_slots": channel_metrics["empty_slots"],
+                                    "T0_slots": link.bandwidth_tracker.cycle_stats[channel]["T0"],
+                                    "T1_slots": link.bandwidth_tracker.cycle_stats[channel]["T1"],
+                                    "T2_slots": link.bandwidth_tracker.cycle_stats[channel]["T2"],
+                                    "ITag_slots": link.bandwidth_tracker.cycle_stats[channel]["ITag"],
+                                    "total_bytes": channel_metrics["total_bytes"],
                                 }
                                 all_link_stats.append(row_data)
-            
+
             # 写入CSV文件
             if all_link_stats:
-                fieldnames = ['link_id', 'source_node', 'dest_node', 'direction', 'channel', 
-                             'total_cycles', 'bandwidth_gbps', 'utilization', 'idle_rate',
-                             'valid_slots', 'empty_slots', 'T0_slots', 'T1_slots', 'T2_slots', 
-                             'ITag_slots', 'total_bytes']
-                
-                with open(csv_file_path, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = [
+                    "link_id",
+                    "source_node",
+                    "dest_node",
+                    "direction",
+                    "channel",
+                    "total_cycles",
+                    "bandwidth_gbps",
+                    "utilization",
+                    "idle_rate",
+                    "valid_slots",
+                    "empty_slots",
+                    "T0_slots",
+                    "T1_slots",
+                    "T2_slots",
+                    "ITag_slots",
+                    "total_bytes",
+                ]
+
+                with open(csv_file_path, "w", newline="", encoding="utf-8") as csvfile:
                     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                     writer.writeheader()
                     writer.writerows(all_link_stats)
-                
+
                 self.logger.info(f"📊 链路带宽统计已导出到: {csv_file_path}")
                 self.logger.info(f"   总共导出 {len(all_link_stats)} 条链路统计记录")
                 self.logger.info(f"   统计说明：每个flit固定128字节，使用链路末端slice作为观测点")
-                
+
                 # 打印链路带宽汇总
                 # self._print_link_bandwidth_summary(all_link_stats)
             else:
                 self.logger.warning("没有收集到链路统计数据")
-                
+
         except Exception as e:
             self.logger.error(f"导出链路统计数据失败: {e}")
             import traceback
+
             self.logger.debug(f"错误详情: {traceback.format_exc()}")
 
     def _print_link_bandwidth_summary(self, link_stats: List[Dict[str, Any]]) -> None:
         """打印链路带宽统计汇总"""
         if not link_stats:
             return
-            
+
         print("\n📊 =============== 链路带宽统计汇总 ===============")
-        
+
         # 按链路分组统计
         links_summary = {}
         for stat in link_stats:
             link_key = f"{stat['link_id']} ({stat['source_node']}→{stat['dest_node']})"
             if link_key not in links_summary:
-                links_summary[link_key] = {
-                    'total_bandwidth': 0.0,
-                    'avg_utilization': 0.0,
-                    'avg_idle_rate': 0.0,
-                    'channels': []
-                }
-            
-            links_summary[link_key]['total_bandwidth'] += stat['bandwidth_gbps']
-            links_summary[link_key]['avg_utilization'] += stat['utilization'] 
-            links_summary[link_key]['avg_idle_rate'] += stat['idle_rate']
-            links_summary[link_key]['channels'].append({
-                'channel': stat['channel'],
-                'bandwidth': stat['bandwidth_gbps'],
-                'utilization': stat['utilization']
-            })
-        
+                links_summary[link_key] = {"total_bandwidth": 0.0, "avg_utilization": 0.0, "avg_idle_rate": 0.0, "channels": []}
+
+            links_summary[link_key]["total_bandwidth"] += stat["bandwidth_gbps"]
+            links_summary[link_key]["avg_utilization"] += stat["utilization"]
+            links_summary[link_key]["avg_idle_rate"] += stat["idle_rate"]
+            links_summary[link_key]["channels"].append({"channel": stat["channel"], "bandwidth": stat["bandwidth_gbps"], "utilization": stat["utilization"]})
+
         # 显示汇总结果
         for link_name, summary in links_summary.items():
-            num_channels = len(summary['channels'])
-            avg_util = summary['avg_utilization'] / num_channels if num_channels > 0 else 0
-            avg_idle = summary['avg_idle_rate'] / num_channels if num_channels > 0 else 0
-            
+            num_channels = len(summary["channels"])
+            avg_util = summary["avg_utilization"] / num_channels if num_channels > 0 else 0
+            avg_idle = summary["avg_idle_rate"] / num_channels if num_channels > 0 else 0
+
             print(f"\n🔗 {link_name}:")
             print(f"   总带宽: {summary['total_bandwidth']:.2f} GB/s")
             print(f"   平均利用率: {avg_util:.1%}, 平均空载率: {avg_idle:.1%}")
-            
-            for ch in summary['channels']:
+
+            for ch in summary["channels"]:
                 print(f"   - {ch['channel']}: {ch['bandwidth']:.2f}GB/s ({ch['utilization']:.1%})")
-        
+
         print("=" * 55)
 
     # ========== 实现BaseNoCModel抽象方法 ==========

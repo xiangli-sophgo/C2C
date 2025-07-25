@@ -634,11 +634,25 @@ class BaseNoCModel(ABC):
             active_requests = len(self.request_tracker.active_requests)
             completed_requests = len(self.request_tracker.completed_requests)
             injected_requests = active_requests + completed_requests
+            
+            # 统计响应flit数量
+            for req_info in self.request_tracker.active_requests.values():
+                response_count += len(req_info.response_flits)
+            for req_info in self.request_tracker.completed_requests.values():
+                response_count += len(req_info.response_flits)
 
-        # 获取traffic统计信息
-        read_finish_count = completed_requests  # 暂时用完成请求数代替
+        # 获取traffic统计信息 - 按请求类型分类统计
+        read_finish_count = 0
         write_finish_count = 0
         trans_finish_count = completed_requests
+        
+        if hasattr(self, "request_tracker") and self.request_tracker:
+            for req_info in self.request_tracker.completed_requests.values():
+                if hasattr(req_info, "op_type"):
+                    if req_info.op_type == "read":
+                        read_finish_count += 1
+                    elif req_info.op_type == "write":
+                        write_finish_count += 1
 
         # 计算传输的数据flit数量 - 基于已完成请求的burst_length
         total_data_flits = 0
@@ -723,12 +737,30 @@ class BaseNoCModel(ABC):
         active_requests = 0
         completed_requests = 0
         injected_requests = 0
+        response_count = 0
         received_flits = 0
 
         if hasattr(self, "request_tracker") and self.request_tracker:
             active_requests = len(self.request_tracker.active_requests)
             completed_requests = len(self.request_tracker.completed_requests)
             injected_requests = active_requests + completed_requests
+            
+            # 统计响应flit数量
+            for req_info in self.request_tracker.active_requests.values():
+                response_count += len(req_info.response_flits)
+            for req_info in self.request_tracker.completed_requests.values():
+                response_count += len(req_info.response_flits)
+
+        # 按请求类型分类统计完成数量
+        read_finish_count = 0
+        write_finish_count = 0
+        if hasattr(self, "request_tracker") and self.request_tracker:
+            for req_info in self.request_tracker.completed_requests.values():
+                if hasattr(req_info, "op_type"):
+                    if req_info.op_type == "read":
+                        read_finish_count += 1
+                    elif req_info.op_type == "write":
+                        write_finish_count += 1
 
         # 计算传输的数据flit数量 - 基于已完成请求的burst_length
         total_data_flits = 0
@@ -740,8 +772,8 @@ class BaseNoCModel(ABC):
 
         print(
             f"时间: {int(current_time_ns)}ns, 总请求: {injected_requests}, 活跃请求: {active_requests}, "
-            f"读完成: {completed_requests}, 写完成: 0, 传输完成: {completed_requests}, "
-            f"传输响应: 0, 传输数据: {received_flits}"
+            f"读完成: {read_finish_count}, 写完成: {write_finish_count}, 传输完成: {completed_requests}, "
+            f"传输响应: {response_count}, 传输数据: {received_flits}"
         )
 
     def inject_request(
@@ -777,6 +809,8 @@ class BaseNoCModel(ABC):
 
         # 找到合适的IP接口
         ip_interface = self._find_ip_interface_for_request(source, req_type, ip_type)
+        if ip_interface:
+            self.logger.debug(f"为source={source}, ip_type={ip_type}找到IP: node_id={ip_interface.node_id}, ip_type={getattr(ip_interface, 'ip_type', 'unknown')}")
 
         if not ip_interface:
             if ip_type:
@@ -854,6 +888,9 @@ class BaseNoCModel(ABC):
             matching_ips = [ip for ip in self._ip_registry.values() if ip.node_id == node_id and getattr(ip, "ip_type", "").startswith(ip_type)]
             if not matching_ips:
                 self.logger.error(f"未找到指定IP类型: node_id={node_id}, ip_type={ip_type}")
+                # 调试：显示当前注册的所有IP
+                self.logger.debug(f"当前注册的IP: {[(ip.node_id, getattr(ip, 'ip_type', 'unknown')) for ip in self._ip_registry.values()]}")
+                self.logger.debug(f"_ip_registry的键: {list(self._ip_registry.keys())}")
                 return None
         else:
             # 获取该节点的所有IP接口

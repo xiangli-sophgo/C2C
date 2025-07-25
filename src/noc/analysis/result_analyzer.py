@@ -64,6 +64,16 @@ class RequestInfo:
     cmd_latency: int
     data_latency: int
     transaction_latency: int
+    
+    # 详细的cycle时间戳字段（保持cycle格式）
+    cmd_entry_cake0_cycle: int = -1  # cmd进入Cake0
+    cmd_entry_noc_from_cake0_cycle: int = -1  # cmd从Cake0进入NoC
+    cmd_entry_noc_from_cake1_cycle: int = -1  # cmd从Cake1进入NoC
+    cmd_received_by_cake0_cycle: int = -1  # cmd从NoC进入Cake0
+    cmd_received_by_cake1_cycle: int = -1  # cmd从NoC进入Cake1
+    data_entry_noc_from_cake0_cycle: int = -1  # data从Cake0进入NoC(写)
+    data_entry_noc_from_cake1_cycle: int = -1  # data从Cake1进入NoC(读)
+    data_received_complete_cycle: int = -1  # data接收完成
 
 
 @dataclass
@@ -221,6 +231,16 @@ class ResultAnalyzer:
             burst_length = lifecycle.burst_size
             total_bytes = burst_length * 128  # 128字节/flit
 
+            # 直接保存cycle时间戳（不转换为ns）
+            cmd_entry_cake0_cycle_val = int(cmd_entry_cake0_cycle) if cmd_entry_cake0_cycle < np.inf else -1
+            cmd_entry_noc_from_cake0_cycle_val = int(cmd_entry_noc_from_cake0_cycle) if cmd_entry_noc_from_cake0_cycle < np.inf else -1
+            cmd_entry_noc_from_cake1_cycle_val = int(cmd_entry_noc_from_cake1_cycle) if cmd_entry_noc_from_cake1_cycle < np.inf else -1
+            cmd_received_by_cake0_cycle_val = int(cmd_received_by_cake0_cycle) if cmd_received_by_cake0_cycle < np.inf else -1
+            cmd_received_by_cake1_cycle_val = int(cmd_received_by_cake1_cycle) if cmd_received_by_cake1_cycle < np.inf else -1
+            data_entry_noc_from_cake0_cycle_val = int(data_entry_noc_from_cake0_cycle) if data_entry_noc_from_cake0_cycle < np.inf else -1
+            data_entry_noc_from_cake1_cycle_val = int(data_entry_noc_from_cake1_cycle) if data_entry_noc_from_cake1_cycle < np.inf else -1
+            data_received_complete_cycle_val = int(data_received_complete_cycle) if data_received_complete_cycle < np.inf else -1
+
             request_info = RequestInfo(
                 packet_id=str(req_id),
                 start_time=start_time,
@@ -237,6 +257,15 @@ class ResultAnalyzer:
                 cmd_latency=cmd_latency_ns,
                 data_latency=data_latency_ns,
                 transaction_latency=transaction_latency_ns,
+                # 添加详细的cycle时间戳
+                cmd_entry_cake0_cycle=cmd_entry_cake0_cycle_val,
+                cmd_entry_noc_from_cake0_cycle=cmd_entry_noc_from_cake0_cycle_val,
+                cmd_entry_noc_from_cake1_cycle=cmd_entry_noc_from_cake1_cycle_val,
+                cmd_received_by_cake0_cycle=cmd_received_by_cake0_cycle_val,
+                cmd_received_by_cake1_cycle=cmd_received_by_cake1_cycle_val,
+                data_entry_noc_from_cake0_cycle=data_entry_noc_from_cake0_cycle_val,
+                data_entry_noc_from_cake1_cycle=data_entry_noc_from_cake1_cycle_val,
+                data_received_complete_cycle=data_received_complete_cycle_val,
             )
             requests.append(request_info)
 
@@ -944,13 +973,17 @@ class ResultAnalyzer:
         """
         if not metrics:
             return {}
+            
+        # 如果save_dir为空，跳过保存操作
+        if not save_dir:
+            return {}
 
         try:
             import csv
 
             os.makedirs(save_dir, exist_ok=True)
 
-            # CSV文件头（与老版本完全一致）
+            # CSV文件头（包含所有cycle字段）
             csv_header = [
                 "packet_id",
                 "start_time_ns",
@@ -963,6 +996,15 @@ class ResultAnalyzer:
                 "cmd_latency_ns",
                 "data_latency_ns",
                 "transaction_latency_ns",
+                # 添加详细的cycle时间戳字段
+                "cmd_entry_cake0_cycle",
+                "cmd_entry_noc_from_cake0_cycle",
+                "cmd_entry_noc_from_cake1_cycle",
+                "cmd_received_by_cake0_cycle",
+                "cmd_received_by_cake1_cycle",
+                "data_entry_noc_from_cake0_cycle",
+                "data_entry_noc_from_cake1_cycle",
+                "data_received_complete_cycle",
             ]
 
             # 分离读写请求
@@ -993,6 +1035,15 @@ class ResultAnalyzer:
                             req.cmd_latency,
                             req.data_latency,
                             req.transaction_latency,
+                            # 添加cycle时间戳数据
+                            req.cmd_entry_cake0_cycle,
+                            req.cmd_entry_noc_from_cake0_cycle,
+                            req.cmd_entry_noc_from_cake1_cycle,
+                            req.cmd_received_by_cake0_cycle,
+                            req.cmd_received_by_cake1_cycle,
+                            req.data_entry_noc_from_cake0_cycle,
+                            req.data_entry_noc_from_cake1_cycle,
+                            req.data_received_complete_cycle,
                         ]
                         writer.writerow(row)
 
@@ -1021,6 +1072,15 @@ class ResultAnalyzer:
                             req.cmd_latency,
                             req.data_latency,
                             req.transaction_latency,
+                            # 添加cycle时间戳数据
+                            req.cmd_entry_cake0_cycle,
+                            req.cmd_entry_noc_from_cake0_cycle,
+                            req.cmd_entry_noc_from_cake1_cycle,
+                            req.cmd_received_by_cake0_cycle,
+                            req.cmd_received_by_cake1_cycle,
+                            req.data_entry_noc_from_cake0_cycle,
+                            req.data_entry_noc_from_cake1_cycle,
+                            req.data_received_complete_cycle,
                         ]
                         writer.writerow(row)
 
@@ -1043,6 +1103,10 @@ class ResultAnalyzer:
             保存的CSV文件路径
         """
         if not metrics:
+            return ""
+            
+        # 如果save_dir为空，跳过保存操作
+        if not save_dir:
             return ""
 
         try:
@@ -1109,14 +1173,16 @@ class ResultAnalyzer:
 
                 # 更新所有相关端口的统计
                 for port_id, node_id, coordinate in ports_to_update:
-                    if port_id not in port_stats:
-                        port_stats[port_id] = {"coordinate": coordinate, "node_id": node_id, "read_requests": [], "write_requests": [], "all_requests": []}
+                    # 使用节点ID和端口ID的组合作为唯一标识符，避免不同节点相同IP覆盖
+                    unique_port_key = f"{port_id}_node_{node_id}"
+                    if unique_port_key not in port_stats:
+                        port_stats[unique_port_key] = {"port_id": port_id, "coordinate": coordinate, "node_id": node_id, "read_requests": [], "write_requests": [], "all_requests": []}
 
-                    port_stats[port_id]["all_requests"].append(req)
+                    port_stats[unique_port_key]["all_requests"].append(req)
                     if req.req_type == "read":
-                        port_stats[port_id]["read_requests"].append(req)
+                        port_stats[unique_port_key]["read_requests"].append(req)
                     else:
-                        port_stats[port_id]["write_requests"].append(req)
+                        port_stats[unique_port_key]["write_requests"].append(req)
 
             # 生成CSV文件
             timestamp = int(time.time())
@@ -1126,11 +1192,12 @@ class ResultAnalyzer:
                 writer = csv.writer(csvfile)
                 writer.writerow(csv_header)
 
-                for port_id, stats in port_stats.items():
+                for unique_port_key, stats in port_stats.items():
                     # 计算各种带宽指标
                     read_reqs = stats["read_requests"]
                     write_reqs = stats["write_requests"]
                     all_reqs = stats["all_requests"]
+                    port_id = stats["port_id"]  # 使用原始端口ID
 
                     # 带宽计算 - 使用工作区间计算，与calculate_bandwidth_metrics完全一致
                     def calc_bandwidth_metrics(requests):
@@ -1181,8 +1248,11 @@ class ResultAnalyzer:
                     write_metrics = calc_bandwidth_metrics(write_reqs)
                     mixed_metrics = calc_bandwidth_metrics(all_reqs)
 
+                    # 生成格式化的端口ID：node_X_porttype_Y
+                    formatted_port_id = f"node_{stats['node_id']}_{port_id}"
+                    
                     row_data = [
-                        port_id,
+                        formatted_port_id,
                         stats["coordinate"],
                         read_metrics["unweighted_bw"],
                         read_metrics["weighted_bw"],
@@ -1213,8 +1283,9 @@ class ResultAnalyzer:
 
                 # 计算IP类型汇总统计
                 ip_type_aggregates = {}
-                for port_id, stats in port_stats.items():
+                for unique_port_key, stats in port_stats.items():
                     # 提取IP类型（去掉数字后缀）
+                    port_id = stats["port_id"]
                     ip_type = port_id.split("_")[0]  # "gdma_0" -> "gdma"
 
                     if ip_type not in ip_type_aggregates:
@@ -1462,6 +1533,10 @@ class ResultAnalyzer:
 
     def save_results(self, analysis: Dict[str, Any], save_dir: str = "output") -> str:
         """保存分析结果到JSON文件"""
+        # 如果save_dir为空，跳过保存操作
+        if not save_dir:
+            return ""
+            
         try:
             timestamp = int(time.time())
             results_file = f"{save_dir}/crossring_analysis_{timestamp}.json"
@@ -1518,10 +1593,11 @@ class ResultAnalyzer:
 
             # 分析每个请求的字节数贡献
             for metric in metrics:
-                source_ip_type = metric.source_type.lower()  # gdma/ddr
-                dest_ip_type = metric.dest_type.lower()  # gdma/ddr
+                # 提取IP类型：gdma_0 -> gdma, ddr_0 -> ddr
+                source_ip_type = metric.source_type.split('_')[0].lower() if '_' in metric.source_type else metric.source_type.lower()
+                dest_ip_type = metric.dest_type.split('_')[0].lower() if '_' in metric.dest_type else metric.dest_type.lower()
 
-                # 累计字节数（不是带宽）
+                # 累计字节数（按节点和IP类型聚合）
                 # 源节点：发送字节数
                 node_ip_bytes[metric.source_node][source_ip_type] += metric.total_bytes
                 # 目标节点：接收字节数
@@ -1556,10 +1632,14 @@ class ResultAnalyzer:
             # 按节点和IP类型分组请求，计算各自的工作区间带宽
             for node_id, ip_data in node_ip_bytes.items():
                 for ip_type, total_bytes in ip_data.items():
-                    # 找到该节点该IP类型的所有请求
+                    # 找到该节点该IP类型的所有请求（包括所有实例）
                     node_ip_requests = []
                     for metric in metrics:
-                        if (metric.source_node == node_id and metric.source_type.lower() == ip_type) or (metric.dest_node == node_id and metric.dest_type.lower() == ip_type):
+                        # 提取请求的IP类型
+                        source_type = metric.source_type.split('_')[0].lower() if '_' in metric.source_type else metric.source_type.lower()
+                        dest_type = metric.dest_type.split('_')[0].lower() if '_' in metric.dest_type else metric.dest_type.lower()
+                        
+                        if (metric.source_node == node_id and source_type == ip_type) or (metric.dest_node == node_id and dest_type == ip_type):
                             node_ip_requests.append(metric)
 
                     if node_ip_requests:
@@ -1632,8 +1712,7 @@ class ResultAnalyzer:
                                         print(f"警告：无法解析链路ID {link_id}")
                                     continue
                         
-                        if verbose and total_bandwidth > 0:
-                            print(f"链路 {link_id}: {total_bandwidth:.3f} GB/s")
+
                             
                     except Exception as e:
                         if verbose:
@@ -1872,10 +1951,19 @@ class ResultAnalyzer:
                 # 获取该节点的实际IP带宽（动态支持所有IP类型）
                 node_ip_data = node_ip_bandwidth[node_id]
 
-                # IP类型首字母映射
+                # IP类型首字母映射函数
                 def get_ip_abbreviation(ip_type):
                     """获取IP类型的首字母缩写"""
-                    return ip_type.upper()[0] if ip_type else ""
+                    ip_map = {
+                        'gdma': 'G',
+                        'sdma': 'S', 
+                        'cdma': 'C',
+                        'ddr': 'D',
+                        'l2m': 'L',
+                        'pcie': 'P',
+                        'ethernet': 'E'
+                    }
+                    return ip_map.get(ip_type.lower(), ip_type.upper()[0] if ip_type else "")
 
                 # 定义IP类型的固定显示顺序
                 ip_type_order = ['gdma', 'sdma', 'cdma', 'ddr', 'l2m', 'pcie', 'ethernet']
@@ -1971,16 +2059,7 @@ class ResultAnalyzer:
             ax.set_ylim(min(all_y) - margin, max(all_y) + margin)
             ax.axis("off")
 
-            # 添加图例，移除"带宽统计"项，调整到右上角外侧
-            legend_elements = [
-                mpatches.Patch(color="lightblue", label="节点(含IP信息)"),
-                mpatches.Patch(color="red", label="高带宽链路"),
-                mpatches.Patch(color="gray", label="无流量链路"),
-            ]
-            ax.legend(handles=legend_elements, 
-                     bbox_to_anchor=(1.02, 1), 
-                     loc='upper left',
-                     prop={"family": ["Times New Roman", "Microsoft YaHei", "SimHei"], "size": 10})
+            # 移除图例显示
 
             # 保存或显示图表
             if save_figures:

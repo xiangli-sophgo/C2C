@@ -137,27 +137,30 @@ class CrossRingNode:
         self.eject_queue.step_compute_phase(cycle)
         self.ring_bridge.step_compute_phase(cycle)
 
-        # 2. 计算仲裁决策（不执行）
-        self.inject_queue.compute_arbitration(cycle)
-        self.eject_queue.compute_arbitration(cycle, self.inject_queue.inject_direction_fifos, self.ring_bridge)
-        self.ring_bridge.compute_arbitration(cycle, self.inject_queue.inject_direction_fifos)
+        # 2. CrossPoint计算阶段（先计算弹出决策）
+        eject_fifos = self.eject_queue.eject_input_fifos
+        inject_fifos = self.inject_queue.inject_direction_fifos
+        self.logger.debug(f"Node {self.node_id} 传递给CrossPoint: eject_fifos['data']['TU'] id={id(eject_fifos['data']['TU'])}")
+        self.horizontal_crosspoint.step_compute_phase(cycle, inject_fifos, eject_fifos)
+        self.vertical_crosspoint.step_compute_phase(cycle, inject_fifos, eject_fifos)
 
-        # 3. CrossPoint计算阶段
-        self.horizontal_crosspoint.step_compute_phase(cycle, self.inject_queue.inject_direction_fifos, self.eject_queue.eject_input_fifos)
-        self.vertical_crosspoint.step_compute_phase(cycle, self.inject_queue.inject_direction_fifos, self.eject_queue.eject_input_fifos)
+        # 3. 计算仲裁决策（基于CrossPoint的弹出计划）
+        self.inject_queue.compute_arbitration(cycle)
+        self.ring_bridge.compute_arbitration(cycle, self.inject_queue.inject_direction_fifos)
+        self.eject_queue.compute_arbitration(cycle, self.inject_queue.inject_direction_fifos, self.ring_bridge)
 
     def step_update_phase(self, cycle: int) -> None:
         """
         更新阶段：基于计算阶段的决策执行状态修改。
         """
-        # 1. 执行所有仲裁决策
-        self.inject_queue.execute_arbitration(cycle)
-        self.eject_queue.execute_arbitration(cycle, self.inject_queue.inject_direction_fifos, self.ring_bridge)
-        self.ring_bridge.execute_arbitration(cycle, self.inject_queue.inject_direction_fifos)
-
-        # 2. CrossPoint更新阶段
+        # 1. CrossPoint更新阶段（先写入数据到FIFO）
         self.horizontal_crosspoint.step_update_phase(cycle, self.inject_queue.inject_direction_fifos, self.eject_queue.eject_input_fifos)
         self.vertical_crosspoint.step_update_phase(cycle, self.inject_queue.inject_direction_fifos, self.eject_queue.eject_input_fifos)
+
+        # 2. 执行所有仲裁决策（基于CrossPoint写入的数据）
+        self.inject_queue.execute_arbitration(cycle)
+        self.ring_bridge.execute_arbitration(cycle, self.inject_queue.inject_direction_fifos)
+        self.eject_queue.execute_arbitration(cycle, self.inject_queue.inject_direction_fifos, self.ring_bridge)
 
         # 3. 更新所有FIFO的时序逻辑
         self.inject_queue.step_update_phase()

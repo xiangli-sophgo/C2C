@@ -449,9 +449,9 @@ if __name__ == "__main__":
         GDMA_MAP = {
             "gdma_0": [
                 0,
-                # 2,
-                # 6,
-                # 8,
+                2,
+                6,
+                8,
             ],
             # "gdma_1": list(range(10)),
         }

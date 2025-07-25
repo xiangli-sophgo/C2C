@@ -170,13 +170,19 @@ class EjectQueue:
             # 获取来自当前源的flit (使用peek，不实际读取)
             flit = self._peek_flit_from_eject_source(source, channel, inject_direction_fifos, ring_bridge)
             if flit is not None:
+                self.logger.debug(f"🎯 节点{self.node_id} EQ仲裁: 从{source}源发现{channel}通道flit")
                 # 找到flit，现在确定分配给哪个IP
                 target_ip = self._find_target_ip_for_flit(flit, channel, cycle)
                 if target_ip:
                     # 保存传输计划
                     self._eject_transfer_plan.append((source, channel, flit, target_ip))
                     arb_state["last_served_source"][source] = cycle
+                    self.logger.debug(f"✅ 节点{self.node_id} EQ仲裁: {source}→{target_ip} {channel}通道传输计划已创建")
                     break
+                else:
+                    self.logger.debug(f"❌ 节点{self.node_id} EQ仲裁: 无法为{source}源的{channel}通道flit找到可用IP")
+            else:
+                self.logger.debug(f"🔍 节点{self.node_id} EQ仲裁: {source}源{channel}通道无数据")
 
             # 移动到下一个源
             arb_state["current_source"] = (current_source_idx + 1) % len(sources)
@@ -193,11 +199,6 @@ class EjectQueue:
         if not hasattr(self, "_eject_transfer_plan"):
             return
 
-        # 临时修复：重置ring_bridge FIFO的读取状态，确保可以读取
-        if ring_bridge:
-            for ch in ["req", "rsp", "data"]:
-                eq_fifo = ring_bridge.ring_bridge_output_fifos[ch]["EQ"]
-                eq_fifo.read_this_cycle = False
 
         # 执行所有计划的传输
         for source, channel, flit, target_ip in self._eject_transfer_plan:
@@ -228,7 +229,15 @@ class EjectQueue:
         elif source in ["TU", "TD", "TR", "TL"]:
             # 从eject_input_fifos查看
             input_fifo = self.eject_input_fifos[channel][source]
-            if input_fifo.valid_signal():
+            fifo_id = id(input_fifo)
+            is_valid = input_fifo.valid_signal()
+            fifo_len = len(input_fifo.internal_queue)
+            output_valid = input_fifo.output_valid
+            queue_len = len(input_fifo.internal_queue)
+            has_output_reg = input_fifo.output_register is not None
+            read_this_cycle = input_fifo.read_this_cycle
+            self.logger.debug(f"🔍 节点{self.node_id} EQ检查{source}源{channel}通道: valid={is_valid}, output_valid={output_valid}, queue_len={queue_len}, output_reg={has_output_reg}, read_flag={read_this_cycle}")
+            if is_valid:
                 return input_fifo.peek_output()
 
         return None

@@ -36,10 +36,6 @@ class BasicConfiguration:
     # 路由策略配置
     ROUTING_STRATEGY: str = "XY"  # 默认使用XY路由
 
-    # IP接口FIFO深度配置
-    IP_L2H_FIFO_DEPTH: int = 3
-    IP_H2L_FIFO_DEPTH: int = 2
-
     # Link Slice配置 - CrossRing非环绕设计专用
     NORMAL_LINK_SLICES: int = 8  # 正常节点间连接的slice数量
     SELF_LINK_SLICES: int = 2  # 自连接（边界节点到自己）的slice数量
@@ -68,6 +64,11 @@ class IPConfiguration:
     # 读写间隔配置
     GDMA_RW_GAP: int = 1e9
     SDMA_RW_GAP: int = 1e9
+
+    # IP接口FIFO深度配置
+    IP_L2H_FIFO_DEPTH: int = 3  # L2H FIFO深度
+    IP_H2L_H_FIFO_DEPTH: int = 2  # 网络域高级FIFO深度
+    IP_H2L_L_FIFO_DEPTH: int = 2  # IP域低级FIFO深度
 
 
 @dataclass

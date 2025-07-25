@@ -361,18 +361,30 @@ class BaseIPInterface(ABC):
             model.register_ip_interface(self)
 
     def _setup_clock_domain_fifos(self) -> None:
-        """设置时钟域转换FIFO"""
-        # 支持CrossRing的组合配置
-        if hasattr(self.config, "basic_config"):
-            l2h_depth = getattr(self.config.basic_config, "IP_L2H_FIFO_DEPTH", 4)
-            h2l_depth = getattr(self.config.basic_config, "IP_H2L_FIFO_DEPTH", 4)
-        else:
-            l2h_depth = getattr(self.config, "IP_L2H_FIFO_DEPTH", 4)
-            h2l_depth = getattr(self.config, "IP_H2L_FIFO_DEPTH", 4)
+        """设置时钟域转换FIFO - 双级H2L结构"""
+        l2h_depth = self.config.ip_config.IP_L2H_FIFO_DEPTH
+        h2l_h_depth = self.config.ip_config.IP_H2L_H_FIFO_DEPTH
+        h2l_l_depth = self.config.ip_config.IP_H2L_L_FIFO_DEPTH
 
-        self.l2h_fifos = {"req": PipelinedFIFO("l2h_req", depth=l2h_depth), "rsp": PipelinedFIFO("l2h_rsp", depth=l2h_depth), "data": PipelinedFIFO("l2h_data", depth=l2h_depth)}
+        # L2H FIFO (保持不变)
+        self.l2h_fifos = {
+            "req": PipelinedFIFO("l2h_req", depth=l2h_depth),
+            "rsp": PipelinedFIFO("l2h_rsp", depth=l2h_depth),
+            "data": PipelinedFIFO("l2h_data", depth=l2h_depth)
+        }
 
-        self.h2l_fifos = {"req": PipelinedFIFO("h2l_req", depth=h2l_depth), "rsp": PipelinedFIFO("h2l_rsp", depth=h2l_depth), "data": PipelinedFIFO("h2l_data", depth=h2l_depth)}
+        # H2L 双级FIFO
+        self.h2l_h_fifos = {  # 网络域高级FIFO
+            "req": PipelinedFIFO("h2l_h_req", depth=h2l_h_depth),
+            "rsp": PipelinedFIFO("h2l_h_rsp", depth=h2l_h_depth),
+            "data": PipelinedFIFO("h2l_h_data", depth=h2l_h_depth)
+        }
+        
+        self.h2l_l_fifos = {  # IP域低级FIFO
+            "req": PipelinedFIFO("h2l_l_req", depth=h2l_l_depth),
+            "rsp": PipelinedFIFO("h2l_l_rsp", depth=h2l_l_depth),
+            "data": PipelinedFIFO("h2l_l_data", depth=h2l_l_depth)
+        }
         
     def _setup_token_bucket(self, rate: float, bucket_size: float) -> None:
         """

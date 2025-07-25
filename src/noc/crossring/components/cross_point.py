@@ -1038,6 +1038,7 @@ class CrossRingCrossPoint:
         # 首先检查是否到达最终目的地
         if hasattr(flit, "should_eject_at_node") and flit.should_eject_at_node(self.parent_node.node_id):
             # 到达目标节点，必须下环到IP
+            self.logger.debug(f"🎯 CrossPoint {self.crosspoint_id}: flit {flit.flit_id} should_eject_at_node=True → EQ")
             return True, "EQ"
 
         # 获取坐标信息用于路由判断
@@ -1062,19 +1063,24 @@ class CrossRingCrossPoint:
                 # 从水平环来的flit
                 if dest_x == curr_x and dest_y == curr_y:
                     # 到达目标节点，弹出到Ring Bridge然后到IP
+                    self.logger.debug(f"🎯 CrossPoint {self.crosspoint_id}: flit {flit.flit_id} 到达目标({curr_x},{curr_y}) from {current_direction} → RB")
                     return True, "RB"
                 elif dest_y != curr_y:
                     # 需要维度转换到垂直环
                     if routing_strategy == "XY" and dest_x == curr_x:
                         # XY路由且X维度已完成，转换到垂直环
+                        self.logger.debug(f"🎯 CrossPoint {self.crosspoint_id}: flit {flit.flit_id} X维度完成，需转垂直环 from {current_direction} → RB")
                         return True, "RB"
                     elif routing_strategy == "YX":
                         # YX路由需要立即转换到垂直环
+                        self.logger.debug(f"🎯 CrossPoint {self.crosspoint_id}: flit {flit.flit_id} YX路由转垂直环 from {current_direction} → RB")
                         return True, "RB"
                 # 继续在水平环传输
+                self.logger.debug(f"🎯 CrossPoint {self.crosspoint_id}: flit {flit.flit_id} 继续水平环传输 from {current_direction}")
                 return False, ""
             else:
                 # 从Ring Bridge或其他来源，直接弹出到IP
+                self.logger.debug(f"🎯 CrossPoint {self.crosspoint_id}: flit {flit.flit_id} 从Ring Bridge弹出 from {current_direction} → EQ")
                 return True, "EQ"
 
         elif self.direction == CrossPointDirection.VERTICAL:
@@ -1353,9 +1359,16 @@ class CrossRingCrossPoint:
 
             elif transfer["type"] == "to_eject_fifo":
                 ejected_flit = self.try_eject_flit(transfer["slot"], transfer["channel"], len(transfer["target_fifo"].internal_queue), transfer["target_fifo"].internal_queue.maxlen)
-                if ejected_flit and transfer["target_fifo"].write_input(ejected_flit):
-                    ejected_flit.flit_position = f"EQ_{transfer['direction']}"
-                    self.logger.debug(f"CrossPoint {self.crosspoint_id} 成功下环到EQ: {transfer['direction']} {transfer['channel']}")
+                if ejected_flit:
+                    target_fifo = transfer["target_fifo"]
+                    fifo_id = id(target_fifo)
+                    write_success = target_fifo.write_input(ejected_flit)
+                    self.logger.debug(f"CrossPoint {self.crosspoint_id} 尝试写入EQ: {transfer['direction']} {transfer['channel']}, write_success={write_success}, fifo_id={fifo_id}")
+                    if write_success:
+                        ejected_flit.flit_position = f"EQ_{transfer['direction']}"
+                        self.logger.debug(f"CrossPoint {self.crosspoint_id} 成功下环到EQ: {transfer['direction']} {transfer['channel']}")
+                    else:
+                        self.logger.debug(f"CrossPoint {self.crosspoint_id} 写入EQ失败: {transfer['direction']} {transfer['channel']}")
 
         # 执行上环传输（按自然顺序）
         for transfer in getattr(self, "_injection_transfer_plan", []):
