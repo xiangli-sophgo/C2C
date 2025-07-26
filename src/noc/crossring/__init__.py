@@ -31,7 +31,7 @@ from .model import (
 
 # 导入现有的组件
 from .link import CrossRingSlot, RingSlice
-from .components.cross_point import CrossRingTagManager, CrossRingCrossPoint, CrossPointDirection
+from .components.cross_point import CrossPoint, CrossPointDirection
 
 # 版本信息
 __version__ = "1.3.0"
@@ -56,8 +56,8 @@ __all__ = [
     # CrossRing组件
     "CrossRingSlot",
     "RingSlice",
-    "CrossRingCrossPoint",
-    "CrossRingTagManager",
+    "CrossPoint",
+    "CrossPointDirection",
     # 便捷函数
     "create_crossring_flit",
     "return_crossring_flit",
@@ -141,7 +141,6 @@ def _check_dependencies():
     """检查依赖项"""
     try:
         import numpy
-        import logging
         from collections import deque, defaultdict
         from dataclasses import dataclass, field
         from typing import Dict, List, Any, Optional, Tuple
@@ -153,7 +152,4 @@ def _check_dependencies():
 _check_dependencies()
 
 # 模块级日志
-import logging
 
-_logger = logging.getLogger(__name__)
-_logger.info(f"CrossRing NoC模块加载完成 (v{__version__})")

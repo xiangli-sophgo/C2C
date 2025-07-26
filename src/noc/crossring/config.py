@@ -258,10 +258,10 @@ class CrossRingConfig(BaseNoCConfig):
             if fifo_cfg.EQ_IN_FIFO_DEPTH <= 0:
                 errors.append(f"EQ输入FIFO深度必须为正数 (EQ_IN_DEPTH={fifo_cfg.EQ_IN_FIFO_DEPTH})")
         elif isinstance(fifo_cfg, dict):
-            if fifo_cfg.get("RB_IN_DEPTH", 0) <= 0:
-                errors.append(f"RB输入FIFO深度必须为正数 (RB_IN_DEPTH={fifo_cfg.get('RB_IN_DEPTH', 0)})")
-            if fifo_cfg.get("EQ_IN_DEPTH", 0) <= 0:
-                errors.append(f"EQ输入FIFO深度必须为正数 (EQ_IN_DEPTH={fifo_cfg.get('EQ_IN_DEPTH', 0)})")
+            if fifo_cfg.get("RB_IN_FIFO_DEPTH", 0) <= 0:
+                errors.append(f"RB输入FIFO深度必须为正数 (RB_IN_FIFO_DEPTH={fifo_cfg.get('RB_IN_FIFO_DEPTH', 0)})")
+            if fifo_cfg.get("EQ_IN_FIFO_DEPTH", 0) <= 0:
+                errors.append(f"EQ输入FIFO深度必须为正数 (EQ_IN_FIFO_DEPTH={fifo_cfg.get('EQ_IN_FIFO_DEPTH', 0)})")
 
         # Tag参数验证 - 放宽约束
         tag_cfg = self.tag_config
@@ -289,8 +289,8 @@ class CrossRingConfig(BaseNoCConfig):
             rb_depth = fifo_cfg.RB_IN_FIFO_DEPTH
             eq_depth = fifo_cfg.EQ_IN_FIFO_DEPTH
         elif isinstance(fifo_cfg, dict):
-            rb_depth = fifo_cfg.get("RB_IN_DEPTH", 16)
-            eq_depth = fifo_cfg.get("EQ_IN_DEPTH", 16)
+            rb_depth = fifo_cfg.get("RB_IN_FIFO_DEPTH", 16)
+            eq_depth = fifo_cfg.get("EQ_IN_FIFO_DEPTH", 16)
         else:
             rb_depth = eq_depth = 8
 
@@ -299,18 +299,18 @@ class CrossRingConfig(BaseNoCConfig):
         if tl_t1 <= tl_t2:
             errors.append(f"TL ETag T1必须大于T2 (TL_ETAG_T1_UE_MAX={tl_t1}, TL_ETAG_T2_UE_MAX={tl_t2})")
         if tl_t1 >= rb_depth:
-            errors.append(f"TL ETag T1必须小于RB_IN_FIFO_DEPTH (TL_ETAG_T1_UE_MAX={tl_t1}, RB_IN_DEPTH={rb_depth})")
+            errors.append(f"TL ETag T1必须小于RB_IN_FIFO_DEPTH (TL_ETAG_T1_UE_MAX={tl_t1}, RB_IN_FIFO_DEPTH={rb_depth})")
         if tr_t2 >= rb_depth:
-            errors.append(f"TR ETag T2必须小于RB_IN_FIFO_DEPTH (TR_ETAG_T2_UE_MAX={tr_t2}, RB_IN_DEPTH={rb_depth})")
+            errors.append(f"TR ETag T2必须小于RB_IN_FIFO_DEPTH (TR_ETAG_T2_UE_MAX={tr_t2}, RB_IN_FIFO_DEPTH={rb_depth})")
 
         if tu_t2 <= 0:
             errors.append(f"TU ETag T2必须为正数 (TU_ETAG_T2_UE_MAX={tu_t2})")
         if tu_t1 <= tu_t2:
             errors.append(f"TU ETag T1必须大于T2 (TU_ETAG_T1_UE_MAX={tu_t1}, TU_ETAG_T2_UE_MAX={tu_t2})")
         if tu_t1 >= eq_depth:
-            errors.append(f"TU ETag T1必须小于EQ_IN_FIFO_DEPTH (TU_ETAG_T1_UE_MAX={tu_t1}, EQ_IN_DEPTH={eq_depth})")
+            errors.append(f"TU ETag T1必须小于EQ_IN_FIFO_DEPTH (TU_ETAG_T1_UE_MAX={tu_t1}, EQ_IN_FIFO_DEPTH={eq_depth})")
         if td_t2 >= eq_depth:
-            errors.append(f"TD ETag T2必须小于EQ_IN_FIFO_DEPTH (TD_ETAG_T2_UE_MAX={td_t2}, EQ_IN_DEPTH={eq_depth})")
+            errors.append(f"TD ETag T2必须小于EQ_IN_FIFO_DEPTH (TD_ETAG_T2_UE_MAX={td_t2}, EQ_IN_FIFO_DEPTH={eq_depth})")
 
         #  Tracker 配置验证 - 安全地访问属性
         tracker = self.tracker_config

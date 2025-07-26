@@ -9,7 +9,6 @@ CrossRing注入队列管理。
 """
 
 from typing import Dict, List, Optional, Tuple
-import logging
 
 from src.noc.base.ip_interface import PipelinedFIFO
 from ..flit import CrossRingFlit
@@ -19,7 +18,7 @@ from ..config import CrossRingConfig, RoutingStrategy
 class InjectQueue:
     """注入队列管理类。"""
 
-    def __init__(self, node_id: int, coordinates: Tuple[int, int], config: CrossRingConfig, logger: logging.Logger, topology=None):
+    def __init__(self, node_id: int, coordinates: Tuple[int, int], config: CrossRingConfig, topology=None):
         """
         初始化注入队列管理器。
 
@@ -27,18 +26,16 @@ class InjectQueue:
             node_id: 节点ID
             coordinates: 节点坐标
             config: CrossRing配置
-            logger: 日志记录器
             topology: 拓扑对象（用于路由表查询）
         """
         self.node_id = node_id
         self.coordinates = coordinates
         self.config = config
-        self.logger = logger
         self.topology = topology
 
         # 获取FIFO配置
-        self.iq_ch_depth = getattr(config, "IQ_CH_DEPTH", 10)
-        self.iq_out_depth = getattr(config, "IQ_OUT_DEPTH", 8)
+        self.iq_ch_depth = config.fifo_config.IQ_CH_DEPTH
+        self.iq_out_depth = config.fifo_config.IQ_OUT_FIFO_DEPTH
 
         # 连接的IP列表
         self.connected_ips = []
@@ -86,10 +83,8 @@ class InjectQueue:
                 "data": PipelinedFIFO(f"ip_inject_channel_data_{ip_id}_{self.node_id}", depth=self.iq_ch_depth),
             }
 
-            self.logger.debug(f"节点{self.node_id}成功连接IP {ip_id}")
             return True
         else:
-            self.logger.warning(f"IP {ip_id}已经连接到节点{self.node_id}")
             return False
 
     def disconnect_ip(self, ip_id: str) -> None:
@@ -97,7 +92,6 @@ class InjectQueue:
         if ip_id in self.connected_ips:
             self.connected_ips.remove(ip_id)
             del self.ip_inject_channel_buffers[ip_id]
-            self.logger.debug(f"节点{self.node_id}断开IP {ip_id}连接")
 
     def add_to_inject_queue(self, flit: CrossRingFlit, channel: str, ip_id: str) -> bool:
         """
@@ -112,17 +106,16 @@ class InjectQueue:
             是否成功添加
         """
         if ip_id not in self.connected_ips:
-            self.logger.error(f"IP {ip_id}未连接到节点{self.node_id}")
+            raise ValueError(f"IP {ip_id}未连接到节点{self.node_id}")
             return False
 
         channel_buffer = self.ip_inject_channel_buffers[ip_id][channel]
         if not channel_buffer.ready_signal():
-            self.logger.debug(f"节点{self.node_id}的IP {ip_id} {channel}通道缓冲区已满")
             return False
 
         success = channel_buffer.write_input(flit)
         if success:
-            self.logger.debug(f"节点{self.node_id}的IP {ip_id}成功注入flit到{channel}通道缓冲区")
+            pass
         return success
 
     def compute_arbitration(self, cycle: int) -> None:

@@ -10,7 +10,6 @@ Base Link类定义，提供链路的基础接口和通用统计框架。
 from abc import ABC, abstractmethod
 from typing import Dict, List, Any, Optional, Tuple
 from enum import Enum
-import logging
 from dataclasses import dataclass, field
 
 from .flit import BaseFlit
@@ -103,7 +102,7 @@ class BaseLink(ABC):
     流控和仲裁机制的抽象方法。
     """
 
-    def __init__(self, link_id: str, source_node: int, dest_node: int, num_slots: int = 8, logger: Optional[logging.Logger] = None):
+    def __init__(self, link_id: str, source_node: int, dest_node: int, num_slots: int = 8):
         """
         初始化链路
 
@@ -112,13 +111,11 @@ class BaseLink(ABC):
             source_node: 源节点ID
             dest_node: 目标节点ID
             num_slots: slot数量
-            logger: 日志记录器
         """
         self.link_id = link_id
         self.source_node = source_node
         self.dest_node = dest_node
         self.num_slots = num_slots
-        self.logger = logger or logging.getLogger(__name__)
 
         # 为每个通道创建slot管理
         self.slots = {"req": [], "rsp": [], "data": []}
@@ -198,7 +195,6 @@ class BaseLink(ABC):
             self.stats["flits_transmitted"][channel] += 1
             self.stats["slots_utilized"][channel] += 1
 
-            self.logger.debug(f"链路{self.link_id}在周期{cycle}成功传输{channel}通道flit到slot{slot.slot_id}")
             return True
 
         return False

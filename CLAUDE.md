@@ -284,7 +284,10 @@ ip_eject_channel_buffers → h2l_fifos → IP.get_eject_flit()
 
 2. **Tag Mechanisms**:
    - I-Tag: Triggered when injection waits exceed threshold (80-100 cycles)
-   - E-Tag: Priority upgrade after ejection failures (T2→T1→T0)
+   - E-Tag: **下环entry分配机制**，基于优先级和entry可用性判断是否可以下环
+     - **Entry分配**: T2只用T2 entry，T1优先用T1后用T2，T0依次降级使用
+     - **防饥饿**: 下环失败时触发优先级升级T2→T1→T0，有方向限制
+     - **T0特殊**: 使用T0专用entry时需要全局队列轮询仲裁
    - T0 requires round-robin arbitration via global queue
 
 3. **Non-Wrap-Around Topology**:
@@ -630,3 +633,55 @@ Ring_Bridge_arbitration等网络仲裁机制处理所有inject_fifo中的请求�
 3. **维护完整的三维等待队列结构**
 4. **正确的请求状态管理和转换**
 5. **防重复处理的保护机制**
+
+## E-Tag下环机制详细规范
+
+### E-Tag下环判断逻辑（正确规范）
+
+#### 1. Entry分配基本原则
+E-Tag下环必须基于**正确的entry分配**，不存在"强制下环"：
+
+- **T2级**: 只能使用T2专用entry
+  ```python
+  return entry_manager.can_allocate_entry("T2")
+  ```
+
+- **T1级**: 优先使用T1专用entry，没有时使用T2 entry
+  ```python
+  return entry_manager.can_allocate_entry("T1")  # 内部会检查T1和T2
+  ```
+
+- **T0级**: 优先使用T0专用entry，然后依次降级使用T1、T2 entry
+  ```python
+  if entry_manager.can_allocate_entry("T0"):
+      # 如果使用T0专用entry，需要检查全局队列排序
+      if using_t0_dedicated_entry:
+          return self._is_first_in_t0_queue(slot, channel)
+      else:
+          return True  # 使用降级entry无需队列检查
+  ```
+
+#### 2. Entry管理器配置要求
+每个方向需要正确配置：
+- `total_depth`: 对应FIFO的总深度
+- `t2_max`: T2级最大可用entry数量  
+- `t1_max`: T1级最大可用entry数量（包含T2）
+- `has_dedicated_entries`: 是否有专用entry（TL/TU=True, TR/TD=False）
+
+#### 3. E-Tag升级规则
+- **T2→T1升级**: 
+  - `ETAG_BOTHSIDE_UPGRADE=0`: 只有TL和TU能升级
+  - `ETAG_BOTHSIDE_UPGRADE=1`: TL、TR、TU、TD都能升级
+- **T1→T0升级**: 只有TL或TU能升级，TR和TD永远不能升级到T0
+
+#### 4. 配置参数映射
+- `TL_ETAG_T1_UE_MAX`: TL方向T1阈值
+- `TU_ETAG_T1_UE_MAX`: TU方向T1阈值
+- `TR_ETAG_T1_UE_MAX`: 使用 `RB_IN_FIFO_DEPTH`
+- `TD_ETAG_T1_UE_MAX`: 使用 `EQ_IN_FIFO_DEPTH`
+
+### E-Tag实现要点
+1. **Entry分配优先**: 所有下环都必须先获得对应的entry
+2. **正确配置**: Entry管理器必须使用正确的FIFO深度和阈值配置
+3. **T0队列管理**: T0使用专用entry时需要全局队列排序
+4. **调试关键**: 检查entry管理器初始化和entry分配计算逻辑

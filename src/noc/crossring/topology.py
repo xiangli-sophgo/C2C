@@ -11,7 +11,6 @@ CrossRing拓扑实现。
 import numpy as np
 from typing import List, Dict, Tuple, Optional, Set, Any
 from collections import deque, defaultdict
-import logging
 
 from ..base.topology import BaseNoCTopology
 from src.noc.utils.types import NodeId, Path, Position, ValidationResult, AdjacencyMatrix, RoutingStrategy, TopologyType, LinkId, MetricsDict
@@ -52,15 +51,10 @@ class CrossRingTopology(BaseNoCTopology):
         self.NUM_NODE = self.NUM_ROW * self.NUM_COL
         self.crossring_config = config
 
-        # 初始化日志
-        self._logger = logging.getLogger(f"{self.__class__.__name__}[{self.NUM_ROW}×{self.NUM_COL}]")
-        self._logger.info(f"初始化CrossRing拓扑: {self.NUM_ROW}×{self.NUM_COL}")
-
         super().__init__(config)
 
     def build_topology(self) -> None:
         """构建CrossRing拓扑结构。"""
-        self._logger.info("开始构建CrossRing拓扑结构")
 
         # 创建邻接矩阵
         self._adjacency_matrix = create_crossring_adjacency_matrix(self.NUM_ROW, self.NUM_COL)
@@ -76,8 +70,6 @@ class CrossRingTopology(BaseNoCTopology):
         # 建立路由表
         self.routing_table = {}  # routing_table[src][dst] = [path_of_node_ids]
         self._build_routing_table()
-
-        self._logger.info("CrossRing拓扑构建完成")
 
     def _build_node_positions(self) -> None:
         """建立节点位置映射。使用直角坐标系，原点在左下角。"""

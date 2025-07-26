@@ -9,7 +9,6 @@ CrossRing弹出队列管理。
 """
 
 from typing import Dict, List, Optional, Tuple
-import logging
 
 from src.noc.base.ip_interface import PipelinedFIFO
 from ..flit import CrossRingFlit
@@ -19,7 +18,7 @@ from ..config import CrossRingConfig, RoutingStrategy
 class EjectQueue:
     """弹出队列管理类。"""
 
-    def __init__(self, node_id: int, coordinates: Tuple[int, int], config: CrossRingConfig, logger: logging.Logger):
+    def __init__(self, node_id: int, coordinates: Tuple[int, int], config: CrossRingConfig):
         """
         初始化弹出队列管理器。
 
@@ -27,16 +26,16 @@ class EjectQueue:
             node_id: 节点ID
             coordinates: 节点坐标
             config: CrossRing配置
-            logger: 日志记录器
         """
         self.node_id = node_id
         self.coordinates = coordinates
         self.config = config
-        self.logger = logger
 
         # 获取FIFO配置
-        self.eq_in_depth = getattr(config, "EQ_IN_DEPTH", 16)
-        self.eq_ch_depth = getattr(config, "EQ_CH_DEPTH", 10)
+        self.eq_in_depth = config.fifo_config.EQ_IN_FIFO_DEPTH
+        self.eq_ch_depth = config.fifo_config.EQ_CH_DEPTH
+
+        # 调试：验证FIFO深度配置
 
         # 连接的IP列表
         self.connected_ips = []
@@ -86,10 +85,8 @@ class EjectQueue:
 
             # 更新eject仲裁状态中的IP列表
             self._update_eject_arbitration_ips()
-            self.logger.debug(f"节点{self.node_id}成功连接IP {ip_id}")
             return True
         else:
-            self.logger.warning(f"IP {ip_id}已经连接到节点{self.node_id}")
             return False
 
     def disconnect_ip(self, ip_id: str) -> None:
@@ -98,7 +95,6 @@ class EjectQueue:
             self.connected_ips.remove(ip_id)
             del self.ip_eject_channel_buffers[ip_id]
             self._update_eject_arbitration_ips()
-            self.logger.debug(f"节点{self.node_id}断开IP {ip_id}连接")
 
     def _update_eject_arbitration_ips(self) -> None:
         """更新eject仲裁状态中的IP列表。"""
@@ -170,19 +166,17 @@ class EjectQueue:
             # 获取来自当前源的flit (使用peek，不实际读取)
             flit = self._peek_flit_from_eject_source(source, channel, inject_direction_fifos, ring_bridge)
             if flit is not None:
-                self.logger.debug(f"🎯 节点{self.node_id} EQ仲裁: 从{source}源发现{channel}通道flit")
                 # 找到flit，现在确定分配给哪个IP
                 target_ip = self._find_target_ip_for_flit(flit, channel, cycle)
                 if target_ip:
                     # 保存传输计划
                     self._eject_transfer_plan.append((source, channel, flit, target_ip))
                     arb_state["last_served_source"][source] = cycle
-                    self.logger.debug(f"✅ 节点{self.node_id} EQ仲裁: {source}→{target_ip} {channel}通道传输计划已创建")
                     break
                 else:
-                    self.logger.debug(f"❌ 节点{self.node_id} EQ仲裁: 无法为{source}源的{channel}通道flit找到可用IP")
+                    pass
             else:
-                self.logger.debug(f"🔍 节点{self.node_id} EQ仲裁: {source}源{channel}通道无数据")
+                pass
 
             # 移动到下一个源
             arb_state["current_source"] = (current_source_idx + 1) % len(sources)
@@ -198,7 +192,6 @@ class EjectQueue:
         """
         if not hasattr(self, "_eject_transfer_plan"):
             return
-
 
         # 执行所有计划的传输
         for source, channel, flit, target_ip in self._eject_transfer_plan:
@@ -236,9 +229,10 @@ class EjectQueue:
             queue_len = len(input_fifo.internal_queue)
             has_output_reg = input_fifo.output_register is not None
             read_this_cycle = input_fifo.read_this_cycle
-            self.logger.debug(f"🔍 节点{self.node_id} EQ检查{source}源{channel}通道: valid={is_valid}, output_valid={output_valid}, queue_len={queue_len}, output_reg={has_output_reg}, read_flag={read_this_cycle}")
             if is_valid:
                 return input_fifo.peek_output()
+            elif channel == "data" and source == "TD" and self.node_id == 4 and queue_len >= input_fifo.max_depth:
+                return None
 
         return None
 
@@ -265,7 +259,6 @@ class EjectQueue:
     def _find_target_ip_for_flit(self, flit: CrossRingFlit, channel: str, cycle: int) -> Optional[str]:
         """为flit找到目标IP。"""
         if not self.connected_ips:
-            self.logger.debug(f"🔍 节点{self.node_id}: 没有连接的IP")
             return None
 
         # 首先尝试根据flit的destination_type匹配对应的IP
@@ -311,14 +304,14 @@ class EjectQueue:
             arb_state = self.eject_arbitration_state[channel]
             arb_state["last_served_ip"][ip_id] = cycle
 
-            self.logger.debug(f"节点{self.node_id}成功将{channel}通道flit分配给IP {ip_id}")
             return True
-        return False
+        else:
+            return False
 
     def get_eject_flit(self, ip_id: str, channel: str) -> Optional[CrossRingFlit]:
         """IP从其eject channel buffer获取flit。"""
         if ip_id not in self.connected_ips:
-            self.logger.error(f"IP {ip_id}未连接到节点{self.node_id}")
+            raise ValueError(f"IP {ip_id}未连接到节点{self.node_id}")
             return None
 
         eject_buffer = self.ip_eject_channel_buffers[ip_id][channel]

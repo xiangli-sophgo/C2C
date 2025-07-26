@@ -9,7 +9,6 @@ CrossRing链路实现，继承BaseLink，实现CrossRing特有的ETag/ITag机制
 """
 
 from typing import Dict, List, Any, Optional, Tuple
-import logging
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -322,7 +321,7 @@ class RingSlice:
     本质上是一组寄存器，负责Slot的逐跳传输。
     """
 
-    def __init__(self, slice_id: str, ring_type: str, position: int, num_channels: int = 3, logger: Optional[logging.Logger] = None):
+    def __init__(self, slice_id: str, ring_type: str, position: int, num_channels: int = 3):
         """
         初始化Ring Slice
 
@@ -331,13 +330,11 @@ class RingSlice:
             ring_type: 环路类型 ("horizontal" or "vertical")
             position: 在环路中的位置
             num_channels: 通道数量(req/rsp/data)
-            logger: 日志记录器
         """
         self.slice_id = slice_id
         self.ring_type = ring_type
         self.position = position
         self.num_channels = num_channels
-        self.logger = logger or logging.getLogger(__name__)
 
         # 当前存储的Slots - 每个通道一个
         self.current_slots: Dict[str, Optional[CrossRingSlot]] = {"req": None, "rsp": None, "data": None}
@@ -423,12 +420,9 @@ class RingSlice:
                         slot.flit.flit_position = f"UNKNOWN_LINK:{self.position}"
                 except (ValueError, IndexError) as e:
                     # 解析失败时也尝试提供有意义的位置信息
-                    # 调试：显示解析失败的详细信息
-                    self.logger.debug(f"slice_id解析失败: {self.slice_id}, 错误: {e}")
                     slot.flit.flit_position = f"PARSE_ERROR:{self.position}"
 
             self.stats["slots_received"][channel] += 1
-            self.logger.debug(f"RingSlice {self.slice_id} 接收到 {channel} 通道的slot {slot.slot_id}")
         else:
             self.stats["empty_cycles"][channel] += 1
 
@@ -452,7 +446,6 @@ class RingSlice:
 
         if slot is not None:
             self.stats["slots_transmitted"][channel] += 1
-            self.logger.debug(f"RingSlice {self.slice_id} 传输 {channel} 通道的slot {slot.slot_id}")
 
         return slot
 
@@ -543,7 +536,6 @@ class RingSlice:
                 if self.downstream_slice.receive_slot(transmitted_slot, channel):
                     self.output_buffer[channel] = None
                     self.stats["slots_transmitted"][channel] += 1
-                    self.logger.debug(f"RingSlice {self.slice_id} 向下游传输slot {transmitted_slot.slot_id}")
 
     def peek_current_slot(self, channel: str) -> Optional[CrossRingSlot]:
         """
@@ -634,7 +626,7 @@ class CrossRingLink(BaseLink):
     4. 与CrossPoint协作处理复杂的anti-starvation逻辑
     """
 
-    def __init__(self, link_id: str, source_node: int, dest_node: int, direction: Direction, config: CrossRingConfig, num_slices: int = 8, logger: Optional[logging.Logger] = None):
+    def __init__(self, link_id: str, source_node: int, dest_node: int, direction: Direction, config: CrossRingConfig, num_slices: int = 8):
         """
         初始化CrossRing链路
 
@@ -645,10 +637,9 @@ class CrossRingLink(BaseLink):
             direction: 链路方向
             config: CrossRing配置
             num_slices: Ring Slice数量
-            logger: 日志记录器
         """
         # 调用父类构造函数
-        super().__init__(link_id, source_node, dest_node, num_slices, logger)
+        super().__init__(link_id, source_node, dest_node, num_slices)
 
         # CrossRing特有属性
         self.direction = direction
@@ -680,7 +671,6 @@ class CrossRingLink(BaseLink):
             }
         )
 
-        self.logger.info(f"CrossRingLink {link_id} 初始化完成: {source_node} -> {dest_node}, 方向: {direction.value}")
 
     def _initialize_ring_slices(self) -> None:
         """初始化Ring Slice链"""
@@ -690,10 +680,9 @@ class CrossRingLink(BaseLink):
             self.ring_slices[channel] = []
             for i in range(self.num_slices):
                 slice_id = f"{self.link_id}_{channel}_slice_{i}"
-                ring_slice = RingSlice(slice_id, ring_type, i, logger=self.logger)
+                ring_slice = RingSlice(slice_id, ring_type, i, 3)
                 self.ring_slices[channel].append(ring_slice)
 
-        self.logger.debug(f"初始化 {self.num_slices} 个Ring Slice，类型: {ring_type}")
 
     def _initialize_slot_pools(self) -> None:
         """初始化Slot池"""
@@ -704,7 +693,6 @@ class CrossRingLink(BaseLink):
                 slot = CrossRingSlot(slot_id=i, cycle=0, direction=BasicDirection.LOCAL, channel=channel)
                 self.slot_pools[channel].append(slot)
 
-        self.logger.debug(f"初始化Slot池，每通道 {self.num_slices * 2} 个slot")
 
     def get_ring_slice(self, channel: str, position: int) -> Optional[RingSlice]:
         """

@@ -11,12 +11,12 @@ CrossRing节点组件模块。
 from .inject_queue import InjectQueue
 from .eject_queue import EjectQueue
 from .ring_bridge import RingBridge
-from .cross_point import CrossRingCrossPoint, CrossPointDirection
+from .cross_point import CrossPoint, CrossPointDirection
 
 __all__ = [
     "InjectQueue",
     "EjectQueue", 
     "RingBridge",
-    "CrossRingCrossPoint",
+    "CrossPoint",
     "CrossPointDirection"
 ]

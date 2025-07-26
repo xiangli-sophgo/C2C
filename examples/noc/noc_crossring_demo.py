@@ -43,6 +43,7 @@ def create_config(rows=2, cols=3, config_name="demo"):
     config.tag_config.TU_ETAG_T2_UE_MAX = 8
     config.tag_config.TU_ETAG_T1_UE_MAX = 12
     config.tag_config.TD_ETAG_T2_UE_MAX = 12
+    config.validate_config()
 
     return config
 
@@ -66,12 +67,12 @@ def main():
     model = CrossRingModel(config)
 
     save_dir = None
-    save_dir = f"../../output/noc/CrossRing/{rows}x{cols}/"
+    # save_dir = f"../../output/noc/CrossRing/{rows}x{cols}/"
 
     # 3. 配置各种选项
     model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)  # Traffic文件设置，节点的IP会根据数据流连接。
-    # model.setup_debug(logging_level=4, trace_packets=[1, 2], sleep_time=0.0)  # debug设置，DEBUG级别(0)，跟踪请求1和2，显示所有调试信息
-    model.setup_result_analysis(flow_distribution=1, bandwidth_analysis=1, save_figures=0, save_dir=save_dir)  # 可视化设置
+    model.setup_debug(trace_packets=[14], sleep_time=0.0)
+    model.setup_result_analysis(flow_distribution=0, bandwidth_analysis=0, save_figures=0, save_dir=save_dir)  # 可视化设置
 
     # 4. 运行仿真 - 减小仿真时间进行调试
     print("▶️  开始仿真")

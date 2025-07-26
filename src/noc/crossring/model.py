@@ -8,13 +8,14 @@ CrossRing主模型类实现。
 
 from __future__ import annotations
 from typing import Dict, List, Any, Optional, Tuple
-import logging
 import os
 from collections import defaultdict
 import time
+from datetime import datetime
 from enum import Enum
 import numpy as np
 import re
+from pathlib import Path
 
 from .config import CrossRingConfig, RoutingStrategy
 from .topology import CrossRingTopology
@@ -103,11 +104,7 @@ class CrossRingModel(BaseNoCModel):
 
         # 验证CrossRing网络初始化
         if len(self.nodes) != self.config.NUM_NODE:
-            self.logger.error(f"CrossRing节点初始化不完整: 期望{self.config.NUM_NODE}，实际{len(self.nodes)}")
-            self.logger.error("debug: 当前nodes内容: {}".format(list(self.nodes.keys())))
-            raise RuntimeError("CrossRing网络初始化失败")
-
-        self.logger.info(f"CrossRing模型初始化完成: {config.NUM_ROW}x{config.NUM_COL}")
+            raise RuntimeError(f"CrossRing网络初始化失败: 期望{self.config.NUM_NODE}个节点，实际{len(self.nodes)}个")
 
     def _create_topology_instance(self, config) -> CrossRingTopology:
         """
@@ -119,9 +116,7 @@ class CrossRingModel(BaseNoCModel):
         Returns:
             CrossRing拓扑实例
         """
-        self.logger.info("创建CrossRing拓扑实例...")
         topology = CrossRingTopology(config)
-        self.logger.info(f"CrossRing拓扑实例创建成功: {config.NUM_ROW}x{config.NUM_COL}网格")
         return topology
 
     def _print_debug_info(self):
@@ -218,7 +213,6 @@ class CrossRingModel(BaseNoCModel):
             创建成功返回True，失败返回False
         """
         if not ip_type or not isinstance(ip_type, str):
-            self.logger.warning(f"无效的IP类型: {ip_type} for node {node_id}")
             return False
 
         if key is None:
@@ -232,16 +226,13 @@ class CrossRingModel(BaseNoCModel):
             # 连接IP到对应的节点
             if node_id in self.nodes:
                 self.nodes[node_id].connect_ip(key)
-                self.logger.debug(f"连接IP接口 {key} 到节点 {node_id}")
             else:
-                self.logger.warning(f"节点 {node_id} 不存在，无法连接IP接口 {key}")
                 return False
 
-            self.logger.debug(f"创建IP接口: {key} at node {node_id} (ip_type={ip_type})")
             return True
 
         except Exception as e:
-            self.logger.error(f"创建IP接口失败: {key} - {e}")
+            raise RuntimeError(f"创建IP接口失败: {key} - {e}")
             return False
 
     def _setup_all_ip_interfaces(self) -> None:
@@ -268,27 +259,20 @@ class CrossRingModel(BaseNoCModel):
                     simple_ip_key = f"{ip_type}_{channel_id}"
                     if node_id in self.nodes:
                         self.nodes[node_id].connect_ip(simple_ip_key)
-                        self.logger.debug(f"连接IP接口 {key} (作为 {simple_ip_key}) 到节点 {node_id}")
-                    else:
-                        self.logger.warning(f"节点 {node_id} 不存在，无法连接IP接口 {key}")
-
-                    self.logger.debug(f"创建IP接口: {key} at node {node_id}")
 
     def _create_specific_ip_interfaces(self, required_ips: List[Tuple[int, str]]) -> None:
         """创建特定的IP接口"""
         for node_id, ip_type in required_ips:
             # 验证ip_type格式
             if not ip_type or not isinstance(ip_type, str):
-                self.logger.warning(f"无效的IP类型: {ip_type} for node {node_id}")
                 continue
 
             # 使用多维字典结构 [node_id][ip_type]
             if node_id not in self.ip_interfaces:
                 self.ip_interfaces[node_id] = {}
-            
+
             # 检查该节点是否已有此类型IP
             if ip_type in self.ip_interfaces[node_id]:
-                self.logger.debug(f"节点{node_id}的IP接口 {ip_type} 已存在，跳过创建")
                 continue
 
             try:
@@ -299,21 +283,13 @@ class CrossRingModel(BaseNoCModel):
                 # 连接IP到对应的节点
                 if node_id in self.nodes:
                     self.nodes[node_id].connect_ip(ip_type)
-                    self.logger.info(f"连接优化IP接口 {ip_type} 到节点 {node_id}")
-                else:
-                    self.logger.warning(f"节点 {node_id} 不存在，无法连接IP接口 {ip_type}")
 
-                self.logger.info(f"创建优化IP接口: {ip_type} at node {node_id} (ip_type={ip_type})")
             except Exception as e:
-                self.logger.error(f"创建IP接口失败: {ip_type} - {e}")
+                raise RuntimeError(f"创建IP接口失败: {ip_type} - {e}")
                 continue
 
-        # 打印所有创建的IP接口
+        # 所有IP接口创建完成
         total_ips = sum(len(node_ips) for node_ips in self.ip_interfaces.values())
-        self.logger.info(f"总共创建了 {total_ips} 个IP接口")
-        for node_id, node_ips in self.ip_interfaces.items():
-            for ip_type, ip_interface in node_ips.items():
-                self.logger.info(f"  节点{node_id}.{ip_type}: ip_type={ip_interface.ip_type}")
 
     def setup_traffic_scheduler(self, traffic_chains: List[List[str]], traffic_file_path: str = None) -> None:
         """
@@ -333,24 +309,19 @@ class CrossRingModel(BaseNoCModel):
 
             for chain in traffic_chains:
                 for filename in chain:
-                    self.logger.info(f"分析traffic文件: {filename}")
                     traffic_reader = TrafficFileReader(filename=filename, traffic_file_path=file_path, config=self.config, time_offset=0, traffic_id="analysis")
 
                     ip_info = traffic_reader.get_required_ip_interfaces()
                     required_ips = ip_info["required_ips"]
                     all_required_ips.extend(required_ips)
 
-                    self.logger.info(f"文件 {filename} 需要IP接口: {required_ips}")
-
             # 去重
             unique_required_ips = list(set(all_required_ips))
-            self.logger.info(f"总共需要创建 {len(unique_required_ips)} 个唯一IP接口: {unique_required_ips}")
 
             # 动态创建需要的IP接口
             self._create_specific_ip_interfaces(unique_required_ips)
 
         except Exception as e:
-            self.logger.warning(f"动态创建IP接口失败: {e}，使用现有IP接口")
             import traceback
 
             traceback.print_exc()
@@ -381,12 +352,13 @@ class CrossRingModel(BaseNoCModel):
             coordinates = self._get_node_coordinates(node_id)
 
             try:
-                node = CrossRingNode(node_id=node_id, coordinates=coordinates, config=self.config, logger=self.logger, topology=self.topology)
+                node = CrossRingNode(node_id, coordinates, self.config, topology=self.topology)
                 self.nodes[node_id] = node
             except Exception as e:
                 import traceback
 
                 traceback.print_exc()
+                raise RuntimeError(f"创建节点{node_id}失败: {e}")
 
         # 创建链接
         self._setup_links()
@@ -438,7 +410,7 @@ class CrossRingModel(BaseNoCModel):
 
                 # 创建链接
                 try:
-                    link = CrossRingLink(link_id=link_id, source_node=node_id, dest_node=neighbor_id, direction=direction, config=self.config, num_slices=num_slices, logger=self.logger)
+                    link = CrossRingLink(link_id, node_id, neighbor_id, direction, self.config, num_slices)
                     self.links[link_id] = link
                     link_count += 1
                 except Exception as e:
@@ -446,6 +418,7 @@ class CrossRingModel(BaseNoCModel):
                     import traceback
 
                     traceback.print_exc()
+                    raise RuntimeError(f"创建链接{link_id}失败: {e}")
 
     def _connect_slices_to_crosspoints(self) -> None:
         """连接RingSlice到CrossPoint"""
@@ -857,8 +830,6 @@ class CrossRingModel(BaseNoCModel):
         key = f"{ip_interface.ip_type}_{ip_interface.node_id}"
         self._ip_registry[key] = ip_interface
 
-        self.logger.debug(f"注册IP接口到全局registry: {key}")
-
     def _sync_global_clock(self) -> None:
         """重写时钟同步阶段：添加CrossRing节点时钟同步"""
         # 调用基类的时钟同步
@@ -1006,101 +977,27 @@ class CrossRingModel(BaseNoCModel):
             }
         return status
 
-    def setup_debug(self, logging_level: int = 2, trace_packets: List[str] = None, sleep_time: float = 0.0) -> None:
+    def setup_debug(self, trace_packets: List[str] = None, sleep_time: float = 0.0) -> None:
         """
         启用调试模式（CrossRing扩展版本）
-        
+
         Args:
-            logging_level: 日志级别，数字越大显示越重要的信息
-                4: CRITICAL - 只显示严重错误
-                3: ERROR - 只显示错误  
-                2: WARNING - 显示警告和错误
-                1: INFO - 显示基本信息、警告和错误
-                0: DEBUG - 显示所有调试信息
             trace_packets: 要跟踪的请求ID列表，设置后启用请求跟踪功能
             sleep_time: 每个周期的暂停时间（用于实时观察）
         """
-        # 将简单级别映射到Python logging级别
-        level_mapping = {
-            4: logging.CRITICAL,  # 50
-            3: logging.ERROR,     # 40  
-            2: logging.WARNING,   # 30
-            1: logging.INFO,      # 20
-            0: logging.DEBUG      # 10
-        }
-        
-        numeric_level = level_mapping.get(logging_level, logging.INFO)
-        
-        # 配置全局logging
-        logging.basicConfig(
-            level=numeric_level,
-            format="%(name)s - %(levelname)s - %(message)s",
-            force=True  # 覆盖已有的配置
-        )
-        
-        # 配置所有相关logger的级别
-        self._configure_all_loggers(numeric_level)
-        
-        # 在启用debug时显示模块加载信息
-        if logging_level <= 1:
-            noc_logger = logging.getLogger("src.noc")
-            noc_logger.info(f"NoC抽象层已加载 - 版本 1.2.0")
-            noc_logger.info(f"支持的拓扑类型: ['crossring']")
-        
-        # 输出设置信息
-        logging_desc = {
-            4: "CRITICAL - 只显示严重错误",
-            3: "ERROR - 只显示错误",
-            2: "WARNING - 显示警告和错误", 
-            1: "INFO - 显示基本信息、警告和错误",
-            0: "DEBUG - 显示所有调试信息"
-        }
-        
-        # 只在INFO级别以下才输出设置信息
-        if logging_level <= 1:
-            self.logger.info(f"调试模式已启用，日志级别: {logging_level} ({logging_desc.get(logging_level, '未知级别')})")
-            
-            if trace_packets:
-                self.logger.info(f"🎯 请求跟踪已启用，追踪包: {trace_packets}")
-            if sleep_time > 0:
-                self.logger.info(f"每周期暂停: {sleep_time}秒")
-        
+
+        # 设置调试参数
+        self.debug_enabled = True
+        self.debug_config["sleep_time"] = sleep_time
+
+        if trace_packets:
+            self.debug_packet_ids.update(trace_packets)
+
+        if sleep_time > 0:
+            self.debug_config["sleep_time"] = sleep_time
+
         # 调用base类的enable_debug，传递level=1作为兼容参数
         super().setup_debug(1, trace_packets, sleep_time)
-    
-    def _configure_all_loggers(self, level):
-        """配置所有相关logger的级别"""
-        # 获取所有需要配置的logger名称
-        logger_names = [
-            "src.noc",
-            "CrossRingModel", 
-            "BaseNoCModel",
-            self.logger.name,  # 模型自己的logger
-        ]
-        
-        # 还需要配置所有IP接口的logger
-        for ip_interface in self.ip_interfaces.values():
-            if hasattr(ip_interface, 'logger'):
-                logger_names.append(ip_interface.logger.name)
-        
-        # 配置节点和链路的logger
-        if hasattr(self, 'nodes'):
-            for node in self.nodes.values():
-                if hasattr(node, 'logger'):
-                    logger_names.append(node.logger.name)
-        
-        # 设置所有logger的级别
-        for logger_name in set(logger_names):  # 去重
-            logger = logging.getLogger(logger_name)
-            logger.setLevel(level)
-            
-            # 确保logger有处理器
-            if not logger.handlers:
-                console_handler = logging.StreamHandler()
-                console_handler.setLevel(level)
-                formatter = logging.Formatter("%(name)s - %(levelname)s - %(message)s")
-                console_handler.setFormatter(formatter)
-                logger.addHandler(console_handler)
 
     def setup_result_analysis(self, flow_distribution: bool = False, bandwidth_analysis: bool = False, save_figures: bool = True, save_dir: str = "") -> None:
         """
@@ -1115,16 +1012,13 @@ class CrossRingModel(BaseNoCModel):
         # 如果save_dir为None或空字符串，禁用所有保存功能
         if not save_dir:
             save_dir = ""
-            self.logger.info("save_dir为空，禁用所有文件保存（包括结果文件和图片）")
         else:
             save_dir = f"{save_dir}{self.traffic_scheduler.get_save_filename()}"
-            self.logger.info(f"save_dir不为空，将保存结果文件到: {save_dir}")
-            
+
         # 图片保存需要同时满足save_dir不为空且save_figures为True
         actual_save_figures = bool(save_dir) and save_figures
 
         self._viz_config.update({"flow_distribution": flow_distribution, "bandwidth_analysis": bandwidth_analysis, "save_figures": actual_save_figures, "save_dir": save_dir})
-        self.logger.info(f"可视化配置已更新: 流量分布={flow_distribution}, 带宽分析={bandwidth_analysis}, 保存图片={actual_save_figures}, 保存目录={save_dir}")
 
     def print_debug_status(self) -> None:
         """打印调试状态"""
@@ -1165,7 +1059,7 @@ class CrossRingModel(BaseNoCModel):
                 return self.ip_interfaces[node_id][ip_type]
 
             # 精确匹配失败，报错
-            self.logger.error(f"未找到指定IP接口: 节点{node_id}的{ip_type}")
+            raise ValueError(f"未找到指定IP接口: 节点{node_id}的{ip_type}")
             return None
         else:
             # 获取该节点所有IP接口
@@ -1173,8 +1067,8 @@ class CrossRingModel(BaseNoCModel):
                 node_interfaces = list(self.ip_interfaces[node_id].values())
                 if node_interfaces:
                     return node_interfaces[0]
-            
-            self.logger.error(f"节点{node_id}没有任何IP接口")
+
+            raise ValueError(f"节点{node_id}没有任何IP接口")
             return None
 
     def _find_ip_interface_for_request(self, node_id: NodeId, req_type: str, ip_type: str = None) -> Optional[CrossRingIPInterface]:
@@ -1185,7 +1079,7 @@ class CrossRingModel(BaseNoCModel):
         # 无指定IP类型时，优先选择DMA类IP (RN端)
         all_ips = [ip for key, ip in self._ip_registry.items() if ip.node_id == node_id]
         if not all_ips:
-            self.logger.error(f"节点{node_id}没有任何IP接口可用于请求")
+            raise ValueError(f"节点{node_id}没有任何IP接口可用于请求")
             return None
 
         preferred_ips = [ip for ip in all_ips if ip.ip_type.startswith(("gdma", "sdma", "cdma"))]
@@ -1193,7 +1087,6 @@ class CrossRingModel(BaseNoCModel):
             return preferred_ips[0]
 
         # 没有DMA类IP时报警告但仍可使用其他IP
-        self.logger.warning(f"节点{node_id}没有适合的DMA类IP用于{req_type}请求，使用{all_ips[0].ip_type}")
         return all_ips[0]
 
     def _find_ip_interface_for_response(self, node_id: NodeId, req_type: str, ip_type: str = None) -> Optional[CrossRingIPInterface]:
@@ -1204,7 +1097,7 @@ class CrossRingModel(BaseNoCModel):
         # 无指定IP类型时，优先选择存储类IP (SN端)
         all_ips = [ip for key, ip in self._ip_registry.items() if ip.node_id == node_id]
         if not all_ips:
-            self.logger.error(f"节点{node_id}没有任何IP接口可用于响应")
+            raise ValueError(f"节点{node_id}没有任何IP接口可用于响应")
             return None
 
         preferred_ips = [ip for ip in all_ips if ip.ip_type in ["ddr", "l2m"]]
@@ -1212,7 +1105,6 @@ class CrossRingModel(BaseNoCModel):
             return preferred_ips[0]
 
         # 没有存储类IP时报警告但仍可使用其他IP
-        self.logger.warning(f"节点{node_id}没有适合的存储类IP用于{req_type}响应，使用{all_ips[0].ip_type}")
         return all_ips[0]
 
     def run_file_simulation(
@@ -1232,7 +1124,6 @@ class CrossRingModel(BaseNoCModel):
         Returns:
             包含仿真结果和分析的字典
         """
-        self.logger.info(f"开始基于文件的仿真: {traffic_file_path}")
 
         # 设置TrafficScheduler
         import os
@@ -1245,14 +1136,12 @@ class CrossRingModel(BaseNoCModel):
             traffic_status = self.get_traffic_status()
 
             if not traffic_status.get("has_pending", False):
-                self.logger.warning("没有成功加载任何请求")
                 return {"success": False, "message": "No requests loaded from file"}
 
             loaded_count = traffic_status.get("active_traffics", 0)
-            self.logger.info(f"TrafficScheduler已设置，准备处理traffic文件: {traffic_filename}")
 
         except Exception as e:
-            self.logger.error(f"设置TrafficScheduler失败: {e}")
+            raise RuntimeError(f"设置TrafficScheduler失败: {e}")
             return {"success": False, "message": f"Failed to setup TrafficScheduler: {e}"}
 
         # 运行仿真（TrafficScheduler会自动在合适的周期注入请求）
@@ -1276,7 +1165,9 @@ class CrossRingModel(BaseNoCModel):
             "cycle_accurate": cycle_accurate,
         }
 
-    def analyze_simulation_results(self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output", verbose: bool = True) -> Dict[str, Any]:
+    def analyze_simulation_results(
+        self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output", verbose: bool = True
+    ) -> Dict[str, Any]:
         """
         分析仿真结果 - 调用CrossRing专用分析器
 
@@ -1314,7 +1205,9 @@ class CrossRingModel(BaseNoCModel):
             timestamped_dir = ""
 
         analyzer = ResultAnalyzer()
-        analysis_results = analyzer.analyze_noc_results(self.request_tracker, self.config, self, results, enable_visualization, save_results, timestamped_dir, save_figures, verbose)
+        analysis_results = analyzer.analyze_noc_results(
+            self.request_tracker, self.config, self, results, enable_visualization, save_results, timestamped_dir, save_figures, verbose
+        )
 
         # ResultAnalyzer现在会根据save_figures参数直接处理显示或保存
 
@@ -1323,8 +1216,6 @@ class CrossRingModel(BaseNoCModel):
     def _generate_and_display_charts(self, analysis_results: Dict[str, Any]) -> None:
         """生成并显示图表（不保存到文件）"""
         import matplotlib.pyplot as plt
-
-        self.logger.info("生成并显示可视化图表...")
 
         try:
             # 生成带宽分析图表
@@ -1336,7 +1227,6 @@ class CrossRingModel(BaseNoCModel):
                 self._show_flow_distribution_chart(analysis_results)
 
         except Exception as e:
-            self.logger.warning(f"生成可视化图表时出错: {e}")
             import traceback
 
             traceback.print_exc()
@@ -1346,7 +1236,6 @@ class CrossRingModel(BaseNoCModel):
         import matplotlib.pyplot as plt
 
         if "带宽指标" not in analysis_results:
-            self.logger.warning("分析结果中没有找到带宽指标数据")
             return
 
         bandwidth_data = analysis_results["带宽指标"]
@@ -1385,7 +1274,6 @@ class CrossRingModel(BaseNoCModel):
             metrics = analyzer.convert_tracker_to_request_info(self.request_tracker, self.config)
 
             if not metrics:
-                self.logger.warning("无法生成请求度量数据，无法绘制流量分布图")
                 self._show_simple_latency_chart(analysis_results)
                 return
 
@@ -1393,13 +1281,9 @@ class CrossRingModel(BaseNoCModel):
             # 显示模式，不保存到文件
             chart_path = analyzer.plot_traffic_distribution(model=self, metrics=metrics, save_dir="", mode="total", save_figures=False, verbose=True)  # 不保存  # 不保存，直接显示
 
-            self.logger.info("📊 流量分布图表已显示（包含节点IP带宽和链路带宽）")
-
         except Exception as e:
-            self.logger.warning(f"显示流量分布图表失败: {e}")
             import traceback
 
-            self.logger.debug(f"错误详情: {traceback.format_exc()}")
             # 回退到简单的延迟图表
             self._show_simple_latency_chart(analysis_results)
 
@@ -1408,7 +1292,6 @@ class CrossRingModel(BaseNoCModel):
         import matplotlib.pyplot as plt
 
         if "延迟指标" not in analysis_results:
-            self.logger.warning("分析结果中没有找到延迟指标数据")
             return
 
         latency_data = analysis_results["延迟指标"]
@@ -1436,37 +1319,6 @@ class CrossRingModel(BaseNoCModel):
         plt.tight_layout()
         plt.show()
         print("📊 延迟分布图表已显示")
-
-    def _display_visualization_results(self, analysis_results: Dict[str, Any]) -> None:
-        """显示可视化结果而不保存到文件"""
-        import matplotlib.pyplot as plt
-
-        self.logger.info("显示可视化图表...")
-
-        try:
-            # 检查是否有生成的图表文件
-            if "可视化文件" in analysis_results and "生成的图表" in analysis_results["可视化文件"]:
-                chart_files = analysis_results["可视化文件"]["生成的图表"]
-
-                if chart_files:
-                    self.logger.info(f"发现 {len(chart_files)} 个图表文件，正在显示...")
-
-                    # 由于图片已经保存了，我们需要重新生成用于显示
-                    # 这里我们可以简单地提示用户图表已生成
-                    print("📊 图表已生成，可以在以下文件中查看:")
-                    for chart_file in chart_files:
-                        print(f"  - {chart_file}")
-
-                    # TODO: 未来可以增加直接显示图片的功能
-                    # 需要修改ResultAnalyzer来返回matplotlib figure对象而不仅仅是保存文件
-
-                else:
-                    self.logger.info("没有生成图表文件")
-            else:
-                self.logger.info("分析结果中没有找到可视化文件信息")
-
-        except Exception as e:
-            self.logger.warning(f"显示可视化结果时出错: {e}")
 
     def _analyze_ip_interfaces(self, ip_stats: Dict[str, Any]) -> Dict[str, Any]:
         """分析IP接口统计"""
@@ -1605,7 +1457,6 @@ class CrossRingModel(BaseNoCModel):
 
     def _register_all_fifos_for_statistics(self) -> None:
         """注册所有FIFO到统计收集器（重写基类方法）"""
-        self.logger.info("注册FIFO统计收集...")
 
         # 注册IP接口的FIFO
         for ip_id, ip_interface in self.ip_interfaces.items():
@@ -1720,7 +1571,6 @@ class CrossRingModel(BaseNoCModel):
 
         # 统计注册的FIFO数量
         total_fifos = len(self.fifo_stats_collector.fifo_registry)
-        self.logger.info(f"已注册 {total_fifos} 个FIFO到统计收集器")
 
     def export_fifo_statistics(self, filename: str = None, output_dir: str = "results") -> str:
         """
@@ -1741,14 +1591,17 @@ class CrossRingModel(BaseNoCModel):
 
     def __del__(self):
         """析构函数"""
-        if hasattr(self, "logger"):
-            self.logger.debug("CrossRing模型对象被销毁")
 
     # ========== 实现BaseNoCModel抽象方法 ==========
 
     def __repr__(self) -> str:
         """字符串表示"""
-        return f"CrossRingModel({self.config.config_name}, " f"{self.config.NUM_ROW}x{self.config.NUM_COL}, " f"cycle={self.cycle}, " f"active_requests={self.get_total_active_requests()})"
+        return (
+            f"CrossRingModel({self.config.config_name}, "
+            f"{self.config.NUM_ROW}x{self.config.NUM_COL}, "
+            f"cycle={self.cycle}, "
+            f"active_requests={self.get_total_active_requests()})"
+        )
 
     # ========== 统一接口方法（用于兼容性） ==========
 
@@ -1826,7 +1679,6 @@ class CrossRingModel(BaseNoCModel):
                     # 标记为完成
                     self.request_tracker.update_request_state(packet_id, RequestState.COMPLETED, self.cycle)
                     lifecycle.completed_cycle = self.cycle
-                    self.logger.debug(f"包 {packet_id} 在周期 {self.cycle} 完成，延迟 {latency} 周期")
 
         # ========== 调试功能接口 ==========
 
@@ -1846,7 +1698,6 @@ class CrossRingModel(BaseNoCModel):
             sleep_time: 休眠时间（秒），0表示不休眠
         """
         self.debug_config["sleep_time"] = sleep_time
-        self.logger.info(f"设置debug休眠时间: {sleep_time}秒/周期")
 
     def _collect_and_export_link_statistics(self, save_dir: str, timestamp: int = None) -> None:
         """收集所有链路的带宽统计数据并导出CSV文件"""
@@ -1921,20 +1772,12 @@ class CrossRingModel(BaseNoCModel):
                     writer.writeheader()
                     writer.writerows(all_link_stats)
 
-                self.logger.info(f"📊 链路带宽统计已导出到: {csv_file_path}")
-                self.logger.info(f"   总共导出 {len(all_link_stats)} 条链路统计记录")
-                self.logger.info(f"   统计说明：每个flit固定128字节，使用链路末端slice作为观测点")
-
                 # 打印链路带宽汇总
                 # self._print_link_bandwidth_summary(all_link_stats)
-            else:
-                self.logger.warning("没有收集到链路统计数据")
 
         except Exception as e:
-            self.logger.error(f"导出链路统计数据失败: {e}")
+            print(f"ERROR: 导出链路统计数据失败: {e}")
             import traceback
-
-            self.logger.debug(f"错误详情: {traceback.format_exc()}")
 
     def _print_link_bandwidth_summary(self, link_stats: List[Dict[str, Any]]) -> None:
         """打印链路带宽统计汇总"""

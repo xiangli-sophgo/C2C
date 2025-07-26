@@ -42,7 +42,6 @@ def _check_base_dependencies():
     """检查基础模块依赖"""
     try:
         import numpy
-        import logging
         from collections import deque, defaultdict
         from abc import ABC, abstractmethod
         from dataclasses import dataclass, field
@@ -54,8 +53,3 @@ def _check_base_dependencies():
 # 执行依赖检查
 _check_base_dependencies()
 
-# 模块级日志
-import logging
-
-_logger = logging.getLogger(__name__)
-_logger.info(f"NoC基础模块加载完成 (v{__version__})")

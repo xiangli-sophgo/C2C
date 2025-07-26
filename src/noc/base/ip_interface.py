@@ -12,7 +12,6 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Any, Deque, Type
 from collections import deque, defaultdict
 from abc import ABC, abstractmethod
-import logging
 
 from .flit import BaseFlit
 from src.noc.utils.types import NodeId
@@ -354,7 +353,6 @@ class BaseIPInterface(ABC):
         self.token_bucket = None  # 将由子类根据IP类型初始化
 
         # 日志
-        self.logger = logging.getLogger(f"{self.__class__.__name__}_{ip_type}_{node_id}")
 
         # 注册到模型
         if hasattr(model, "register_ip_interface"):
@@ -395,7 +393,6 @@ class BaseIPInterface(ABC):
             bucket_size: 桶的最大容量
         """
         self.token_bucket = TokenBucket(rate=rate, bucket_size=bucket_size)
-        self.logger.info(f"为IP {self.ip_type} 设置了令牌桶: rate={rate}, bucket_size={bucket_size}")
 
 
     def step(self, cycle: int) -> None:

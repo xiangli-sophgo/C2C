@@ -10,3 +10,7 @@
 8,2,gdma_0,4,ddr_0,W,4
 8,6,gdma_0,4,ddr_0,W,4
 8,8,gdma_0,4,ddr_0,W,4
+12,0,gdma_0,4,ddr_0,W,4
+12,2,gdma_0,4,ddr_0,W,4
+12,6,gdma_0,4,ddr_0,W,4
+12,8,gdma_0,4,ddr_0,W,4

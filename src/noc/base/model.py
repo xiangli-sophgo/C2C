@@ -8,7 +8,6 @@ IP接口管理、性能统计等。各拓扑可以继承并扩展特有功能。
 from __future__ import annotations
 from typing import Dict, List, Any, Optional, Type, Tuple
 from abc import ABC, abstractmethod
-import logging
 import os
 import time
 from collections import defaultdict
@@ -87,8 +86,6 @@ class BaseNoCModel(ABC):
         self.event_queue = []
 
         # 日志配置 - 默认设置为CRITICAL级别，只有在明确调用setup_debug时才显示信息
-        self.logger = logging.getLogger(f"{self.__class__.__name__}_{model_name}")
-        self.logger.setLevel(logging.CRITICAL)  # 默认不显示任何信息
 
         # 调试配置
         self.debug_config = {
@@ -111,7 +108,6 @@ class BaseNoCModel(ABC):
         self.packet_id_map = {}  # {packet_id: {source, destination, req_type, burst_length}}
 
         # 只在明确启用调试模式时才显示这些信息
-        # self.logger.info(f"NoC模型初始化: {model_name}")
 
     # ========== 抽象方法（拓扑特定实现） ==========
 
@@ -169,46 +165,25 @@ class BaseNoCModel(ABC):
         """注册所有FIFO到统计收集器（子类可重写）"""
         # 基类提供默认实现，子类可以重写此方法
         fifos = self._get_all_fifos_for_statistics()
-        if self.debug_enabled:
-            self.logger.info(f"注册了 {len(fifos)} 个FIFO到统计收集器")
 
     # ========== 通用方法 ==========
 
     def initialize_model(self) -> None:
         """初始化模型"""
         try:
-            if self.debug_enabled:
-                self.logger.info("开始初始化NoC模型...")
 
             # 创建拓扑实例
-            if self.debug_enabled:
-                self.logger.info("创建拓扑实例...")
             self.topology = self._create_topology_instance(self.config)
-            if self.debug_enabled:
-                self.logger.info(f"拓扑实例创建成功: {type(self.topology).__name__}")
 
             # 设置拓扑网络
-            if self.debug_enabled:
-                self.logger.info("调用_setup_topology_network...")
             self._setup_topology_network()
-            if self.debug_enabled:
-                self.logger.info("_setup_topology_network完成")
 
             # IP接口创建延后到setup_traffic_scheduler中进行
-            if self.debug_enabled:
-                self.logger.info("IP接口创建将在setup_traffic_scheduler时根据traffic文件动态进行")
 
             # 初始化Flit对象池
-            if self.debug_enabled:
-                self.logger.info("调用_setup_flit_pools...")
             self._setup_flit_pools()
-            if self.debug_enabled:
-                self.logger.info("_setup_flit_pools完成")
 
-            if self.debug_enabled:
-                self.logger.info(f"NoC模型初始化完成: {len(self.ip_interfaces)}个IP接口")
         except Exception as e:
-            self.logger.error(f"NoC模型初始化失败: {e}")
             import traceback
 
             traceback.print_exc()
@@ -226,9 +201,6 @@ class BaseNoCModel(ABC):
         """基于traffic文件分析，只创建需要的IP接口"""
         from src.noc.utils.traffic_scheduler import TrafficFileReader
 
-        if self.debug_enabled:
-            self.logger.info(f"开始优化IP接口创建，分析traffic文件: {self.traffic_file_path}")
-
         try:
             # 分析traffic文件获取需要的IP接口
             traffic_reader = TrafficFileReader(
@@ -242,16 +214,10 @@ class BaseNoCModel(ABC):
             ip_info = traffic_reader.get_required_ip_interfaces()
             required_ips = ip_info["required_ips"]
 
-            if self.debug_enabled:
-                self.logger.info(f"Traffic文件分析完成: 需要 {len(required_ips)} 个IP接口，涉及 {len(ip_info['used_nodes'])} 个节点")
-                self.logger.info(f"Required IPs: {required_ips}")
-
             # 调用子类实现的创建方法
             self._create_specific_ip_interfaces(required_ips)
 
         except Exception as e:
-            if self.debug_enabled:
-                self.logger.warning(f"Traffic文件分析失败: {e}，回退到全量创建模式")
             import traceback
 
             traceback.print_exc()
@@ -260,14 +226,12 @@ class BaseNoCModel(ABC):
     def _setup_all_ip_interfaces(self) -> None:
         """创建所有IP接口（传统模式）- 由子类实现"""
         # 默认实现为空，由子类重写
-        if self.debug_enabled:
-            self.logger.debug("使用默认的IP接口创建（需要子类实现）")
+        pass
 
     def _create_specific_ip_interfaces(self, required_ips: List[Tuple[int, str]]) -> None:
         """创建特定的IP接口 - 由子类实现"""
         # 默认实现为空，由子类重写
-        if self.debug_enabled:
-            self.logger.debug("创建特定IP接口（需要子类实现）")
+        pass
 
     def _setup_flit_pools(self) -> None:
         """设置Flit对象池"""
@@ -283,19 +247,13 @@ class BaseNoCModel(ABC):
         """
         # 验证IP接口的属性
         if not hasattr(ip_interface, "ip_type") or not ip_interface.ip_type:
-            if self.debug_enabled:
-                self.logger.warning(f"IP接口缺少ip_type属性: {ip_interface}")
             return
 
         if not hasattr(ip_interface, "node_id") or ip_interface.node_id is None:
-            if self.debug_enabled:
-                self.logger.warning(f"IP接口缺少node_id属性: {ip_interface}")
             return
 
         key = f"{ip_interface.ip_type}_{ip_interface.node_id}"
         self._ip_registry[key] = ip_interface
-        if self.debug_enabled:
-            self.logger.debug(f"注册IP接口: {key}")
 
     def step(self) -> None:
         """执行一个仿真周期（使用两阶段执行模型）"""
@@ -381,8 +339,6 @@ class BaseNoCModel(ABC):
 
         cycle_time_ns = 1.0 / network_freq  # 1个周期的纳秒数
 
-        self.logger.info(f"开始NoC仿真: max_time={max_time_ns}ns (max_cycles={max_cycles}), 网络频率={network_freq}GHz")
-
         # 如果启用详细模式，打印traffic统计信息
         if verbose and hasattr(self, "traffic_scheduler") and self.traffic_scheduler:
             self._print_traffic_statistics()
@@ -399,11 +355,9 @@ class BaseNoCModel(ABC):
                 if cycle == stats_start_cycle:
                     stats_enabled = True
                     self._reset_statistics()
-                    self.logger.info(f"周期 {cycle}: 开始收集统计数据")
 
                 # 检查仿真结束条件（总是检查）
                 if self._should_stop_simulation():
-                    self.logger.info(f"周期 {cycle}: 检测到仿真完成")
                     break
 
                 # 定期输出进度
@@ -419,13 +373,9 @@ class BaseNoCModel(ABC):
                         # 计算时间（ns）
                         current_time_ns = cycle * cycle_time_ns
 
-                        self.logger.info(f"仿真进度: {current_time_ns:.1f}ns/{max_time_ns:.1f}ns (周期 {cycle}/{max_cycles}), 活跃请求={active_requests}, 完成请求={completed_requests}")
-
         except KeyboardInterrupt:
-            self.logger.warning("仿真被用户中断")
-
+            raise KeyboardInterrupt
         except Exception as e:
-            self.logger.error(f"仿真过程中发生错误: {e}")
             raise
 
         finally:
@@ -435,7 +385,6 @@ class BaseNoCModel(ABC):
 
         # 生成仿真结果
         results = self._generate_simulation_results(stats_start_cycle)
-        self.logger.info(f"NoC仿真完成: 总周期={self.cycle}")
 
         # 如果启用详细模式，打印最终统计信息
         if verbose:
@@ -444,11 +393,10 @@ class BaseNoCModel(ABC):
         # 结果分析（如果启用）
         if results_analysis and hasattr(self, "analyze_simulation_results"):
             try:
-                self.logger.info("执行结果分析...")
                 analysis_results = self.analyze_simulation_results(results, enable_visualization=True, save_results=True, verbose=verbose)
                 results["analysis"] = analysis_results
             except Exception as e:
-                self.logger.warning(f"结果分析失败: {e}")
+                print(f"Error during results analysis: {e}")
 
         return results
 
@@ -622,7 +570,6 @@ class BaseNoCModel(ABC):
     def _log_periodic_status(self) -> None:
         """定期状态日志"""
         active_requests = self.get_total_active_requests()
-        self.logger.debug(f"周期 {self.cycle}: " f"活跃请求={active_requests}, " f"总吞吐={self.global_stats['throughput']:.2f}, " f"平均延迟={self.global_stats['average_latency']:.2f}")
 
     def get_total_active_requests(self) -> int:
         """获取总活跃请求数"""
@@ -654,7 +601,7 @@ class BaseNoCModel(ABC):
             active_requests = len(self.request_tracker.active_requests)
             completed_requests = len(self.request_tracker.completed_requests)
             injected_requests = active_requests + completed_requests
-            
+
             # 统计响应flit数量
             for req_info in self.request_tracker.active_requests.values():
                 response_count += len(req_info.response_flits)
@@ -665,7 +612,7 @@ class BaseNoCModel(ABC):
         read_finish_count = 0
         write_finish_count = 0
         trans_finish_count = completed_requests
-        
+
         if hasattr(self, "request_tracker") and self.request_tracker:
             for req_info in self.request_tracker.completed_requests.values():
                 if hasattr(req_info, "op_type"):
@@ -731,7 +678,6 @@ class BaseNoCModel(ABC):
                                 except (ValueError, IndexError):
                                     continue
                 except Exception as e:
-                    self.logger.warning(f"无法读取traffic文件 {traffic_file}: {e}")
                     continue
 
         total_req = total_read_req + total_write_req
@@ -764,7 +710,7 @@ class BaseNoCModel(ABC):
             active_requests = len(self.request_tracker.active_requests)
             completed_requests = len(self.request_tracker.completed_requests)
             injected_requests = active_requests + completed_requests
-            
+
             # 统计响应flit数量
             for req_info in self.request_tracker.active_requests.values():
                 response_count += len(req_info.response_flits)
@@ -829,15 +775,6 @@ class BaseNoCModel(ABC):
 
         # 找到合适的IP接口
         ip_interface = self._find_ip_interface_for_request(source, req_type, ip_type)
-        if ip_interface:
-            self.logger.debug(f"为source={source}, ip_type={ip_type}找到IP: node_id={ip_interface.node_id}, ip_type={getattr(ip_interface, 'ip_type', 'unknown')}")
-
-        if not ip_interface:
-            if ip_type:
-                self.logger.warning(f"源节点 {source} 没有找到对应的IP接口 (类型: {ip_type})")
-            else:
-                self.logger.warning(f"源节点 {source} 没有找到对应的IP接口")
-            return packet_ids
 
         for i in range(count):
             # 生成简单的数字packet_id
@@ -868,8 +805,6 @@ class BaseNoCModel(ABC):
 
             if success:
                 packet_ids.append(packet_id)
-            else:
-                self.logger.warning(f"测试请求注入失败: {packet_id}")
 
         return packet_ids
 
@@ -907,16 +842,12 @@ class BaseNoCModel(ABC):
             # 精确匹配指定IP类型
             matching_ips = [ip for ip in self._ip_registry.values() if ip.node_id == node_id and getattr(ip, "ip_type", "").startswith(ip_type)]
             if not matching_ips:
-                self.logger.error(f"未找到指定IP类型: node_id={node_id}, ip_type={ip_type}")
                 # 调试：显示当前注册的所有IP
-                self.logger.debug(f"当前注册的IP: {[(ip.node_id, getattr(ip, 'ip_type', 'unknown')) for ip in self._ip_registry.values()]}")
-                self.logger.debug(f"_ip_registry的键: {list(self._ip_registry.keys())}")
                 return None
         else:
             # 获取该节点的所有IP接口
             matching_ips = [ip for ip in self._ip_registry.values() if ip.node_id == node_id]
             if not matching_ips:
-                self.logger.error(f"节点{node_id}没有任何IP接口")
                 return None
 
         return matching_ips[0]
@@ -941,8 +872,6 @@ class BaseNoCModel(ABC):
         self.traffic_scheduler = TrafficScheduler(self.config, file_path)
         self.traffic_scheduler.setup_parallel_chains(traffic_chains)
         self.traffic_scheduler.start_initial_traffics()
-
-        self.logger.info(f"TrafficScheduler已设置: {len(traffic_chains)}条链")
 
     def _inject_traffic_requests(self, ready_requests: List[Tuple]) -> int:
         """
@@ -980,7 +909,6 @@ class BaseNoCModel(ABC):
                         self.traffic_scheduler.update_traffic_stats(traffic_id, "injected_req")
 
             except (ValueError, IndexError) as e:
-                self.logger.warning(f"处理traffic请求失败: {e}")
                 continue
 
         return injected_count
@@ -1035,8 +963,6 @@ class BaseNoCModel(ABC):
         self.debug_config["trace_channels"] = trace_channels or ["req", "rsp", "data"]
         self.debug_config["detailed_stats"] = detailed_stats
 
-        self.logger.info(f"启用调试跟踪: flits={trace_flits}, channels={trace_channels}")
-
     def setup_debug(self, level: int = 1, trace_packets: List[str] = None, sleep_time: float = 0.0) -> None:
         """启用调试模式
 
@@ -1045,9 +971,7 @@ class BaseNoCModel(ABC):
             trace_packets: 要追踪的特定包ID列表
             sleep_time: 每步的睡眠时间(秒)
         """
-        # 设置logger级别为INFO，这样调试信息才能显示
-        self.logger.setLevel(logging.INFO)
-        
+
         self.debug_enabled = True
         self.debug_config["sleep_time"] = sleep_time
 
@@ -1061,37 +985,25 @@ class BaseNoCModel(ABC):
         if hasattr(self.request_tracker, "enable_debug"):
             self.request_tracker.enable_debug(level, trace_packets)
 
-        # 显示模型初始化信息（之前被注释的）
-        self.logger.info(f"NoC模型初始化: {self.model_name}")
-        self.logger.info(f"调试模式已启用，级别: {level}")
-        if trace_packets:
-            self.logger.info(f"追踪包: {trace_packets}")
-        if sleep_time > 0:
-            self.logger.info(f"调试睡眠时间: {sleep_time}s")
-
     def track_packet(self, packet_id: str) -> None:
         """添加要追踪的包"""
         self.trace_packets.add(packet_id)
         if hasattr(self.request_tracker, "track_packet"):
             self.request_tracker.track_packet(packet_id)
-        self.logger.debug(f"开始追踪包: {packet_id}")
 
     def disable_debug(self) -> None:
         """禁用调试模式"""
         self.debug_enabled = False
         self.trace_packets.clear()
         self.debug_config["sleep_time"] = 0.0
-        self.logger.info("调试模式已禁用")
 
     def add_debug_packet(self, packet_id) -> None:
         """添加要跟踪的packet_id"""
         self.trace_packets.add(packet_id)
-        self.logger.info(f"添加调试跟踪: {packet_id}")
 
     def remove_debug_packet(self, packet_id) -> None:
         """移除跟踪的packet_id"""
         self.trace_packets.discard(packet_id)
-        self.logger.info(f"移除调试跟踪: {packet_id}")
 
     def _should_debug_packet(self, packet_id) -> bool:
         """检查是否应该调试此packet_id"""
@@ -1146,24 +1058,10 @@ class BaseNoCModel(ABC):
 
     def debug_func(self) -> None:
         """主调试函数，每个周期调用（可被子类重写）"""
-        if not self.debug_enabled:
-            return
-
-        # 默认实现：打印基本状态
-        if self.cycle % 100 == 0:  # 每100周期打印一次
-            active_requests = self.get_total_active_requests()
-            self.logger.debug(f"周期 {self.cycle}: 活跃请求={active_requests}")
-
-        # 追踪特定包
-        if self.trace_packets:
-            for packet_id in self.trace_packets:
-                lifecycle = self.request_tracker.get_request_status(packet_id)
-                if lifecycle and lifecycle.current_state != RequestState.COMPLETED:
-                    self.logger.debug(f"追踪包 {packet_id}: 状态={lifecycle.current_state.value}")
+        pass
 
     def cleanup(self) -> None:
         """清理资源"""
-        self.logger.info("开始清理NoC模型资源")
 
         # 清理IP接口
         for ip in self.ip_interfaces.values():
@@ -1175,8 +1073,6 @@ class BaseNoCModel(ABC):
 
         # 清理统计信息
         self.global_stats.clear()
-
-        self.logger.info("NoC模型资源清理完成")
 
     def __repr__(self) -> str:
         """字符串表示"""

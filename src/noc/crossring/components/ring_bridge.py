@@ -9,7 +9,6 @@ CrossRing环形桥接管理。
 """
 
 from typing import Dict, List, Optional, Tuple
-import logging
 
 from src.noc.base.ip_interface import PipelinedFIFO
 from ..flit import CrossRingFlit
@@ -19,7 +18,7 @@ from ..config import CrossRingConfig, RoutingStrategy
 class RingBridge:
     """环形桥接管理类。"""
 
-    def __init__(self, node_id: int, coordinates: Tuple[int, int], config: CrossRingConfig, logger: logging.Logger, topology=None):
+    def __init__(self, node_id: int, coordinates: Tuple[int, int], config: CrossRingConfig, topology=None):
         """
         初始化环形桥接管理器。
 
@@ -27,18 +26,16 @@ class RingBridge:
             node_id: 节点ID
             coordinates: 节点坐标
             config: CrossRing配置
-            logger: 日志记录器
             topology: 拓扑对象（用于路由表查询）
         """
         self.node_id = node_id
         self.coordinates = coordinates
         self.config = config
-        self.logger = logger
         self.topology = topology
 
         # 获取FIFO配置
-        self.rb_in_depth = getattr(config, "RB_IN_DEPTH", 16)
-        self.rb_out_depth = getattr(config, "RB_OUT_DEPTH", 16)  # 增加输出FIFO深度以缓解死锁
+        self.rb_in_depth = config.fifo_config.RB_IN_FIFO_DEPTH
+        self.rb_out_depth = config.fifo_config.RB_OUT_FIFO_DEPTH
 
         # ring_bridge输入FIFO
         self.ring_bridge_input_fifos = self._create_input_fifos()
@@ -120,10 +117,9 @@ class RingBridge:
         if input_fifo.ready_signal():
             success = input_fifo.write_input(flit)
             if success:
-                self.logger.debug(f"节点{self.node_id}成功添加flit到ring_bridge输入{direction}_{channel}")
+                pass
             return success
         else:
-            self.logger.debug(f"节点{self.node_id}的ring_bridge输入{direction}_{channel}已满")
             return False
 
     def get_eq_output_flit(self, channel: str) -> Optional[CrossRingFlit]:
@@ -223,7 +219,6 @@ class RingBridge:
                 arb_state = self.ring_bridge_arbitration_state[channel]
                 arb_state["last_served_input"][input_source] = cycle
 
-                self.logger.debug(f"节点{self.node_id}: ring_bridge成功传输flit {flit.packet_id} 从{input_source}到{output_direction}")
 
     def _peek_flit_from_ring_bridge_input(self, input_source: str, channel: str, inject_direction_fifos: Dict) -> Optional[CrossRingFlit]:
         """查看ring_bridge输入中的flit（不取出）。"""
@@ -367,7 +362,6 @@ class RingBridge:
                 arb_state = self.ring_bridge_arbitration_state[channel]
                 arb_state["last_served_output"][output_direction] = cycle
 
-                self.logger.debug(f"节点{self.node_id}成功将{channel}通道flit分配到ring_bridge输出{output_direction}")
                 return True
 
         return False

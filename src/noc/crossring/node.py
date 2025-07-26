@@ -9,11 +9,10 @@ CrossRing节点重构版本 - 组件化设计。
 """
 
 from typing import Dict, List, Any, Tuple, Optional
-import logging
 
 from src.noc.crossring.flit import CrossRingFlit
 from src.noc.crossring.config import CrossRingConfig, RoutingStrategy
-from src.noc.crossring.components.cross_point import CrossRingCrossPoint, CrossPointDirection
+from src.noc.crossring.components.cross_point import CrossPoint, CrossPointDirection
 from src.noc.crossring.components.inject_queue import InjectQueue
 from src.noc.crossring.components.eject_queue import EjectQueue
 from src.noc.crossring.components.ring_bridge import RingBridge
@@ -29,38 +28,35 @@ class CrossRingNode:
     简化的组件化设计，主要负责协调各个组件。
     """
 
-    def __init__(self, node_id: int, coordinates: Tuple[int, int], config: CrossRingConfig, logger: logging.Logger, topology=None):
+    def __init__(self, node_id: int, coordinates: Tuple[int, int], config: CrossRingConfig, topology=None):
         """初始化CrossRing节点。"""
         self.node_id = node_id
         self.coordinates = coordinates
         self.config = config
-        self.logger = logger
         self.topology = topology
 
         # 初始化组件
-        self.inject_queue = InjectQueue(node_id, coordinates, config, logger, topology=topology)
-        self.eject_queue = EjectQueue(node_id, coordinates, config, logger)
-        self.ring_bridge = RingBridge(node_id, coordinates, config, logger, topology=topology)
+        self.inject_queue = InjectQueue(node_id, coordinates, config, topology=topology)
+        self.eject_queue = EjectQueue(node_id, coordinates, config)
+        self.ring_bridge = RingBridge(node_id, coordinates, config, topology=topology)
 
         # 初始化CrossPoint实例
-        self.horizontal_crosspoint = CrossRingCrossPoint(
+        self.horizontal_crosspoint = CrossPoint(
             crosspoint_id=f"node_{node_id}_horizontal",
             node_id=node_id,
             direction=CrossPointDirection.HORIZONTAL,
             config=config,
             coordinates=coordinates,
-            parent_node=self,
-            logger=logger,
+            parent_node=self
         )
 
-        self.vertical_crosspoint = CrossRingCrossPoint(
+        self.vertical_crosspoint = CrossPoint(
             crosspoint_id=f"node_{node_id}_vertical",
             node_id=node_id,
             direction=CrossPointDirection.VERTICAL,
             config=config,
             coordinates=coordinates,
-            parent_node=self,
-            logger=logger,
+            parent_node=self
         )
 
         # 性能统计
@@ -69,8 +65,6 @@ class CrossRingNode:
             "transferred_flits": {"horizontal": 0, "vertical": 0},
             "congestion_events": 0,
         }
-
-        self.logger.debug(f"CrossRing节点初始化: ID={node_id}, 坐标={coordinates}")
 
     @property
     def ip_eject_channel_buffers(self):
@@ -108,7 +102,7 @@ class CrossRingNode:
         """IP获取flit。"""
         return self.eject_queue.get_eject_flit(ip_id, channel)
 
-    def get_crosspoint(self, direction: str) -> Optional[CrossRingCrossPoint]:
+    def get_crosspoint(self, direction: str) -> Optional[CrossPoint]:
         """获取CrossPoint。"""
         if direction == "horizontal":
             return self.horizontal_crosspoint
@@ -140,7 +134,6 @@ class CrossRingNode:
         # 2. CrossPoint计算阶段（先计算弹出决策）
         eject_fifos = self.eject_queue.eject_input_fifos
         inject_fifos = self.inject_queue.inject_direction_fifos
-        self.logger.debug(f"Node {self.node_id} 传递给CrossPoint: eject_fifos['data']['TU'] id={id(eject_fifos['data']['TU'])}")
         self.horizontal_crosspoint.step_compute_phase(cycle, inject_fifos, eject_fifos)
         self.vertical_crosspoint.step_compute_phase(cycle, inject_fifos, eject_fifos)
 
@@ -189,7 +182,6 @@ class CrossRingNode:
         """启用或禁用CrossPoint注入调试输出"""
         self.horizontal_crosspoint.enable_injection_debug(enabled)
         self.vertical_crosspoint.enable_injection_debug(enabled)
-        self.logger.debug(f"Node {self.node_id} CrossPoint注入调试模式: {'启用' if enabled else '禁用'}")
 
     def get_stats(self) -> Dict[str, Any]:
         """获取节点统计信息。"""
