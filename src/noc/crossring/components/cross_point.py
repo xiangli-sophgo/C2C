@@ -205,6 +205,7 @@ class CrossPoint:
                 "data": {"added": 0, "removed": 0, "arbitrations": 0},
             },
             "entry_allocations": {"req": {"T0": 0, "T1": 0, "T2": 0}, "rsp": {"T0": 0, "T1": 0, "T2": 0}, "data": {"T0": 0, "T1": 0, "T2": 0}},
+            "entry_releases": {"req": {"T0": 0, "T1": 0, "T2": 0}, "rsp": {"T0": 0, "T1": 0, "T2": 0}, "data": {"T0": 0, "T1": 0, "T2": 0}},
             # I-Tag机制统计
             "itag_triggers": {"req": 0, "rsp": 0, "data": 0},
             "itag_reservations": {"req": 0, "rsp": 0, "data": 0},
@@ -319,6 +320,14 @@ class CrossPoint:
 
                 # 判断是否应该下环以及下环目标
                 should_eject, eject_target = self._should_eject_flit_unified(flit, direction)
+
+                # 调试：跟踪节点7的flit处理
+                if self.parent_node and self.parent_node.node_id == 7 and hasattr(flit, "packet_id") and flit.packet_id == 1:
+                    current_pos = getattr(flit, "current_position", "?")
+                    print(
+                        f"🔍 节点7 {self.direction.value}CP: flit {flit.packet_id}.{getattr(flit, 'sub_id', '?')} "
+                        f"从{current_pos} 方向{direction} 下环={should_eject} 目标={eject_target}"
+                    )
 
                 if should_eject:
                     if eject_target == "RB":
@@ -470,17 +479,9 @@ class CrossPoint:
 
     def _should_eject_flit_unified(self, flit: CrossRingFlit, arrival_direction: str) -> Tuple[bool, str]:
         """
-        统一的下环决策逻辑 - 基于flit来源方向和目标坐标判断
+        基于路径信息的下环决策逻辑
 
-        CrossRing下环规则：
-        1. 到达目标节点必须下环
-        2. 需要维度转换时下环到Ring Bridge
-        3. 其他情况继续在环路中传输
-
-        下环目标选择：
-        - 水平环来的flit：下环到RB（用于维度转换或本地处理）
-        - 垂直环来的flit：下环到EQ（最终目标，直接到IP）
-        - Ring Bridge来的flit：下环到EQ（已完成维度转换）
+        使用flit的path和current_position来判断是否需要下环
 
         Args:
             flit: 要判断的flit
@@ -492,73 +493,127 @@ class CrossPoint:
         if not self.parent_node:
             return False, ""
 
-        # 检查是否有明确的下环标记
-        if hasattr(flit, "should_eject_at_node") and flit.should_eject_at_node(self.parent_node.node_id):
-            return True, "EQ"  # 明确标记下环的直接到IP
+        current_node = self.parent_node.node_id
+        if flit.packet_id == 10 and flit.flit_id == 2:
+            print(f"🔍 节点{current_node} {self.direction.value}CP: flit {flit.packet_id} 到达")
 
-        # 获取目标坐标和当前坐标
-        if hasattr(flit, "dest_coordinates"):
-            dest_x, dest_y = flit.dest_coordinates
-        else:
-            # 没有坐标信息，检查目标节点ID
-            is_local = (hasattr(flit, "destination") and flit.destination == self.parent_node.node_id) or (
-                hasattr(flit, "dest_node_id") and flit.dest_node_id == self.parent_node.node_id
+        # 调试信息：检查flit的基本属性
+        debug_enabled = hasattr(flit, "packet_id") and str(flit.packet_id).startswith("5")
+        if debug_enabled:
+            print(
+                f"🔍 节点{current_node} {self.direction.value}CP: flit {flit.packet_id}.{getattr(flit, 'flit_index', '?')} "
+                f"从{getattr(flit, 'source', '?')} 方向{arrival_direction} "
+                f"下环=? 目标={getattr(flit, 'destination', getattr(flit, 'dest_node_id', '?'))}"
             )
-            return (is_local, "EQ") if is_local else (False, "")
+            if hasattr(flit, "path"):
+                print(f"    路径={flit.path}, 当前位置在路径中的索引={getattr(flit, 'path_index', '?')}")
 
-        curr_x, curr_y = self.parent_node.coordinates
-
-        # 获取路由策略
-        routing_strategy = getattr(self.parent_node.config, "ROUTING_STRATEGY", "XY")
-        if hasattr(routing_strategy, "value"):
-            routing_strategy = routing_strategy.value
-
-        # 基于来源方向和路由策略的下环判断
-        if self.direction == CrossPointDirection.HORIZONTAL:
-            # 水平CrossPoint处理来自TR/TL的flit
-            if arrival_direction in ["TR", "TL"]:
-                # 检查是否到达目标
-                if dest_x == curr_x and dest_y == curr_y:
-                    return True, "RB"  # 到达目标，通过RB下环到IP
-
-                # 检查是否需要维度转换
-                if routing_strategy == "XY":
-                    if dest_x == curr_x and dest_y != curr_y:
-                        return True, "RB"  # X维度完成，转换到垂直环
-                elif routing_strategy == "YX":
-                    if dest_y != curr_y:
-                        return True, "RB"  # YX路由，需要转换到垂直环
-
-                # 继续在水平环传输
-                return False, ""
+        # 基于路径判断
+        # 检查是否到达最终目标
+        if current_node == flit.path[-1]:  # 路径的最后一个节点是目标
+            if debug_enabled:
+                print(f"    到达路径最终目标节点")
+            # 根据来源方向决定下环目标
+            if arrival_direction in ["TR", "TL"] and self.direction == CrossPointDirection.HORIZONTAL:
+                if debug_enabled:
+                    print(f"    下环决策: True -> RB (水平环到达目标)")
+                return True, "RB"  # 水平环到达目标，通过RB下环
+            elif arrival_direction in ["TU", "TD"] and self.direction == CrossPointDirection.VERTICAL:
+                if debug_enabled:
+                    print(f"    下环决策: True -> EQ (垂直环到达目标)")
+                return True, "EQ"  # 垂直环到达目标，直接下环到IP
             else:
-                # 来自Ring Bridge的flit，直接下环到IP
-                return True, "EQ"
+                if debug_enabled:
+                    print(f"    下环决策: True -> EQ (其他情况)")
+                return True, "EQ"  # Ring Bridge来的，直接到IP
 
-        elif self.direction == CrossPointDirection.VERTICAL:
-            # 垂直CrossPoint处理来自TU/TD的flit
-            if arrival_direction in ["TU", "TD"]:
-                # 检查是否到达目标
-                if dest_x == curr_x and dest_y == curr_y:
-                    return True, "EQ"  # 到达目标，直接下环到IP
+        # 查找当前节点在路径中的位置
+        try:
+            path_index = flit.path.index(current_node)
+            if debug_enabled:
+                print(f"    当前节点在路径索引: {path_index}")
+            if path_index < len(flit.path) - 1:
+                next_node = flit.path[path_index + 1]
+                if debug_enabled:
+                    print(f"    下一跳节点: {next_node}")
+                # 更新path_index
+                if hasattr(flit, "path_index"):
+                    flit.path_index = path_index
 
-                # 检查是否需要维度转换
-                if routing_strategy == "YX":
-                    if dest_y == curr_y and dest_x != curr_x:
-                        return True, "RB"  # Y维度完成，转换到水平环
-                elif routing_strategy == "XY":
-                    if dest_x != curr_x:
-                        return True, "RB"  # XY路由，需要转换到水平环
+                # 判断下一跳是否需要维度转换
+                if self.direction == CrossPointDirection.HORIZONTAL:
+                    # 水平环：如果下一跳需要垂直移动，下环到RB
+                    needs_vertical = self._needs_vertical_move(current_node, next_node)
+                    if debug_enabled:
+                        print(f"    水平环，需要垂直移动: {needs_vertical}")
+                    if arrival_direction in ["TR", "TL"] and needs_vertical:
+                        if debug_enabled:
+                            print(f"    下环决策: True -> RB (维度转换)")
+                        return True, "RB"
+                elif self.direction == CrossPointDirection.VERTICAL:
+                    # 垂直环：如果下一跳需要水平移动，下环到RB
+                    needs_horizontal = self._needs_horizontal_move(current_node, next_node)
+                    if debug_enabled:
+                        print(f"    垂直环，需要水平移动: {needs_horizontal}")
+                    if arrival_direction in ["TU", "TD"] and needs_horizontal:
+                        if debug_enabled:
+                            print(f"    下环决策: True -> RB (维度转换)")
+                        return True, "RB"
+        except ValueError:
+            if debug_enabled:
+                print(f"    当前节点{current_node}不在路径{flit.path}中，检查绕环情况")
+            # 当前节点不在路径中，可能是绕环情况
+            # 对于绕环flit，检查是否到达了路径的目标节点
+            if current_node == flit.path[-1]:  # 绕环到达目标节点
+                if debug_enabled:
+                    print(f"    绕环到达目标节点")
+                if arrival_direction in ["TR", "TL"] and self.direction == CrossPointDirection.HORIZONTAL:
+                    if debug_enabled:
+                        print(f"    下环决策: True -> RB (绕环水平环到达目标)")
+                    return True, "RB"  # 水平环到达目标，通过RB下环
+                elif arrival_direction in ["TU", "TD"] and self.direction == CrossPointDirection.VERTICAL:
+                    if debug_enabled:
+                        print(f"    下环决策: True -> EQ (绕环垂直环到达目标)")
+                    return True, "EQ"  # 垂直环到达目标，直接下环到IP
+                else:
+                    if debug_enabled:
+                        print(f"    下环决策: True -> EQ (绕环其他情况)")
+                    return True, "EQ"  # 默认下环到IP
+            # 否则继续绕环
+            if debug_enabled:
+                print(f"    继续绕环")
+            pass
 
-                # 继续在垂直环传输
-                return False, ""
-            else:
-                # 来自Ring Bridge的flit，直接下环到IP
-                return True, "EQ"
+        # 来自Ring Bridge的flit，直接下环到IP
+        if arrival_direction not in ["TR", "TL", "TU", "TD"]:
+            if debug_enabled:
+                print(f"    下环决策: True -> EQ (来自Ring Bridge)")
+            return True, "EQ"
 
+        # 继续在当前环传输
+        if debug_enabled:
+            print(f"    下环决策: False (继续在当前环传输)")
         return False, ""
 
-    def _can_eject_with_etag_mechanism(self, slot: CrossRingSlot, channel: str, direction: str, fifo_occupancy: int, fifo_depth: int) -> bool:
+    def _needs_vertical_move(self, current_node: int, next_node: int) -> bool:
+        """判断从当前节点到下一节点是否需要垂直移动"""
+        if not self.parent_node or not hasattr(self.parent_node.config, "NUM_COL"):
+            return False
+        num_col = self.parent_node.config.NUM_COL
+        curr_row = current_node // num_col
+        next_row = next_node // num_col
+        return curr_row != next_row
+
+    def _needs_horizontal_move(self, current_node: int, next_node: int) -> bool:
+        """判断从当前节点到下一节点是否需要水平移动"""
+        if not self.parent_node or not hasattr(self.parent_node.config, "NUM_COL"):
+            return False
+        num_col = self.parent_node.config.NUM_COL
+        curr_col = current_node % num_col
+        next_col = next_node % num_col
+        return curr_col != next_col
+
+    def _can_eject_with_etag_mechanism(self, slot: CrossRingSlot, channel: str, direction: str, fifo_occupancy: int, fifo_depth: int, is_compute_phase: bool = True) -> bool:
         """
         完整的E-Tag机制下环判断逻辑
 
@@ -574,12 +629,17 @@ class CrossPoint:
             direction: 方向
             fifo_occupancy: 目标FIFO当前占用
             fifo_depth: 目标FIFO总深度
+            is_compute_phase: 是否为compute阶段（True: 分配entry，False: 只检查已分配）
 
         Returns:
             是否可以下环
         """
         if not slot.is_occupied:
             return False
+
+        # 在update阶段，如果slot已经有分配的entry信息，直接返回True
+        if not is_compute_phase and hasattr(slot, 'allocated_entry_info') and slot.allocated_entry_info:
+            return True
 
         # 获取flit的E-Tag优先级
         priority = slot.etag_priority if slot.etag_marked else PriorityLevel.T2
@@ -591,40 +651,83 @@ class CrossPoint:
 
         entry_manager = self.etag_entry_managers[direction]
 
-        # 根据优先级进行分层entry分配判断
-        if priority == PriorityLevel.T2:
-            # T2级：只能使用T2专用entry
-            can_allocate = entry_manager.can_allocate_entry("T2")
-            return can_allocate
-
-        elif priority == PriorityLevel.T1:
-            # T1级：优先使用T1专用entry，不够时使用T2 entry
-            can_allocate = entry_manager.can_allocate_entry("T1")
-            return can_allocate
-
-        elif priority == PriorityLevel.T0:
-            # T0级：最复杂的分配逻辑
-            if not entry_manager.can_allocate_entry("T0"):
+        # 在compute阶段进行entry分配，在update阶段只做检查
+        if is_compute_phase:
+            # 根据优先级进行分层entry分配判断和实际分配（compute阶段必须分配防止竞争）
+            if priority == PriorityLevel.T2:
+                # T2级：只能使用T2专用entry
+                if entry_manager.can_allocate_entry("T2"):
+                    success = entry_manager.allocate_entry("T2")
+                    if success:
+                        self.stats["entry_allocations"][channel]["T2"] += 1
+                        # 记录分配的entry信息到slot和flit中，用于后续释放
+                        slot.allocated_entry_info = {"direction": direction, "priority": "T2"}
+                        if slot.flit:
+                            slot.flit.allocated_entry_info = {"direction": direction, "priority": "T2"}
+                    return success
                 return False
 
-            # 检查是否有专用entry的方向
-            if entry_manager.has_dedicated_entries:
-                # 计算T0专用entry的可用数量
-                t0_dedicated_available = entry_manager.get_t0_dedicated_available()
+            elif priority == PriorityLevel.T1:
+                # T1级：优先使用T1专用entry，不够时使用T2 entry
+                if entry_manager.can_allocate_entry("T1"):
+                    success = entry_manager.allocate_entry("T1")
+                    if success:
+                        self.stats["entry_allocations"][channel]["T1"] += 1
+                        # 记录分配的entry信息到slot和flit中，用于后续释放
+                        slot.allocated_entry_info = {"direction": direction, "priority": "T1"}
+                        if slot.flit:
+                            slot.flit.allocated_entry_info = {"direction": direction, "priority": "T1"}
+                    return success
+                return False
 
-                if t0_dedicated_available > 0:
-                    # 有T0专用entry可用，需要进行轮询检查
-                    is_first_in_queue = self._is_first_in_t0_queue(slot, channel)
-                    if is_first_in_queue:
-                        return True
+            elif priority == PriorityLevel.T0:
+                # T0级：最复杂的分配逻辑
+                if not entry_manager.can_allocate_entry("T0"):
+                    return False
+
+                # 检查是否有专用entry的方向
+                if entry_manager.has_dedicated_entries:
+                    # 计算T0专用entry的可用数量
+                    t0_dedicated_available = entry_manager.get_t0_dedicated_available()
+
+                    if t0_dedicated_available > 0:
+                        # 有T0专用entry可用，需要进行轮询检查
+                        is_first_in_queue = self._is_first_in_t0_queue(slot, channel)
+                        if is_first_in_queue:
+                            success = entry_manager.allocate_entry("T0")
+                            if success:
+                                self.stats["entry_allocations"][channel]["T0"] += 1
+                                # 记录分配的entry信息到slot和flit中
+                                slot.allocated_entry_info = {"direction": direction, "priority": "T0"}
+                                if slot.flit:
+                                    slot.flit.allocated_entry_info = {"direction": direction, "priority": "T0"}
+                            return success
+                        else:
+                            return False
                     else:
-                        return False
+                        # 没有T0专用entry，使用其他等级entry，无需轮询检查
+                        success = entry_manager.allocate_entry("T0")
+                        if success:
+                            self.stats["entry_allocations"][channel]["T0"] += 1
+                            # 记录分配的entry信息到slot和flit中
+                            slot.allocated_entry_info = {"direction": direction, "priority": "T0"}
+                            if slot.flit:
+                                slot.flit.allocated_entry_info = {"direction": direction, "priority": "T0"}
+                        return success
                 else:
-                    # 没有T0专用entry，使用其他等级entry，无需轮询检查
-                    return True
-            else:
-                # 没有专用entry的方向（TR/TD），使用共享entry池，无需轮询
-                return True
+                    # 没有专用entry的方向（TR/TD），使用共享entry池，无需轮询
+                    success = entry_manager.allocate_entry("T0")
+                    if success:
+                        self.stats["entry_allocations"][channel]["T0"] += 1
+                        # 记录分配的entry信息到slot和flit中
+                        slot.allocated_entry_info = {"direction": direction, "priority": "T0"}
+                        if slot.flit:
+                            slot.flit.allocated_entry_info = {"direction": direction, "priority": "T0"}
+                    return success
+        else:
+            # update阶段：不分配entry，只检查是否符合条件
+            # 如果没有allocated_entry_info，说明compute阶段分配失败
+            return False
 
         return False
 
@@ -956,8 +1059,8 @@ class CrossPoint:
         direction = plan["direction"]
         channel = plan["channel"]
 
-        # 使用E-Tag机制再次确认（防止状态变化）
-        can_eject = self._can_eject_with_etag_mechanism(slot, channel, direction, plan["fifo_occupancy"], plan["fifo_depth"])
+        # 使用E-Tag机制再次确认（防止状态变化）- update阶段只检查不分配
+        can_eject = self._can_eject_with_etag_mechanism(slot, channel, direction, plan["fifo_occupancy"], plan["fifo_depth"], is_compute_phase=False)
 
         if not can_eject:
             return False
@@ -977,12 +1080,7 @@ class CrossPoint:
             # 处理成功下环的清理工作
             self._handle_successful_ejection(slot, channel, direction)
 
-            # 分配和释放entry
-            if direction in self.etag_entry_managers:
-                entry_manager = self.etag_entry_managers[direction]
-                priority_str = slot.etag_priority.value if slot.etag_marked and slot.etag_priority else "T2"
-                entry_manager.allocate_entry(priority_str)
-                self.stats["entry_allocations"][channel][priority_str] += 1
+            # 注意：entry释放应该在EjectQueue中当flit转移到下一级时进行，不在这里释放
 
             return True
         else:
@@ -1103,6 +1201,13 @@ class CrossPoint:
 
             if removed_count > 0:
                 pass
+        
+        # 清理slot的E-Tag标记（slot要被重用）
+        slot.clear_etag()
+        
+        # 清理allocated_entry_info（如果有的话）
+        if hasattr(slot, 'allocated_entry_info'):
+            delattr(slot, 'allocated_entry_info')
 
     def step(self, cycle: int, node_inject_fifos: Dict[str, Dict[str, Any]], node_eject_fifos: Dict[str, Dict[str, Any]]) -> None:
         """

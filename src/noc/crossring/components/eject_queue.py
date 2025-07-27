@@ -30,6 +30,7 @@ class EjectQueue:
         self.node_id = node_id
         self.coordinates = coordinates
         self.config = config
+        self.parent_node = None  # 将在节点初始化时设置
 
         # 获取FIFO配置
         self.eq_in_depth = config.fifo_config.EQ_IN_FIFO_DEPTH
@@ -303,6 +304,28 @@ class EjectQueue:
             # 更新IP仲裁状态
             arb_state = self.eject_arbitration_state[channel]
             arb_state["last_served_ip"][ip_id] = cycle
+            
+            # 释放E-Tag entry（如果flit有allocated_entry_info）
+            if hasattr(flit, 'allocated_entry_info') and self.parent_node:
+                entry_info = flit.allocated_entry_info
+                direction = entry_info['direction']
+                priority = entry_info['priority']
+                
+                # 找到对应的CrossPoint和entry管理器
+                if direction in ["TR", "TL"]:
+                    crosspoint = self.parent_node.horizontal_crosspoint
+                else:  # TU, TD
+                    crosspoint = self.parent_node.vertical_crosspoint
+                
+                if direction in crosspoint.etag_entry_managers:
+                    entry_manager = crosspoint.etag_entry_managers[direction]
+                    if entry_manager.release_entry(priority):
+                        crosspoint.stats["entry_releases"][channel][priority] += 1
+                        # 可选：打印调试信息
+                        # print(f"🔓 EQ释放entry: 节点{self.node_id} 方向{direction} {priority}级entry")
+                
+                # 清除flit的entry信息（已经释放）
+                delattr(flit, 'allocated_entry_info')
 
             return True
         else:

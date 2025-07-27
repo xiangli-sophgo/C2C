@@ -39,6 +39,10 @@ class CrossRingNode:
         self.inject_queue = InjectQueue(node_id, coordinates, config, topology=topology)
         self.eject_queue = EjectQueue(node_id, coordinates, config)
         self.ring_bridge = RingBridge(node_id, coordinates, config, topology=topology)
+        
+        # 设置parent_node引用
+        self.ring_bridge.parent_node = self
+        self.eject_queue.parent_node = self
 
         # 初始化CrossPoint实例
         self.horizontal_crosspoint = CrossPoint(

@@ -726,6 +726,7 @@ class CrossRingIPInterface(BaseIPInterface):
 
         # 计算完整路径（SN到RN）
         path = self.model.topology.calculate_shortest_path(req.destination, req.source)
+        
 
         rsp = create_crossring_flit(
             source=req.destination,

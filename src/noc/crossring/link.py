@@ -476,14 +476,87 @@ class RingSlice:
             if self.downstream_slice and self.current_slots[channel] is not None and self.downstream_slice.input_buffer.get(channel) is None:
                 self._transfer_plan[channel]["can_transmit_downstream"] = True
 
+    def step_compute_phase_backup(self, cycle: int) -> None:
+        """
+        备份：原始的计算阶段实现
+        
+        问题：在compute阶段检查下游可用性，但在update阶段执行传输时，
+        下游状态可能已经改变，导致传输条件检查不准确，
+        这是导致flit卡在自环slice的根本原因。
+        """
+        # 计算传输决策，存储在临时变量中
+        # 这里只需要确定传输的可行性，不修改状态
+        self._next_cycle = cycle
+
+        # 预计算传输决策，但不执行
+        self._transfer_plan = {}
+        for channel in ["req", "rsp", "data"]:
+            self._transfer_plan[channel] = {
+                "can_move_to_output": True,  # 当前槽总是可以移动到输出缓存
+                "can_move_to_current": True,  # 输入缓存总是可以移动到当前槽
+                "can_transmit_downstream": False,  # 默认不能传输
+            }
+
+            # 检查是否可以向下游传输
+            # 应该基于current_slots（将要移动到output_buffer的内容）来判断
+            if self.downstream_slice and self.current_slots[channel] is not None and self.downstream_slice.input_buffer.get(channel) is None:
+                self._transfer_plan[channel]["can_transmit_downstream"] = True
+
     def step_update_phase(self, cycle: int) -> None:
         """
-        更新阶段：基于计算阶段的决策执行状态修改
+        更新阶段：修复版本 - 实时检查下游可用性并执行传输
 
-        遵循两阶段执行模型：在单个update周期内完成所有传输
+        修复方案：在update阶段实时检查下游可用性，而不是依赖compute阶段的预判，
+        这样可以解决flit卡在自环slice的问题。
 
         Args:
             cycle: 当前周期
+        """
+        self.stats["total_cycles"] += 1
+
+        # 修复版本：实时检查并执行传输
+        for channel in ["req", "rsp", "data"]:
+            current_slot = self.current_slots[channel]
+            input_slot = self.input_buffer[channel]
+
+
+            # 第一步：实时检查并尝试向下游传输当前slot
+            downstream_transmitted = False
+            if self.downstream_slice and current_slot is not None:
+                # 实时检查下游可用性，而不是依赖compute阶段的预判
+                downstream_available = self.downstream_slice.input_buffer.get(channel) is None
+                
+                if downstream_available:
+                    transmission_success = self.downstream_slice.receive_slot(current_slot, channel)
+                    if transmission_success:
+                        downstream_transmitted = True
+                        self.stats["slots_transmitted"][channel] += 1
+
+            # 第二步：同时进行内部移动
+            if downstream_transmitted:
+                # 当前slot已传输，输入slot移动到当前位置
+                self.current_slots[channel] = input_slot
+                self.input_buffer[channel] = None
+            else:
+                # 当前slot未传输，移动到输出缓存，输入slot移动到当前位置
+                if current_slot is not None:
+                    self.output_buffer[channel] = current_slot
+
+                if input_slot is not None:
+                    self.current_slots[channel] = input_slot
+                    self.input_buffer[channel] = None
+
+            # 更新slot的等待时间
+            if self.current_slots[channel] is not None:
+                self.current_slots[channel].increment_wait()
+                self.current_slots[channel].cycle = cycle
+
+    def step_update_phase_backup(self, cycle: int) -> None:
+        """
+        备份：原始的更新阶段实现
+        
+        问题：依赖compute阶段的传输决策，但在多slice并行传输时，
+        compute阶段的判断可能不准确，导致flit无法正常传输。
         """
         self.stats["total_cycles"] += 1
 
@@ -529,13 +602,16 @@ class RingSlice:
             cycle: 当前周期
         """
         for channel in ["req", "rsp", "data"]:
-            # Step 4: 向下游传输slot（基于compute阶段的决策）
-            if hasattr(self, "_transfer_plan") and self._transfer_plan[channel]["can_transmit_downstream"] and self.downstream_slice and self.output_buffer[channel] is not None:
-
-                transmitted_slot = self.output_buffer[channel]
-                if self.downstream_slice.receive_slot(transmitted_slot, channel):
-                    self.output_buffer[channel] = None
-                    self.stats["slots_transmitted"][channel] += 1
+            # Step 4: 向下游传输slot（实时检查下游可用性）
+            if self.downstream_slice and self.output_buffer[channel] is not None:
+                # 实时检查下游是否可以接收
+                downstream_can_receive = self.downstream_slice.input_buffer.get(channel) is None
+                
+                if downstream_can_receive:
+                    transmitted_slot = self.output_buffer[channel]
+                    if self.downstream_slice.receive_slot(transmitted_slot, channel):
+                        self.output_buffer[channel] = None
+                        self.stats["slots_transmitted"][channel] += 1
 
     def peek_current_slot(self, channel: str) -> Optional[CrossRingSlot]:
         """

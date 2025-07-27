@@ -79,6 +79,7 @@ class BaseNoCModel(ABC):
         # 仿真状态
         self.is_running = False
         self.is_finished = False
+        self.user_interrupted = False  # 用户中断标志
         self.start_time = 0.0
         self.end_time = 0.0
 
@@ -345,7 +346,6 @@ class BaseNoCModel(ABC):
 
         self.is_running = True
         self.start_time = time.time()
-        stats_enabled = False
 
         try:
             for cycle in range(1, max_cycles + 1):
@@ -353,7 +353,6 @@ class BaseNoCModel(ABC):
 
                 # 启用统计收集
                 if cycle == stats_start_cycle:
-                    stats_enabled = True
                     self._reset_statistics()
 
                 # 检查仿真结束条件（总是检查）
@@ -374,7 +373,9 @@ class BaseNoCModel(ABC):
                         current_time_ns = cycle * cycle_time_ns
 
         except KeyboardInterrupt:
-            raise KeyboardInterrupt
+            print("🛑 用户中断仿真，正在进行结果分析...")
+            self.user_interrupted = True
+            # 不重新抛出异常，继续执行结果分析
         except Exception as e:
             raise
 
@@ -402,6 +403,10 @@ class BaseNoCModel(ABC):
 
     def _should_stop_simulation(self) -> bool:
         """检查是否应该停止仿真"""
+        # 如果用户中断，立即停止
+        if self.user_interrupted:
+            return True
+            
         # 获取总请求数和已完成请求数
         total_requests = 0
         completed_requests = 0

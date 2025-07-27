@@ -119,7 +119,7 @@ class CrossRingTopology(BaseNoCTopology):
 
     def calculate_shortest_path(self, src: NodeId, dst: NodeId) -> Path:
         """
-        计算两点之间的最短路径（使用BFS）。
+        计算两点之间的最短路径（考虑路由策略）。
 
         Args:
             src: 源节点ID
@@ -128,7 +128,83 @@ class CrossRingTopology(BaseNoCTopology):
         Returns:
             最短路径（节点ID列表）
         """
-        return self._calculate_shortest_path_bfs(src, dst)
+        # 优先使用确定性路由算法
+        return self._calculate_deterministic_path(src, dst)
+
+    def _calculate_deterministic_path(self, src: NodeId, dst: NodeId) -> Path:
+        """
+        基于路由策略计算确定性路径。
+        
+        Args:
+            src: 源节点ID
+            dst: 目标节点ID
+            
+        Returns:
+            确定性路径（节点ID列表）
+        """
+        if src == dst:
+            return [src]
+            
+        # 获取路由策略
+        routing_strategy = getattr(self.crossring_config, "ROUTING_STRATEGY", "XY")
+        if hasattr(routing_strategy, "value"):
+            routing_strategy = routing_strategy.value
+            
+        # 获取源和目标坐标
+        src_row = src // self.NUM_COL
+        src_col = src % self.NUM_COL
+        dst_row = dst // self.NUM_COL
+        dst_col = dst % self.NUM_COL
+        
+        path = [src]
+        current_node = src
+        current_row = src_row
+        current_col = src_col
+        
+        if routing_strategy == "XY":
+            # XY路由：先水平后垂直
+            # 1. 水平移动
+            while current_col != dst_col:
+                if dst_col > current_col:
+                    current_col += 1
+                else:
+                    current_col -= 1
+                current_node = current_row * self.NUM_COL + current_col
+                path.append(current_node)
+                
+            # 2. 垂直移动
+            while current_row != dst_row:
+                if dst_row > current_row:
+                    current_row += 1
+                else:
+                    current_row -= 1
+                current_node = current_row * self.NUM_COL + current_col
+                path.append(current_node)
+                
+        elif routing_strategy == "YX":
+            # YX路由：先垂直后水平
+            # 1. 垂直移动
+            while current_row != dst_row:
+                if dst_row > current_row:
+                    current_row += 1
+                else:
+                    current_row -= 1
+                current_node = current_row * self.NUM_COL + current_col
+                path.append(current_node)
+                
+            # 2. 水平移动
+            while current_col != dst_col:
+                if dst_col > current_col:
+                    current_col += 1
+                else:
+                    current_col -= 1
+                current_node = current_row * self.NUM_COL + current_col
+                path.append(current_node)
+        else:
+            # 默认使用BFS
+            return self._calculate_shortest_path_bfs(src, dst)
+            
+        return path
 
     def _calculate_shortest_path_bfs(self, src: NodeId, dst: NodeId) -> Path:
         """

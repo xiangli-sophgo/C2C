@@ -32,6 +32,7 @@ class RingBridge:
         self.coordinates = coordinates
         self.config = config
         self.topology = topology
+        self.parent_node = None  # 将在节点初始化时设置
 
         # 获取FIFO配置
         self.rb_in_depth = config.fifo_config.RB_IN_FIFO_DEPTH
@@ -212,12 +213,37 @@ class RingBridge:
 
         # 从输入源获取flit（实际取出）
         flit = self._get_flit_from_ring_bridge_input(input_source, channel, inject_direction_fifos)
+        
         if flit is not None:
             # 分配到输出FIFO
-            if self._assign_flit_to_ring_bridge_output(flit, output_direction, channel, cycle):
+            success = self._assign_flit_to_ring_bridge_output(flit, output_direction, channel, cycle)
+            
+            if success:
                 # 成功传输，更新仲裁状态
                 arb_state = self.ring_bridge_arbitration_state[channel]
                 arb_state["last_served_input"][input_source] = cycle
+                
+                # 释放E-Tag entry（如果flit有allocated_entry_info）
+                if hasattr(flit, 'allocated_entry_info') and self.parent_node:
+                    entry_info = flit.allocated_entry_info
+                    direction = entry_info['direction']
+                    priority = entry_info['priority']
+                    
+                    # 找到对应的CrossPoint和entry管理器
+                    if direction in ["TR", "TL"]:
+                        crosspoint = self.parent_node.horizontal_crosspoint
+                    else:  # TU, TD
+                        crosspoint = self.parent_node.vertical_crosspoint
+                    
+                    if direction in crosspoint.etag_entry_managers:
+                        entry_manager = crosspoint.etag_entry_managers[direction]
+                        if entry_manager.release_entry(priority):
+                            crosspoint.stats["entry_releases"][channel][priority] += 1
+                            # 可选：打印调试信息
+                            # print(f"🔓 RB释放entry: 节点{self.node_id} 方向{direction} {priority}级entry")
+                    
+                    # 清除flit的entry信息（已经释放）
+                    delattr(flit, 'allocated_entry_info')
 
 
     def _peek_flit_from_ring_bridge_input(self, input_source: str, channel: str, inject_direction_fifos: Dict) -> Optional[CrossRingFlit]:
@@ -276,7 +302,7 @@ class RingBridge:
 
     def _calculate_routing_direction(self, flit: CrossRingFlit) -> str:
         """
-        使用预计算的路由表获取flit的路由方向。
+        基于路径信息计算flit的路由方向。
 
         Args:
             flit: 要路由的flit
@@ -284,12 +310,85 @@ class RingBridge:
         Returns:
             路由方向（"TR", "TL", "TU", "TD", "EQ"）
         """
+        current_node = self.node_id
+        
+        # 优先使用路径信息
+        if hasattr(flit, 'path') and flit.path:
+            # 检查是否到达最终目标
+            if current_node == flit.path[-1]:
+                return "EQ"
+            
+            # 调试信息
+            if hasattr(flit, 'packet_id') and flit.packet_id == 1:
+                print(f"🎯 RB节点{current_node}: flit {flit.packet_id} 路径={flit.path}, path_index={getattr(flit, 'path_index', '?')}")
+            
+            # 查找当前节点在路径中的位置
+            try:
+                # 首先尝试在路径中找到当前节点
+                path_index = flit.path.index(current_node)
+                
+                # 如果找到了，检查是否有下一跳
+                if path_index < len(flit.path) - 1:
+                    next_node = flit.path[path_index + 1]
+                    # 更新path_index为当前位置
+                    if hasattr(flit, 'path_index'):
+                        flit.path_index = path_index
+                else:
+                    # 已经是路径的最后一个节点
+                    return "EQ"
+                
+                # 根据下一跳计算方向
+                direction = self._calculate_direction_to_next_node(current_node, next_node)
+                if hasattr(flit, 'packet_id') and flit.packet_id == 1:
+                    print(f"   -> 下一跳: 节点{next_node}, 方向: {direction}")
+                return direction
+                
+            except ValueError:
+                # 当前节点不在路径中，可能是特殊情况
+                pass
+        
         # 如果有topology对象，使用路由表
         if self.topology and hasattr(self.topology, "routing_table"):
             return self.topology.get_next_direction(self.node_id, flit.destination)
 
         # 回退到原始的路由计算方法
         return self._calculate_routing_direction_fallback(flit)
+    
+    def _calculate_direction_to_next_node(self, current_node: int, next_node: int) -> str:
+        """计算从当前节点到下一节点的方向"""
+        num_col = getattr(self.config, "NUM_COL", 3)
+        
+        curr_row = current_node // num_col
+        curr_col = current_node % num_col
+        next_row = next_node // num_col
+        next_col = next_node % num_col
+        
+        # 获取路由策略
+        routing_strategy = getattr(self.config, "ROUTING_STRATEGY", "XY")
+        if hasattr(routing_strategy, "value"):
+            routing_strategy = routing_strategy.value
+        
+        # 计算方向
+        if routing_strategy == "XY":
+            # XY路由：先水平后垂直
+            if next_col != curr_col:
+                return "TR" if next_col > curr_col else "TL"
+            elif next_row != curr_row:
+                return "TD" if next_row > curr_row else "TU"
+        elif routing_strategy == "YX":
+            # YX路由：先垂直后水平
+            if next_row != curr_row:
+                return "TD" if next_row > curr_row else "TU"
+            elif next_col != curr_col:
+                return "TR" if next_col > curr_col else "TL"
+        else:
+            # 默认使用XY路由
+            if next_col != curr_col:
+                return "TR" if next_col > curr_col else "TL"
+            elif next_row != curr_row:
+                return "TD" if next_row > curr_row else "TU"
+        
+        return "EQ"  # 已到达目标
 
     def _calculate_routing_direction_fallback(self, flit: CrossRingFlit) -> str:
         """

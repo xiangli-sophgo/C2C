@@ -95,6 +95,13 @@ class CrossRingModel(BaseNoCModel):
 
         # 可视化配置
         self._viz_config = {"flow_distribution": False, "bandwidth_analysis": False, "save_figures": True, "save_dir": "output"}
+        
+        # 实时可视化组件
+        self._realtime_visualizer = None
+        self._visualization_enabled = False
+        self._visualization_update_interval = 10  # 每多少个周期更新一次可视化
+        self._visualization_start_cycle = 0  # 从哪个周期开始可视化
+        self._visualization_initialized = False  # 可视化是否已初始化
 
         # 初始化模型（不包括IP接口创建，IP接口将在setup_traffic_scheduler中创建）
         self.initialize_model()
@@ -328,6 +335,30 @@ class CrossRingModel(BaseNoCModel):
 
         # 调用父类方法设置TrafficScheduler
         super().setup_traffic_scheduler(traffic_chains, traffic_file_path)
+
+    def setup_visualization(self, enable=True, update_interval=10, start_cycle=0):
+        """
+        设置实时可视化
+        
+        Args:
+            enable: 是否启用实时可视化
+            update_interval: 可视化更新间隔（周期数）
+            start_cycle: 从哪个周期开始可视化（0表示立即开始）
+        """
+        self._visualization_enabled = enable
+        self._visualization_update_interval = update_interval
+        self._visualization_start_cycle = start_cycle
+        self._visualization_initialized = False
+        
+        if enable:
+            print("✅ 实时可视化已配置")
+            print(f"   开始周期: {start_cycle}")
+            print(f"   更新间隔: 每 {update_interval} 个周期")
+            print("   提示: 可视化窗口将在仿真开始后自动打开")
+            print("         可以点击节点查看详细信息，点击关闭窗口结束可视化")
+        else:
+            self._realtime_visualizer = None
+            print("📊 实时可视化已禁用")
 
     def _setup_topology_network(self) -> None:
         """设置拓扑网络（BaseNoCModel抽象方法的实现）"""
@@ -573,8 +604,7 @@ class CrossRingModel(BaseNoCModel):
         # 连接不同链路之间的slice（形成环路）
         self._connect_inter_link_slices()
 
-        # 调试：打印所有连接信息
-        # self._print_all_connections()
+        # 链路间slice连接完成
 
     def _connect_inter_link_slices(self) -> None:
         """连接不同链路之间的slice形成环路"""
@@ -630,6 +660,8 @@ class CrossRingModel(BaseNoCModel):
                         next_link = self.links.get(next_link_id)
 
                 if not next_link:
+                    print(f"⚠️  警告：节点{node_id}方向{direction_str}的链路{out_link_id}找不到下一个链路{next_link_id}")
+                    print(f"   可用链路：{list(self.links.keys())}")
                     continue
 
                 # 连接两个同方向链路的slice
@@ -885,6 +917,14 @@ class CrossRingModel(BaseNoCModel):
         if self.cycle % self.debug_config["log_interval"] == 0:
             self._log_periodic_status()
 
+        # 实时可视化更新
+        if self._visualization_enabled and self.cycle >= self._visualization_start_cycle:
+            if not self._visualization_initialized:
+                self._initialize_visualization()
+            
+            if self._realtime_visualizer and self.cycle % self._visualization_update_interval == 0:
+                self._update_visualization()
+
         # Debug休眠已移至_print_debug_info中，只有在打印信息时才执行
 
     def _step_link_compute_phase(self) -> None:
@@ -999,13 +1039,14 @@ class CrossRingModel(BaseNoCModel):
         # 调用base类的enable_debug，传递level=1作为兼容参数
         super().setup_debug(1, trace_packets, sleep_time)
 
-    def setup_result_analysis(self, flow_distribution: bool = False, bandwidth_analysis: bool = False, save_figures: bool = True, save_dir: str = "") -> None:
+    def setup_result_analysis(self, flow_distribution: bool = False, bandwidth_analysis: bool = False, latency_analysis: bool = False, save_figures: bool = True, save_dir: str = "") -> None:
         """
         配置结果分析
 
         Args:
             flow_distribution: 是否生成流量分布图
-            bandwidth_analysis: 是否生成带宽分析图
+            bandwidth_analysis: 是否生成带宽分析图  
+            latency_analysis: 是否生成延迟分析图
             save_figures: 是否保存图片文件到磁盘
             save_dir: 保存目录，如果为None或空字符串则不保存任何文件
         """
@@ -1018,7 +1059,7 @@ class CrossRingModel(BaseNoCModel):
         # 图片保存需要同时满足save_dir不为空且save_figures为True
         actual_save_figures = bool(save_dir) and save_figures
 
-        self._viz_config.update({"flow_distribution": flow_distribution, "bandwidth_analysis": bandwidth_analysis, "save_figures": actual_save_figures, "save_dir": save_dir})
+        self._viz_config.update({"flow_distribution": flow_distribution, "bandwidth_analysis": bandwidth_analysis, "latency_analysis": latency_analysis, "save_figures": actual_save_figures, "save_dir": save_dir})
 
     def print_debug_status(self) -> None:
         """打印调试状态"""
@@ -1186,12 +1227,15 @@ class CrossRingModel(BaseNoCModel):
         save_figures = True
 
         if hasattr(self, "_viz_config"):
-            viz_enabled = self._viz_config["flow_distribution"] or self._viz_config["bandwidth_analysis"]
-            if viz_enabled:
-                save_figures = self._viz_config["save_figures"]
-                save_dir = self._viz_config["save_dir"]
-                # 启用可视化，ResultAnalyzer会根据save_figures参数决定保存或显示
-                enable_visualization = True
+            # 任何一个分析类型启用就启用可视化
+            viz_enabled = (self._viz_config.get("flow_distribution", False) or 
+                          self._viz_config.get("bandwidth_analysis", False) or
+                          self._viz_config.get("latency_analysis", False))
+            # 总是使用配置的save_dir和save_figures，不管是否启用可视化
+            save_figures = self._viz_config["save_figures"]
+            save_dir = self._viz_config["save_dir"]
+            # 只有当用户明确启用可视化功能时才启用
+            enable_visualization = viz_enabled
 
         # 只要save_dir不为空就保存结果文件
         if save_dir:
@@ -1203,10 +1247,14 @@ class CrossRingModel(BaseNoCModel):
             self._collect_and_export_link_statistics(timestamped_dir, timestamp)
         else:
             timestamped_dir = ""
+            # 如果save_dir为空，禁用结果保存
+            save_results = False
 
         analyzer = ResultAnalyzer()
+        # 传递可视化配置到ResultAnalyzer
+        viz_config = getattr(self, "_viz_config", {})
         analysis_results = analyzer.analyze_noc_results(
-            self.request_tracker, self.config, self, results, enable_visualization, save_results, timestamped_dir, save_figures, verbose
+            self.request_tracker, self.config, self, results, enable_visualization, save_results, timestamped_dir, save_figures, verbose, viz_config
         )
 
         # ResultAnalyzer现在会根据save_figures参数直接处理显示或保存
@@ -1588,6 +1636,65 @@ class CrossRingModel(BaseNoCModel):
     def get_fifo_statistics_summary(self) -> str:
         """获取FIFO统计摘要报告"""
         return self.fifo_stats_collector.get_summary_report()
+
+    # ========== 可视化相关方法 ==========
+    
+    def _initialize_visualization(self):
+        """初始化可视化组件"""
+        if self._visualization_initialized:
+            return
+            
+        try:
+            from src.noc.visualization.link_state_visualizer import CrossRingLinkStateVisualizer
+            import matplotlib.pyplot as plt
+            
+            # 创建可视化器
+            self._realtime_visualizer = CrossRingLinkStateVisualizer(
+                config=self.config, 
+                network=self
+            )
+            
+            # 显示可视化窗口
+            plt.ion()  # 开启交互模式
+            self._realtime_visualizer.show()
+            
+            print(f"🎪 可视化窗口已打开 (周期 {self.cycle})")
+            self._visualization_initialized = True
+            
+        except ImportError as e:
+            print(f"❌ 无法启用可视化: 缺少依赖库 {e}")
+            self._visualization_enabled = False
+        except Exception as e:
+            print(f"❌ 可视化初始化失败: {e}")
+            self._visualization_enabled = False
+
+    def _update_visualization(self):
+        """更新可视化显示"""
+        if not self._realtime_visualizer:
+            return
+            
+        try:
+            # 更新可视化器状态
+            self._realtime_visualizer.update(self, cycle=self.cycle)
+            
+            # 强制刷新显示
+            import matplotlib.pyplot as plt
+            plt.pause(0.01)  # 短暂暂停以刷新GUI
+            
+        except Exception as e:
+            print(f"⚠️  可视化更新失败 (周期 {self.cycle}): {e}")
+
+    def close_visualization(self):
+        """关闭可视化窗口"""
+        if self._realtime_visualizer:
+            try:
+                import matplotlib.pyplot as plt
+                plt.close('all')  # 关闭所有matplotlib窗口
+                self._realtime_visualizer = None
+                self._visualization_initialized = False
+                print("📊 可视化窗口已关闭")
+            except Exception as e:
+                print(f"⚠️  关闭可视化失败: {e}")
 
     def __del__(self):
         """析构函数"""
