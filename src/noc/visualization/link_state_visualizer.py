@@ -111,8 +111,16 @@ class CrossRingLinkStateVisualizer:
             else:
                 self.ax = ax
                 self.fig = ax.figure
+            
+            # 清理轴并移除任何默认元素（如监控图）
+            self.ax.clear()
             self.ax.axis("off")
             self.ax.set_aspect("equal")
+            
+            # 移除所有可能的线条、网格、tick等
+            self.ax.set_xticks([])
+            self.ax.set_yticks([])
+            self.ax.grid(False)
             
             # 调色板
             self._colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
@@ -498,7 +506,7 @@ class CrossRingLinkStateVisualizer:
                             inject_data[channel_name] = {node_id: list(buffer.queue)}
                             
             except Exception as e:
-                print(f"警告: 提取inject queue数据失败: {e}")
+                pass  # print(f"警告: 提取inject queue数据失败: {e}")
             
             return inject_data
 
@@ -527,7 +535,7 @@ class CrossRingLinkStateVisualizer:
                             eject_data[channel_name] = {node_id: list(buffer.queue)}
                             
             except Exception as e:
-                print(f"警告: 提取eject queue数据失败: {e}")
+                pass  # print(f"警告: 提取eject queue数据失败: {e}")
             
             return eject_data
 
@@ -557,7 +565,7 @@ class CrossRingLinkStateVisualizer:
                             rb_data[f"{direction}_out"] = {(node_id, node_id): list(fifo.queue)}
                             
             except Exception as e:
-                print(f"警告: 提取ring bridge数据失败: {e}")
+                pass  # print(f"警告: 提取ring bridge数据失败: {e}")
             
             return rb_data
 
@@ -583,7 +591,7 @@ class CrossRingLinkStateVisualizer:
                                     iq_ch_data[full_channel_name] = {node_id: list(fifo.queue)}
                             
             except Exception as e:
-                print(f"警告: 提取IQ channel数据失败: {e}")
+                pass  # print(f"警告: 提取IQ channel数据失败: {e}")
             
             return iq_ch_data
 
@@ -609,7 +617,7 @@ class CrossRingLinkStateVisualizer:
                                     eq_ch_data[full_channel_name] = {node_id: list(fifo.queue)}
                             
             except Exception as e:
-                print(f"警告: 提取EQ channel数据失败: {e}")
+                pass  # print(f"警告: 提取EQ channel数据失败: {e}")
             
             return eq_ch_data
 
@@ -641,7 +649,7 @@ class CrossRingLinkStateVisualizer:
                 }
                             
             except Exception as e:
-                print(f"警告: 提取crosspoint数据失败: {e}")
+                pass  # print(f"警告: 提取crosspoint数据失败: {e}")
             
             return cp_data
 
@@ -722,7 +730,7 @@ class CrossRingLinkStateVisualizer:
         self._colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
         
         # 当前显示的通道
-        self.current_channel = "data"  # req/rsp/data，改为data因为发现flit在此通道
+        self.current_channel = "data"  # req/rsp/data，默认显示data通道
         
         # 高亮控制
         self.tracked_pid = None
@@ -767,14 +775,18 @@ class CrossRingLinkStateVisualizer:
         self.piece_ax = self.fig.add_axes([0.68, 0.05, 0.31, 0.9])
         self.piece_ax.set_title('Node Detail View', fontsize=12)
         
-        # 创建改进的节点可视化器
-        from src.noc.visualization.crossring_node_visualizer import CrossRingNodeVisualizer
-        self.piece_vis = CrossRingNodeVisualizer(
+        # 移除任何可能的默认图表元素
+        self.piece_ax.clear()
+        self.piece_ax.set_title('Node Detail View', fontsize=12)
+        self.piece_ax.axis('off')
+        self.piece_ax.set_aspect('equal')
+        
+        # 创建节点详细视图可视化器
+        self.piece_vis = self.PieceVisualizer(
             config=self.config,
             ax=self.piece_ax,
-            node_id=self._selected_node,
             highlight_callback=self._on_highlight_callback,
-            parent_visualizer=self
+            parent=self
         )
         
     def _setup_status_display(self):
@@ -902,6 +914,7 @@ class CrossRingLinkStateVisualizer:
         # 存储链路和slot信息
         self.link_info = {}
         self.rect_info_map = {}  # slot_rect -> (link_id, flit, slot_idx)
+        self.node_pair_slots = {}  # 存储每对节点之间的slot位置信息
         
         # 根据实际的网络结构动态绘制链路
         if hasattr(self.network, 'links'):
@@ -1008,46 +1021,51 @@ class CrossRingLinkStateVisualizer:
             end_x = dest_pos[0] - unit_dx * node_radius  
             end_y = dest_pos[1] - unit_dy * node_radius
             
-            # 绘制双向箭头
-            directions = [
-                ('forward', 1, f"{link_id}_fwd"),   # src -> dest
-                ('backward', -1, f"{link_id}_bwd")  # dest -> src
-            ]
+            # 检查是否需要绘制箭头（每对节点只绘制一次）
+            node_pair = (min(src, dest), max(src, dest))
+            draw_arrows = node_pair not in self.node_pair_slots
             
-            for direction_name, offset_sign, arrow_id in directions:
-                # 计算偏移后的起止点
-                offset_start_x = start_x + perp_dx * arrow_offset * offset_sign
-                offset_start_y = start_y + perp_dy * arrow_offset * offset_sign
-                offset_end_x = end_x + perp_dx * arrow_offset * offset_sign
-                offset_end_y = end_y + perp_dy * arrow_offset * offset_sign
+            if draw_arrows:
+                # 绘制双向箭头
+                directions = [
+                    ('forward', 1, f"{link_id}_fwd"),   # src -> dest
+                    ('backward', -1, f"{link_id}_bwd")  # dest -> src
+                ]
                 
-                # 反向箭头需要交换起止点
-                if direction_name == 'backward':
-                    offset_start_x, offset_end_x = offset_end_x, offset_start_x
-                    offset_start_y, offset_end_y = offset_end_y, offset_start_y
-                
-                # 绘制箭头
-                arrow = FancyArrowPatch(
-                    (offset_start_x, offset_start_y),
-                    (offset_end_x, offset_end_y),
-                    arrowstyle='-|>',
-                    mutation_scale=15,
-                    color='black',
-                    linewidth=1.5,
-                    alpha=0.8,
-                    zorder=1
-                )
-                self.ax.add_patch(arrow)
+                for direction_name, offset_sign, arrow_id in directions:
+                    # 计算偏移后的起止点
+                    offset_start_x = start_x + perp_dx * arrow_offset * offset_sign
+                    offset_start_y = start_y + perp_dy * arrow_offset * offset_sign
+                    offset_end_x = end_x + perp_dx * arrow_offset * offset_sign
+                    offset_end_y = end_y + perp_dy * arrow_offset * offset_sign
+                    
+                    # 反向箭头需要交换起止点
+                    if direction_name == 'backward':
+                        offset_start_x, offset_end_x = offset_end_x, offset_start_x
+                        offset_start_y, offset_end_y = offset_end_y, offset_start_y
+                    
+                    # 绘制箭头
+                    arrow = FancyArrowPatch(
+                        (offset_start_x, offset_start_y),
+                        (offset_end_x, offset_end_y),
+                        arrowstyle='-|>',
+                        mutation_scale=15,
+                        color='black',
+                        linewidth=1.5,
+                        alpha=0.8,
+                        zorder=1
+                    )
+                    self.ax.add_patch(arrow)
             
             # 绘制slice slots
             self._draw_link_slices(src_pos, dest_pos, link_id, slice_num, unit_dx, unit_dy, perp_dx, perp_dy)
 
     def _draw_link_slices(self, src_pos, dest_pos, link_id, slice_num, unit_dx, unit_dy, perp_dx, perp_dy):
-        """绘制链路上的slice slots，沿着链路方向排列"""
+        """绘制链路上的slice slots，双向链路两侧都显示但对齐"""
         # 计算slice布局参数
         slot_size = 0.08  # slot边长
         slot_spacing = 0.02  # slot间距
-        side_offset = 0.12  # 距离箭头的距离
+        side_offset = 0.15  # 距离箭头的距离
         
         # 计算slice沿链路方向排列的总长度
         total_length = slice_num * slot_size + (slice_num - 1) * slot_spacing
@@ -1063,40 +1081,72 @@ class CrossRingLinkStateVisualizer:
         link_length = np.sqrt((end_x - start_x)**2 + (end_y - start_y)**2)
         start_offset = (link_length - total_length) / 2
         
-        # 为链路的每一侧绘制slice（跳过第一个和最后一个）
-        visible_slice_num = max(0, slice_num - 2)  # 跳过首尾slice
+        # 跳过首尾slice的显示
+        visible_slice_num = max(0, slice_num - 2)
         if visible_slice_num <= 0:
             return
+        
+        # 解析link_id，确定节点对
+        src_id, dest_id = self._parse_link_id(link_id)
+        node_pair = (min(src_id, dest_id), max(src_id, dest_id)) if src_id is not None and dest_id is not None else None
+        
+        # 检查是否已经为这对节点创建了slice（保证对齐）
+        if node_pair and node_pair in self.node_pair_slots:
+            # 使用已有的slot位置
+            existing_slots = self.node_pair_slots[node_pair]
+            for i, (slot_positions, slot_id) in enumerate(existing_slots):
+                if i < len(existing_slots):
+                    # 为当前链路方向创建slot（关联到已有位置）
+                    # 这里不需要重新创建rectangle，只需要更新映射
+                    for rect, (rect_link_ids, _, rect_slot_id) in self.rect_info_map.items():
+                        if rect_slot_id == slot_id:
+                            # 添加当前链路到现有slot的映射中
+                            if isinstance(rect_link_ids, list):
+                                if link_id not in rect_link_ids:
+                                    rect_link_ids.append(link_id)
+                            else:
+                                rect_link_ids = [rect_link_ids, link_id]
+                            self.rect_info_map[rect] = (rect_link_ids, None, rect_slot_id)
+                            break
+        else:
+            # 首次为这对节点创建slice
+            slot_positions_list = []
             
-        for side_name, side_sign in [('side1', 1), ('side2', -1)]:
-            for i in range(1, slice_num - 1):  # 跳过i=0和i=slice_num-1
-                # 计算沿链路方向的位置
-                along_link_dist = start_offset + i * (slot_size + slot_spacing)
-                progress = along_link_dist / link_length if link_length > 0 else 0
-                
-                # 沿链路方向的中心点
-                center_x = start_x + progress * (end_x - start_x)
-                center_y = start_y + progress * (end_y - start_y)
-                
-                # 垂直于链路方向的偏移
-                slot_x = center_x + perp_dx * side_offset * side_sign - slot_size / 2
-                slot_y = center_y + perp_dy * side_offset * side_sign - slot_size / 2
-                
-                # 创建slot rectangle（默认为空，虚线边框）
-                slot = Rectangle(
-                    (slot_x, slot_y),
-                    slot_size, slot_size,
-                    facecolor='none',
-                    edgecolor='gray',
-                    linewidth=0.8,
-                    linestyle='--',
-                    alpha=0.7
-                )
-                self.ax.add_patch(slot)
-                
-                # 记录slot信息
-                slot_id = f"{side_name}_{i}"
-                self.rect_info_map[slot] = (link_id, None, slot_id)
+            # 在链路两侧都绘制slice
+            for side_name, side_sign in [('side1', 1), ('side2', -1)]:
+                for i in range(1, slice_num - 1):  # 跳过i=0和i=slice_num-1
+                    # 计算沿链路方向的位置
+                    along_link_dist = start_offset + i * (slot_size + slot_spacing)
+                    progress = along_link_dist / link_length if link_length > 0 else 0
+                    
+                    # 沿链路方向的中心点
+                    center_x = start_x + progress * (end_x - start_x)
+                    center_y = start_y + progress * (end_y - start_y)
+                    
+                    # 垂直于链路方向的偏移
+                    slot_x = center_x + perp_dx * side_offset * side_sign - slot_size / 2
+                    slot_y = center_y + perp_dy * side_offset * side_sign - slot_size / 2
+                    
+                    # 创建slot rectangle（默认为空，虚线边框）
+                    slot = Rectangle(
+                        (slot_x, slot_y),
+                        slot_size, slot_size,
+                        facecolor='none',
+                        edgecolor='gray',
+                        linewidth=0.8,
+                        linestyle='--',
+                        alpha=0.7
+                    )
+                    self.ax.add_patch(slot)
+                    
+                    # 记录slot信息
+                    slot_id = f"{side_name}_{i}"
+                    slot_positions_list.append(((slot_x, slot_y), slot_id))
+                    self.rect_info_map[slot] = ([link_id], None, slot_id)
+            
+            # 记录这对节点的slot位置，供反向链路使用
+            if node_pair:
+                self.node_pair_slots[node_pair] = slot_positions_list
 
     def _draw_selection_box(self):
         """绘制选择框"""
@@ -1124,7 +1174,7 @@ class CrossRingLinkStateVisualizer:
         for rect in self.rect_info_map:
             contains, _ = rect.contains(event)
             if contains:
-                link_id, flit, slot_idx = self.rect_info_map[rect]
+                link_ids, flit, slot_idx = self.rect_info_map[rect]
                 if flit:
                     self._on_flit_click(flit)
                 return
@@ -1152,10 +1202,10 @@ class CrossRingLinkStateVisualizer:
         self._draw_selection_box()
         
         # 更新右侧详细视图
-        self.piece_vis.update_from_model(self.network, node_id)
+        self.piece_vis.draw_piece_for_node(node_id, self.network)
         
         self.fig.canvas.draw_idle()
-        print(f"选中节点: {node_id}")
+        # print(f"选中节点: {node_id}")  # 删除debug输出
 
     def _on_flit_click(self, flit):
         """处理flit点击"""
@@ -1171,7 +1221,7 @@ class CrossRingLinkStateVisualizer:
         # 同步PieceVisualizer的高亮状态
         self.piece_vis.sync_highlight(self.use_highlight, self.tracked_pid)
         
-        print(f"开始追踪包: {packet_id}")
+        # print(f"开始追踪包: {packet_id}")  # 删除debug输出
 
     def _on_key_press(self, event):
         """处理键盘事件"""
@@ -1207,7 +1257,7 @@ class CrossRingLinkStateVisualizer:
                 self._parent_model._paused = False
             self._parent_model._paused = not self._parent_model._paused
             status = "暂停" if self._parent_model._paused else "继续"
-            print(f"⏯️  仿真{status}")
+            # print(f"⏯️  仿真{status}")  # 删除debug输出
             
     def _reset_view(self):
         """重置视图"""
@@ -1215,14 +1265,14 @@ class CrossRingLinkStateVisualizer:
         self.use_highlight = False
         if hasattr(self, 'piece_vis'):
             self.piece_vis.sync_highlight(False, None)
-        print("重置视图")
+        # print("重置视图")  # 删除debug输出
         
     def _restart_simulation(self):
         """重启/重放仿真"""
         if hasattr(self, '_parent_model') and self._parent_model:
             # 重置仿真状态
             if hasattr(self._parent_model, 'cycle'):
-                print(f"重启仿真 (从周期 {self._parent_model.cycle} 重置到 0)")
+                pass  # print(f"重启仿真 (从周期 {self._parent_model.cycle} 重置到 0)")
                 # 注意：这里只是示例，实际重启需要模型支持
                 # self._parent_model.reset_simulation()  # 如果模型有此方法
             else:
@@ -1237,7 +1287,7 @@ class CrossRingLinkStateVisualizer:
             else:
                 new_interval = min(50, current_interval + 1)
             self._parent_model._visualization_update_interval = new_interval
-            print(f"速度调整: 间隔 {new_interval}")
+            pass  # print(f"速度调整: 间隔 {new_interval}")
             
     def _restart_simulation(self):
         """重启/重放仿真"""
@@ -1245,21 +1295,21 @@ class CrossRingLinkStateVisualizer:
             # 重置模型状态
             if hasattr(self._parent_model, 'reset'):
                 self._parent_model.reset()
-                print("重启仿真")
+                pass  # print("重启仿真")
             else:
-                print("重启功能暂不可用")
+                pass  # print("重启功能暂不可用")
                 
     def _set_max_speed(self):
         """设置最大速度"""
         if hasattr(self, '_parent_model') and self._parent_model:
             self._parent_model._visualization_update_interval = 1
-            print("设置为最大速度")
+            pass  # print("设置为最大速度")
             
     def _set_slow_speed(self):
         """设置慢速"""
         if hasattr(self, '_parent_model') and self._parent_model:
             self._parent_model._visualization_update_interval = 10
-            print("设置为慢速")
+            pass  # print("设置为慢速")
             
     def _show_help(self):
         """显示键盘快捷键帮助"""
@@ -1288,12 +1338,12 @@ CrossRing可视化控制键:
 状态显示在左上角实时更新
 ========================================
         """
-        print(help_text)
+        pass  # print(help_text)
 
     def _on_channel_select(self, channel):
         """通道选择回调"""
         self.current_channel = channel
-        print(f"切换到通道: {channel}")
+        pass  # print(f"切换到通道: {channel}")
         
         # 更新标题
         self._update_network_title()
@@ -1326,14 +1376,14 @@ CrossRing可视化控制键:
         
         # 清除所有slot颜色
         for rect in self.rect_info_map:
-            rect.set_facecolor('white')
+            rect.set_facecolor('none')
         
         self.fig.canvas.draw_idle()
-        print("清除高亮")
+        pass  # print("清除高亮")
 
     def _on_toggle_tags(self, event):
         """切换标签显示"""
-        print("切换标签显示")
+        pass  # print("切换标签显示")
 
     def _on_highlight_callback(self, packet_id, flit_id):
         """高亮回调"""
@@ -1350,7 +1400,7 @@ CrossRing可视化控制键:
         self._update_link_state(network)
         
         # 更新右侧节点详细视图
-        self.piece_vis.update_from_model(network, self._selected_node)
+        self.piece_vis.draw_piece_for_node(self._selected_node, network)
         
         # 更新状态显示
         self._update_status_display()
@@ -1372,31 +1422,18 @@ CrossRing可视化控制键:
                 rect.set_linewidth(0.8)
                 rect.set_linestyle('--')
                 rect.set_alpha(0.7)
-                # 重置数据绑定，保留link_id和slot_id，清除flit数据
-                link_id, _, slot_id = self.rect_info_map[rect]
-                self.rect_info_map[rect] = (link_id, None, slot_id)
+                # 重置数据绑定，保留link_ids和slot_id，清除flit数据
+                link_ids, _, slot_id = self.rect_info_map[rect]
+                self.rect_info_map[rect] = (link_ids, None, slot_id)
                 reset_count += 1
             
-            print(f"重置了 {reset_count} 个slot为默认状态")
+            # print(f"重置了 {reset_count} 个slot为默认状态")  # 删除debug输出
             
-            # 调试：检查网络结构
+            # 简化的网络状态检查（移除debug输出）
             if hasattr(network, 'links'):
                 link_count = len(network.links)
-                # 简化状态检查 - 只在首次更新时显示
-                if not hasattr(self, '_debug_shown'):
-                    self._debug_shown = True
-                    print(f"网络: {link_count} 个链路")
-                    
-                    # 检查非自环链路数量
-                    non_self_links = []
-                    for link_id, link in network.links.items():
-                        src_id, dest_id = self._parse_link_id(link_id)
-                        if src_id is not None and dest_id is not None and src_id != dest_id:
-                            non_self_links.append((link_id, link))
-                    
-                    print(f"   其中非自环链路: {len(non_self_links)} 个")
                 
-                # 简化flit检查
+                # 简化flit检查（移除debug输出）
                 found_any_flit = False
                 active_flit_count = 0
                 for link_id, link in network.links.items():
@@ -1414,62 +1451,12 @@ CrossRing可视化控制键:
                             except:
                                 pass
                 
-                if active_flit_count > 0:
-                    print(f"当前传输: {active_flit_count} 个flit")
+                # if active_flit_count > 0:
+                #     print(f"当前传输: {active_flit_count} 个flit")
                             
-                if not found_any_flit:
-                    # 只在前几次更新时显示，避免刷屏
-                    if not hasattr(self, '_no_flit_count'):
-                        self._no_flit_count = 0
-                    self._no_flit_count += 1
-                    if self._no_flit_count <= 3:
-                        # 检查节点内部是否有flit，帮助诊断问题
-                        node_flit_count = 0
-                        ip_flit_count = 0
-                        if hasattr(network, 'nodes'):
-                            for node_id, node in list(network.nodes.items())[:2]:  # 检查前两个节点
-                                # 检查inject_direction_fifos
-                                if hasattr(node, 'inject_direction_fifos'):
-                                    for direction, fifo in node.inject_direction_fifos.items():
-                                        if hasattr(fifo, 'queue') and fifo.queue:
-                                            node_flit_count += len(fifo.queue)
-                                # 检查IP接口中的数据
-                                if hasattr(node, 'ip_interfaces'):
-                                    for ip_name, ip_interface in node.ip_interfaces.items():
-                                        if hasattr(ip_interface, 'l2h_fifos'):
-                                            for channel, fifo in ip_interface.l2h_fifos.items():
-                                                if hasattr(fifo, 'queue') and fifo.queue:
-                                                    ip_flit_count += len(fifo.queue)
-                        # 检查模型的IP接口
-                        if hasattr(network, 'ip_interfaces') and ip_flit_count == 0:
-                            for ip_name, ip_interface in network.ip_interfaces.items():
-                                if hasattr(ip_interface, 'l2h_fifos'):
-                                    for channel, fifo in ip_interface.l2h_fifos.items():
-                                        if hasattr(fifo, 'queue') and fifo.queue:
-                                            ip_flit_count += len(fifo.queue)
-                        print(f"警告: 周期{getattr(network, 'cycle', '?')}: 链路无flit, 节点内{node_flit_count}个, IP内{ip_flit_count}个")
-                    elif hasattr(link, 'slots'):
-                        total_slots = len(link.slots)
-                        print(f"    发现slots: {total_slots} 个")
-                        valid_slots = 0
-                        slots_with_flit = 0
-                        
-                        for i, slot in enumerate(link.slots):
-                            if slot and hasattr(slot, 'valid') and slot.valid:
-                                valid_slots += 1
-                                # 检查slot内的flit数据
-                                if hasattr(slot, 'flit') and slot.flit:
-                                    flit = slot.flit
-                                    slots_with_flit += 1
-                                    if slots_with_flit <= 2:  # 只打印前几个
-                                        pid = getattr(flit, 'packet_id', 'N/A')
-                                        ftype = getattr(flit, 'flit_type', 'N/A')
-                                        ch = getattr(flit, 'channel', 'N/A')
-                                        print(f"    slot[{i}]: pid={pid}, type={ftype}, channel={ch}")
-                                        
-                        print(f"链路 {link_id}: {total_slots} 个slot, {valid_slots} 个有效slot, {slots_with_flit} 个有flit")
-            else:
-                print("错误: 网络没有links属性")
+                # 移除不必要的debug信息
+            # else:
+            #     print("错误: 网络没有links属性")
             
             # 尝试多种网络数据结构来更新链路状态
             self._update_from_network_links(network)
@@ -1477,8 +1464,8 @@ CrossRing可视化控制键:
                                 
         except Exception as e:
             import traceback
-            print(f"错误: 更新链路状态失败: {e}")
-            print(f"详细错误: {traceback.format_exc()}")
+            pass  # print(f"错误: 更新链路状态失败: {e}")
+            # print(f"详细错误: {traceback.format_exc()}")
             
     def _update_from_network_links(self, network):
         """从network.links更新链路状态"""
@@ -1486,7 +1473,7 @@ CrossRing可视化控制键:
             return
             
         current_channel = getattr(self, 'current_channel', 'req')
-        print(f"更新链路状态，当前通道: {current_channel}")
+        # print(f"更新链路状态，当前通道: {current_channel}")  # 删除debug输出
         
         for link_id, link in network.links.items():
             # 跳过自环链路
@@ -1525,11 +1512,20 @@ CrossRing可视化控制键:
                             
     def _should_display_flit(self, flit, channel):
         """判断是否应该显示该flit（基于通道过滤）"""
-        # 检查flit的通道属性
+        # 检查flit的通道属性（CrossRingFlit使用channel属性）
         flit_channel = getattr(flit, 'channel', None)
         flit_type = getattr(flit, 'flit_type', None)
         
-        # 如果flit有明确的channel属性
+        # 打印调试信息（首次遇到新类型时）
+        if not hasattr(self, '_logged_flit_types'):
+            self._logged_flit_types = set()
+        
+        flit_info = f"channel={flit_channel}, type={flit_type}"
+        if flit_info not in self._logged_flit_types:
+            self._logged_flit_types.add(flit_info)
+            # print(f"发现flit: {flit_info}")  # 删除debug输出
+        
+        # 如果flit有明确的channel属性（CrossRing使用这个）
         if flit_channel:
             return flit_channel.lower() == channel.lower()
             
@@ -1543,8 +1539,8 @@ CrossRing可视化控制键:
             elif 'data' in flit_type_str:
                 return channel.lower() == 'data'
         
-        # 默认显示所有flit（如果无法确定通道）
-        return True
+        # 默认不显示（如果无法确定通道）
+        return False
                         
     def _update_from_network_nodes(self, network):
         """从network.nodes的输出缓冲区更新链路状态"""
@@ -1563,6 +1559,21 @@ CrossRing可视化控制键:
                                 if flit:
                                     self._update_slot_visual(link_id, idx, flit)
                                     
+    def _link_id_matches(self, link_id, pattern):
+        """检查link_id是否匹配带通配符的模式"""
+        # pattern格式: link_1_*_0
+        # link_id格式: link_1_TR_0 或 link_1_TL_0
+        pattern_parts = pattern.split('_')
+        link_parts = link_id.split('_')
+        
+        if len(pattern_parts) != len(link_parts):
+            return False
+            
+        for p, l in zip(pattern_parts, link_parts):
+            if p != '*' and p != l:
+                return False
+        return True
+    
     def _get_link_id_from_node_direction(self, node_id, direction):
         """根据节点ID和方向获取对应的链路ID"""
         # 根据网络拓扑计算链路ID - 使用CrossRing的实际格式
@@ -1587,10 +1598,21 @@ CrossRing可视化控制键:
             
         # 查找对应的slot rectangle
         slot_found = False
-        for rect, (rect_link_id, _, rect_slot_idx) in self.rect_info_map.items():
-            if rect_link_id == link_id and str(slice_idx) in rect_slot_idx:
+        for rect, (rect_link_ids, _, rect_slot_idx) in self.rect_info_map.items():
+            # rect_link_ids可能是字符串（旧格式）或列表（新格式）
+            if isinstance(rect_link_ids, str):
+                rect_link_ids = [rect_link_ids]
+            
+            # 检查link_id是否匹配任何一个方向
+            link_matched = False
+            for rect_link_id in rect_link_ids:
+                if rect_link_id == link_id or ('*' in rect_link_id and self._link_id_matches(link_id, rect_link_id)):
+                    link_matched = True
+                    break
+            
+            if link_matched and str(slice_idx) in rect_slot_idx:
                 # 更新flit信息
-                self.rect_info_map[rect] = (rect_link_id, slot, rect_slot_idx)
+                self.rect_info_map[rect] = (rect_link_ids, slot, rect_slot_idx)
                 
                 # 获取flit样式（颜色、透明度、边框等）
                 face_color, alpha, line_width, edge_color = self._get_flit_style(
@@ -1610,12 +1632,7 @@ CrossRing可视化控制键:
                 slot_found = True
                 break
                 
-        # 调试输出
-        if slot_found:
-            pid = getattr(slot, 'packet_id', 'N/A')
-            print(f"更新slot: {link_id}[{slice_idx}] -> packet_id={pid}")
-        else:
-            print(f"错误: 未找到slot: {link_id}[{slice_idx}]")
+        # 移除过于频繁的调试输出
                 
     def _get_flit_style(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None):
         """
@@ -1669,7 +1686,7 @@ CrossRing可视化控制键:
     def save_figure(self, filename):
         """保存图片"""
         self.fig.savefig(filename, dpi=300, bbox_inches='tight')
-        print(f"图片已保存到: {filename}")
+        pass  # print(f"图片已保存到: {filename}")
 
 
 # 演示函数
@@ -1717,9 +1734,9 @@ if __name__ == "__main__":
     # 创建可视化器
     visualizer = CrossRingLinkStateVisualizer(config, demo_network)
     
-    print("CrossRing Link State Visualizer 演示")
-    print("点击节点可切换详细视图")
-    print("使用底部按钮控制显示模式")
+    pass  # print("CrossRing Link State Visualizer 演示")
+    # print("点击节点可切换详细视图")
+    # print("使用底部按钮控制显示模式")
     
     # 显示
     visualizer.show()

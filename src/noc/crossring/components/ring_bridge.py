@@ -318,9 +318,9 @@ class RingBridge:
             if current_node == flit.path[-1]:
                 return "EQ"
             
-            # 调试信息
-            if hasattr(flit, 'packet_id') and flit.packet_id == 1:
-                print(f"🎯 RB节点{current_node}: flit {flit.packet_id} 路径={flit.path}, path_index={getattr(flit, 'path_index', '?')}")
+            # 删除调试信息
+            # if hasattr(flit, 'packet_id') and flit.packet_id == 1:
+            #     print(f"🎯 RB节点{current_node}: flit {flit.packet_id} 路径={flit.path}, path_index={getattr(flit, 'path_index', '?')}")
             
             # 查找当前节点在路径中的位置
             try:
@@ -339,8 +339,9 @@ class RingBridge:
                 
                 # 根据下一跳计算方向
                 direction = self._calculate_direction_to_next_node(current_node, next_node)
-                if hasattr(flit, 'packet_id') and flit.packet_id == 1:
-                    print(f"   -> 下一跳: 节点{next_node}, 方向: {direction}")
+                # 删除debug输出
+                # if hasattr(flit, 'packet_id') and flit.packet_id == 1:
+                #     print(f"   -> 下一跳: 节点{next_node}, 方向: {direction}")
                 return direction
                 
             except ValueError:

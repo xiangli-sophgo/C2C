@@ -321,13 +321,13 @@ class CrossPoint:
                 # 判断是否应该下环以及下环目标
                 should_eject, eject_target = self._should_eject_flit_unified(flit, direction)
 
-                # 调试：跟踪节点7的flit处理
-                if self.parent_node and self.parent_node.node_id == 7 and hasattr(flit, "packet_id") and flit.packet_id == 1:
-                    current_pos = getattr(flit, "current_position", "?")
-                    print(
-                        f"🔍 节点7 {self.direction.value}CP: flit {flit.packet_id}.{getattr(flit, 'sub_id', '?')} "
-                        f"从{current_pos} 方向{direction} 下环={should_eject} 目标={eject_target}"
-                    )
+                # 删除调试输出
+                # if self.parent_node and self.parent_node.node_id == 7 and hasattr(flit, "packet_id") and flit.packet_id == 1:
+                #     current_pos = getattr(flit, "current_position", "?")
+                #     print(
+                #         f"🔍 节点7 {self.direction.value}CP: flit {flit.packet_id}.{getattr(flit, 'sub_id', '?')} "
+                #         f"从{current_pos} 方向{direction} 下环={should_eject} 目标={eject_target}"
+                #     )
 
                 if should_eject:
                     if eject_target == "RB":
@@ -494,19 +494,20 @@ class CrossPoint:
             return False, ""
 
         current_node = self.parent_node.node_id
-        if flit.packet_id == 10 and flit.flit_id == 2:
-            print(f"🔍 节点{current_node} {self.direction.value}CP: flit {flit.packet_id} 到达")
+        # 删除debug输出
+        # if flit.packet_id == 10 and flit.flit_id == 2:
+        #     print(f"🔍 节点{current_node} {self.direction.value}CP: flit {flit.packet_id} 到达")
 
-        # 调试信息：检查flit的基本属性
-        debug_enabled = hasattr(flit, "packet_id") and str(flit.packet_id).startswith("5")
-        if debug_enabled:
-            print(
-                f"🔍 节点{current_node} {self.direction.value}CP: flit {flit.packet_id}.{getattr(flit, 'flit_index', '?')} "
-                f"从{getattr(flit, 'source', '?')} 方向{arrival_direction} "
-                f"下环=? 目标={getattr(flit, 'destination', getattr(flit, 'dest_node_id', '?'))}"
-            )
-            if hasattr(flit, "path"):
-                print(f"    路径={flit.path}, 当前位置在路径中的索引={getattr(flit, 'path_index', '?')}")
+        # 删除调试信息
+        debug_enabled = False  # hasattr(flit, "packet_id") and str(flit.packet_id).startswith("5")
+        # if debug_enabled:
+        #     print(
+        #         f"🔍 节点{current_node} {self.direction.value}CP: flit {flit.packet_id}.{getattr(flit, 'flit_index', '?')} "
+        #         f"从{getattr(flit, 'source', '?')} 方向{arrival_direction} "
+        #         f"下环=? 目标={getattr(flit, 'destination', getattr(flit, 'dest_node_id', '?'))}"
+        #     )
+        #     if hasattr(flit, "path"):
+        #         print(f"    路径={flit.path}, 当前位置在路径中的索引={getattr(flit, 'path_index', '?')}")
 
         # 基于路径判断
         # 检查是否到达最终目标
