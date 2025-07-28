@@ -39,28 +39,18 @@ class CrossRingNode:
         self.inject_queue = InjectQueue(node_id, coordinates, config, topology=topology)
         self.eject_queue = EjectQueue(node_id, coordinates, config)
         self.ring_bridge = RingBridge(node_id, coordinates, config, topology=topology)
-        
+
         # 设置parent_node引用
         self.ring_bridge.parent_node = self
         self.eject_queue.parent_node = self
 
         # 初始化CrossPoint实例
         self.horizontal_crosspoint = CrossPoint(
-            crosspoint_id=f"node_{node_id}_horizontal",
-            node_id=node_id,
-            direction=CrossPointDirection.HORIZONTAL,
-            config=config,
-            coordinates=coordinates,
-            parent_node=self
+            crosspoint_id=f"node_{node_id}_horizontal", node_id=node_id, direction=CrossPointDirection.HORIZONTAL, config=config, coordinates=coordinates, parent_node=self
         )
 
         self.vertical_crosspoint = CrossPoint(
-            crosspoint_id=f"node_{node_id}_vertical",
-            node_id=node_id,
-            direction=CrossPointDirection.VERTICAL,
-            config=config,
-            coordinates=coordinates,
-            parent_node=self
+            crosspoint_id=f"node_{node_id}_vertical", node_id=node_id, direction=CrossPointDirection.VERTICAL, config=config, coordinates=coordinates, parent_node=self
         )
 
         # 性能统计
@@ -81,9 +71,9 @@ class CrossRingNode:
         return self.inject_queue.ip_inject_channel_buffers
 
     @property
-    def inject_direction_fifos(self):
+    def inject_input_fifos(self):
         """提供对inject方向FIFO的访问，保持接口兼容性。"""
-        return self.inject_queue.inject_direction_fifos
+        return self.inject_queue.inject_input_fifos
 
     def connect_ip(self, ip_id: str) -> bool:
         """连接IP到当前节点。"""
@@ -137,27 +127,27 @@ class CrossRingNode:
 
         # 2. CrossPoint计算阶段（先计算弹出决策）
         eject_fifos = self.eject_queue.eject_input_fifos
-        inject_fifos = self.inject_queue.inject_direction_fifos
+        inject_fifos = self.inject_queue.inject_input_fifos
         self.horizontal_crosspoint.step_compute_phase(cycle, inject_fifos, eject_fifos)
         self.vertical_crosspoint.step_compute_phase(cycle, inject_fifos, eject_fifos)
 
         # 3. 计算仲裁决策（基于CrossPoint的弹出计划）
         self.inject_queue.compute_arbitration(cycle)
-        self.ring_bridge.compute_arbitration(cycle, self.inject_queue.inject_direction_fifos)
-        self.eject_queue.compute_arbitration(cycle, self.inject_queue.inject_direction_fifos, self.ring_bridge)
+        self.ring_bridge.compute_arbitration(cycle, self.inject_queue.inject_input_fifos)
+        self.eject_queue.compute_arbitration(cycle, self.inject_queue.inject_input_fifos, self.ring_bridge)
 
     def step_update_phase(self, cycle: int) -> None:
         """
         更新阶段：基于计算阶段的决策执行状态修改。
         """
         # 1. CrossPoint更新阶段（先写入数据到FIFO）
-        self.horizontal_crosspoint.step_update_phase(cycle, self.inject_queue.inject_direction_fifos, self.eject_queue.eject_input_fifos)
-        self.vertical_crosspoint.step_update_phase(cycle, self.inject_queue.inject_direction_fifos, self.eject_queue.eject_input_fifos)
+        self.horizontal_crosspoint.step_update_phase(cycle, self.inject_queue.inject_input_fifos, self.eject_queue.eject_input_fifos)
+        self.vertical_crosspoint.step_update_phase(cycle, self.inject_queue.inject_input_fifos, self.eject_queue.eject_input_fifos)
 
         # 2. 执行所有仲裁决策（基于CrossPoint写入的数据）
         self.inject_queue.execute_arbitration(cycle)
-        self.ring_bridge.execute_arbitration(cycle, self.inject_queue.inject_direction_fifos)
-        self.eject_queue.execute_arbitration(cycle, self.inject_queue.inject_direction_fifos, self.ring_bridge)
+        self.ring_bridge.execute_arbitration(cycle, self.inject_queue.inject_input_fifos)
+        self.eject_queue.execute_arbitration(cycle, self.inject_queue.inject_input_fifos, self.ring_bridge)
 
         # 3. 更新所有FIFO的时序逻辑
         self.inject_queue.step_update_phase()
@@ -170,7 +160,7 @@ class CrossRingNode:
         for channel in ["req", "rsp", "data"]:
             status[channel] = {}
             for direction in ["TR", "TL", "TU", "TD", "EQ"]:
-                fifo = self.inject_queue.inject_direction_fifos[channel][direction]
+                fifo = self.inject_queue.inject_input_fifos[channel][direction]
                 status[channel][direction] = {
                     "occupancy": len(fifo),
                     "ready": fifo.ready_signal(),

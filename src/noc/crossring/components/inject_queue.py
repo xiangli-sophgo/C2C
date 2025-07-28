@@ -44,7 +44,7 @@ class InjectQueue:
         self.ip_inject_channel_buffers = {}
 
         # 方向化的注入队列
-        self.inject_direction_fifos = self._create_direction_fifos()
+        self.inject_input_fifos = self._create_direction_fifos()
 
         # 注入仲裁状态
         self.inject_arbitration_state = {
@@ -148,7 +148,7 @@ class InjectQueue:
                     continue
 
                 # 检查目标inject_direction_fifo是否有空间
-                target_fifo = self.inject_direction_fifos[channel][correct_direction]
+                target_fifo = self.inject_input_fifos[channel][correct_direction]
                 if target_fifo.ready_signal():
                     # 规划传输
                     self._inject_transfer_plan.append((ip_id, channel, flit, correct_direction))
@@ -167,7 +167,7 @@ class InjectQueue:
             actual_flit = channel_buffer.read_output()
 
             # 写入目标inject_direction_fifo
-            target_fifo = self.inject_direction_fifos[channel][direction]
+            target_fifo = self.inject_input_fifos[channel][direction]
             if actual_flit and target_fifo.write_input(actual_flit):
                 # 更新flit位置状态
                 actual_flit.flit_position = f"IQ_{direction}"
@@ -189,7 +189,7 @@ class InjectQueue:
         # 更新inject direction FIFOs
         for channel in ["req", "rsp", "data"]:
             for direction in ["TR", "TL", "TU", "TD", "EQ"]:
-                self.inject_direction_fifos[channel][direction].step_compute_phase(cycle)
+                self.inject_input_fifos[channel][direction].step_compute_phase(cycle)
 
     def step_update_phase(self) -> None:
         """FIFO时序逻辑更新。"""
@@ -201,7 +201,7 @@ class InjectQueue:
         # 更新inject direction FIFOs
         for channel in ["req", "rsp", "data"]:
             for direction in ["TR", "TL", "TU", "TD", "EQ"]:
-                self.inject_direction_fifos[channel][direction].step_update_phase()
+                self.inject_input_fifos[channel][direction].step_update_phase()
 
     def _calculate_routing_direction(self, flit: CrossRingFlit) -> str:
         """
@@ -284,7 +284,7 @@ class InjectQueue:
         for channel in ["req", "rsp", "data"]:
             status[channel] = {}
             for direction in ["TR", "TL", "TU", "TD", "EQ"]:
-                fifo = self.inject_direction_fifos[channel][direction]
+                fifo = self.inject_input_fifos[channel][direction]
                 status[channel][direction] = {
                     "occupancy": len(fifo),
                     "ready": fifo.ready_signal(),

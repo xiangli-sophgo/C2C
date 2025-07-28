@@ -265,9 +265,7 @@ class CrossPoint:
                 has_dedicated = True
 
             # 创建entry管理器
-            self.etag_entry_managers[sub_direction] = EntryAllocationTracker(
-                total_depth=total_depth, t2_max_entries=t2_max, t1_max_entries=t1_max, has_dedicated_entries=has_dedicated
-            )
+            self.etag_entry_managers[sub_direction] = EntryAllocationTracker(total_depth=total_depth, t2_max_entries=t2_max, t1_max_entries=t1_max, has_dedicated_entries=has_dedicated)
 
     def connect_slice(self, direction: str, slice_type: str, ring_slice: RingSlice) -> None:
         """
@@ -294,7 +292,7 @@ class CrossPoint:
 
         Args:
             cycle: 当前周期
-            node_inject_fifos: 节点的inject_direction_fifos
+            node_inject_fifos: 节点的inject_input_fifos
             node_eject_fifos: 节点的eject_input_fifos
         """
         # 清空上一周期的传输计划
@@ -384,12 +382,10 @@ class CrossPoint:
                     if ring_bridge_flit:
                         # 检查departure slice是否可以接受flit
                         if self._can_inject_to_departure_slice(departure_slice, channel, direction):
-                            self.injection_transfer_plans.append(
-                                {"type": "ring_bridge_reinject", "direction": direction, "channel": channel, "flit": ring_bridge_flit, "priority": 1}  # 最高优先级
-                            )
+                            self.injection_transfer_plans.append({"type": "ring_bridge_reinject", "direction": direction, "channel": channel, "flit": ring_bridge_flit, "priority": 1})  # 最高优先级
                             continue  # ring_bridge优先级高，如果有就不检查FIFO
 
-                # 2. 检查普通inject_direction_fifos
+                # 2. 检查普通inject_input_fifos
                 if direction in node_inject_fifos[channel]:
                     direction_fifo = node_inject_fifos[channel][direction]
 
@@ -433,7 +429,7 @@ class CrossPoint:
 
         Args:
             cycle: 当前周期
-            node_inject_fifos: 节点的inject_direction_fifos
+            node_inject_fifos: 节点的inject_input_fifos
             node_eject_fifos: 节点的eject_input_fifos
         """
         # ========== 执行下环传输计划 ==========
@@ -639,7 +635,7 @@ class CrossPoint:
             return False
 
         # 在update阶段，如果slot已经有分配的entry信息，直接返回True
-        if not is_compute_phase and hasattr(slot, 'allocated_entry_info') and slot.allocated_entry_info:
+        if not is_compute_phase and hasattr(slot, "allocated_entry_info") and slot.allocated_entry_info:
             return True
 
         # 获取flit的E-Tag优先级
@@ -1202,13 +1198,13 @@ class CrossPoint:
 
             if removed_count > 0:
                 pass
-        
+
         # 清理slot的E-Tag标记（slot要被重用）
         slot.clear_etag()
-        
+
         # 清理allocated_entry_info（如果有的话）
-        if hasattr(slot, 'allocated_entry_info'):
-            delattr(slot, 'allocated_entry_info')
+        if hasattr(slot, "allocated_entry_info"):
+            delattr(slot, "allocated_entry_info")
 
     def step(self, cycle: int, node_inject_fifos: Dict[str, Dict[str, Any]], node_eject_fifos: Dict[str, Dict[str, Any]]) -> None:
         """
@@ -1216,7 +1212,7 @@ class CrossPoint:
 
         Args:
             cycle: 当前周期
-            node_inject_fifos: 节点的inject_direction_fifos
+            node_inject_fifos: 节点的inject_input_fifos
             node_eject_fifos: 节点的eject_input_fifos
         """
         # 第一阶段：计算阶段
@@ -1238,9 +1234,7 @@ class CrossPoint:
             "direction": self.direction.value,
             "managed_directions": self.managed_directions,
             # Slice连接状态
-            "slice_connections": {
-                direction: {slice_type: slice_ref is not None for slice_type, slice_ref in slices.items()} for direction, slices in self.slice_connections.items()
-            },
+            "slice_connections": {direction: {slice_type: slice_ref is not None for slice_type, slice_ref in slices.items()} for direction, slices in self.slice_connections.items()},
             # E-Tag状态
             "etag_entry_managers": {
                 direction: {
@@ -1257,10 +1251,7 @@ class CrossPoint:
             "t0_global_queues": {channel: {"length": len(queue), "first_slot_id": queue[0].slot_id if queue else None} for channel, queue in self.t0_global_queues.items()},
             # I-Tag预约状态
             "itag_reservations": {
-                channel: {
-                    ring_type: {"active": reservation.active, "slot_id": reservation.reserved_slot_id, "wait_cycles": reservation.wait_cycles}
-                    for ring_type, reservation in reservations.items()
-                }
+                channel: {ring_type: {"active": reservation.active, "slot_id": reservation.reserved_slot_id, "wait_cycles": reservation.wait_cycles} for ring_type, reservation in reservations.items()}
                 for channel, reservations in self.itag_reservations.items()
             },
             # 等待队列状态

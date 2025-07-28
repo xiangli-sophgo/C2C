@@ -99,9 +99,11 @@ class CrossRingModel(BaseNoCModel):
         # 实时可视化组件
         self._realtime_visualizer = None
         self._visualization_enabled = False
-        self._visualization_update_interval = 10  # 每多少个周期更新一次可视化
+        self._visualization_update_interval = 10  # 每多少个周期更新一次可视化（保留用于setup_visualization）
+        self._visualization_frame_interval = 0.5  # 每帧间隔时间（秒）
         self._visualization_start_cycle = 0  # 从哪个周期开始可视化
         self._visualization_initialized = False  # 可视化是否已初始化
+        self._paused = False  # 可视化暂停状态
 
         # 初始化模型（不包括IP接口创建，IP接口将在setup_traffic_scheduler中创建）
         self.initialize_model()
@@ -953,7 +955,7 @@ class CrossRingModel(BaseNoCModel):
             if not self._visualization_initialized:
                 self._initialize_visualization()
 
-            if self._realtime_visualizer and self.cycle % self._visualization_update_interval == 0:
+            if self._realtime_visualizer:
                 self._update_visualization()
 
         # Debug休眠已移至_print_debug_info中，只有在打印信息时才执行
@@ -1575,11 +1577,11 @@ class CrossRingModel(BaseNoCModel):
             node_id_str = str(node_id)
 
             # 注册inject direction FIFOs (注入队列输出)
-            if hasattr(node, "inject_direction_fifos"):
-                # 结构: inject_direction_fifos[channel][direction]
+            if hasattr(node, "inject_input_fifos"):
+                # 结构: inject_input_fifos[channel][direction]
                 for channel in ["req", "rsp", "data"]:
-                    if channel in node.inject_direction_fifos:
-                        direction_dict = node.inject_direction_fifos[channel]
+                    if channel in node.inject_input_fifos:
+                        direction_dict = node.inject_input_fifos[channel]
                         if isinstance(direction_dict, dict):
                             for direction in ["TR", "TL", "TU", "TD", "EQ"]:
                                 if direction in direction_dict:
@@ -1707,7 +1709,16 @@ class CrossRingModel(BaseNoCModel):
             # 强制刷新显示
             import matplotlib.pyplot as plt
 
-            plt.pause(0.1)  # 短暂暂停以刷新GUI
+            # 检查暂停状态
+            paused = getattr(self, "_paused", False)
+            if paused:
+                # 进入暂停等待循环，保持GUI响应
+                while getattr(self, "_paused", False):
+                    plt.pause(0.1)
+            else:
+                # 正常帧率控制
+                frame_interval = getattr(self, "_visualization_frame_interval", 0.5)
+                plt.pause(frame_interval)
 
         except Exception as e:
             print(f"⚠️  可视化更新失败 (周期 {self.cycle}): {e}")

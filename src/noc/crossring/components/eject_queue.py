@@ -131,13 +131,13 @@ class EjectQueue:
             arb_state["sources"] = active_sources.copy()
             arb_state["last_served_source"] = {source: 0 for source in active_sources}
 
-    def compute_arbitration(self, cycle: int, inject_direction_fifos: Dict, ring_bridge) -> None:
+    def compute_arbitration(self, cycle: int, inject_input_fifos: Dict, ring_bridge) -> None:
         """
         计算阶段：确定要传输的flit但不执行传输。
 
         Args:
             cycle: 当前周期
-            inject_direction_fifos: 注入方向FIFO
+            inject_input_fifos: 注入方向FIFO
             ring_bridge: RingBridge实例
         """
         # 首先初始化源列表（如果还没有初始化）
@@ -149,9 +149,9 @@ class EjectQueue:
 
         # 为每个通道计算eject仲裁
         for channel in ["req", "rsp", "data"]:
-            self._compute_channel_eject_arbitration(channel, cycle, inject_direction_fifos, ring_bridge)
+            self._compute_channel_eject_arbitration(channel, cycle, inject_input_fifos, ring_bridge)
 
-    def _compute_channel_eject_arbitration(self, channel: str, cycle: int, inject_direction_fifos: Dict, ring_bridge) -> None:
+    def _compute_channel_eject_arbitration(self, channel: str, cycle: int, inject_input_fifos: Dict, ring_bridge) -> None:
         """计算单个通道的eject仲裁。"""
         if not self.connected_ips:
             return
@@ -165,7 +165,7 @@ class EjectQueue:
             source = sources[current_source_idx]
 
             # 获取来自当前源的flit (使用peek，不实际读取)
-            flit = self._peek_flit_from_eject_source(source, channel, inject_direction_fifos, ring_bridge)
+            flit = self._peek_flit_from_eject_source(source, channel, inject_input_fifos, ring_bridge)
             if flit is not None:
                 # 找到flit，现在确定分配给哪个IP
                 target_ip = self._find_target_ip_for_flit(flit, channel, cycle)
@@ -182,13 +182,13 @@ class EjectQueue:
             # 移动到下一个源
             arb_state["current_source"] = (current_source_idx + 1) % len(sources)
 
-    def execute_arbitration(self, cycle: int, inject_direction_fifos: Dict, ring_bridge) -> None:
+    def execute_arbitration(self, cycle: int, inject_input_fifos: Dict, ring_bridge) -> None:
         """
         执行阶段：基于compute阶段的计算执行实际传输。
 
         Args:
             cycle: 当前周期
-            inject_direction_fifos: 注入方向FIFO
+            inject_input_fifos: 注入方向FIFO
             ring_bridge: RingBridge实例
         """
         if not hasattr(self, "_eject_transfer_plan"):
@@ -197,17 +197,17 @@ class EjectQueue:
         # 执行所有计划的传输
         for source, channel, flit, target_ip in self._eject_transfer_plan:
             # 从源获取flit（实际取出）
-            actual_flit = self._get_flit_from_eject_source(source, channel, inject_direction_fifos, ring_bridge)
+            actual_flit = self._get_flit_from_eject_source(source, channel, inject_input_fifos, ring_bridge)
             if actual_flit:
                 if self._assign_flit_to_ip(actual_flit, target_ip, channel, cycle):
                     # 成功传输，更新统计
                     self.stats["ejected_flits"][channel] += 1
 
-    def _peek_flit_from_eject_source(self, source: str, channel: str, inject_direction_fifos: Dict, ring_bridge) -> Optional[CrossRingFlit]:
+    def _peek_flit_from_eject_source(self, source: str, channel: str, inject_input_fifos: Dict, ring_bridge) -> Optional[CrossRingFlit]:
         """从指定的eject源查看flit（不实际读取）。"""
         if source == "IQ_EQ":
-            # 直接从inject_direction_fifos的EQ查看
-            eq_fifo = inject_direction_fifos[channel]["EQ"]
+            # 直接从inject_input_fifos的EQ查看
+            eq_fifo = inject_input_fifos[channel]["EQ"]
             if eq_fifo.valid_signal():
                 return eq_fifo.peek_output()
 
@@ -237,11 +237,11 @@ class EjectQueue:
 
         return None
 
-    def _get_flit_from_eject_source(self, source: str, channel: str, inject_direction_fifos: Dict, ring_bridge) -> Optional[CrossRingFlit]:
+    def _get_flit_from_eject_source(self, source: str, channel: str, inject_input_fifos: Dict, ring_bridge) -> Optional[CrossRingFlit]:
         """从指定的eject源获取flit。"""
         if source == "IQ_EQ":
-            # 直接从inject_direction_fifos的EQ获取
-            eq_fifo = inject_direction_fifos[channel]["EQ"]
+            # 直接从inject_input_fifos的EQ获取
+            eq_fifo = inject_input_fifos[channel]["EQ"]
             if eq_fifo.valid_signal():
                 return eq_fifo.read_output()
 
@@ -304,28 +304,28 @@ class EjectQueue:
             # 更新IP仲裁状态
             arb_state = self.eject_arbitration_state[channel]
             arb_state["last_served_ip"][ip_id] = cycle
-            
+
             # 释放E-Tag entry（如果flit有allocated_entry_info）
-            if hasattr(flit, 'allocated_entry_info') and self.parent_node:
+            if hasattr(flit, "allocated_entry_info") and self.parent_node:
                 entry_info = flit.allocated_entry_info
-                direction = entry_info['direction']
-                priority = entry_info['priority']
-                
+                direction = entry_info["direction"]
+                priority = entry_info["priority"]
+
                 # 找到对应的CrossPoint和entry管理器
                 if direction in ["TR", "TL"]:
                     crosspoint = self.parent_node.horizontal_crosspoint
                 else:  # TU, TD
                     crosspoint = self.parent_node.vertical_crosspoint
-                
+
                 if direction in crosspoint.etag_entry_managers:
                     entry_manager = crosspoint.etag_entry_managers[direction]
                     if entry_manager.release_entry(priority):
                         crosspoint.stats["entry_releases"][channel][priority] += 1
                         # 可选：打印调试信息
                         # print(f"🔓 EQ释放entry: 节点{self.node_id} 方向{direction} {priority}级entry")
-                
+
                 # 清除flit的entry信息（已经释放）
-                delattr(flit, 'allocated_entry_info')
+                delattr(flit, "allocated_entry_info")
 
             return True
         else:

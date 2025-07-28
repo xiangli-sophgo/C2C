@@ -62,19 +62,19 @@ class TestCrossRingModules(unittest.TestCase):
         """测试inject_queue的数据结构"""
         # 检查基本结构存在
         self.assertTrue(hasattr(self.node, "ip_inject_channel_buffers"))
-        self.assertTrue(hasattr(self.node, "inject_direction_fifos"))
+        self.assertTrue(hasattr(self.node, "inject_input_fifos"))
         self.assertTrue(hasattr(self.node, "inject_arbitration_state"))
 
-        # 检查inject_direction_fifos结构
+        # 检查inject_input_fifos结构
         for channel in ["req", "rsp", "data"]:
-            self.assertIn(channel, self.node.inject_direction_fifos)
+            self.assertIn(channel, self.node.inject_input_fifos)
             for direction in ["TR", "TL", "TU", "TD", "EQ"]:
-                self.assertIn(direction, self.node.inject_direction_fifos[channel])
+                self.assertIn(direction, self.node.inject_input_fifos[channel])
 
         # 检查FIFO深度
         for channel in ["req", "rsp", "data"]:
             for direction in ["TR", "TL", "TU", "TD", "EQ"]:
-                fifo = self.node.inject_direction_fifos[channel][direction]
+                fifo = self.node.inject_input_fifos[channel][direction]
                 self.assertEqual(fifo.internal_queue.maxlen, self.config.iq_out_depth)
 
     def test_ip_connection_management(self):
@@ -164,7 +164,7 @@ class TestCrossRingModules(unittest.TestCase):
         self.node._step_update_phase()
 
         # 检查TR方向FIFO是否有flit
-        tr_fifo = self.node.inject_direction_fifos["req"]["TR"]
+        tr_fifo = self.node.inject_input_fifos["req"]["TR"]
         self.assertTrue(tr_fifo.valid_signal())
 
     # ==================== eject_queue 测试 ====================
@@ -212,7 +212,7 @@ class TestCrossRingModules(unittest.TestCase):
         local_flit = self.create_test_flit(1, (1, 1), "req")  # 本地目标
 
         # 模拟从IQ_EQ获取flit (先将flit放入inject EQ FIFO)
-        eq_fifo = self.node.inject_direction_fifos["req"]["EQ"]
+        eq_fifo = self.node.inject_input_fifos["req"]["EQ"]
         eq_fifo.write_input(local_flit)
 
         # 运行周期更新
@@ -480,7 +480,7 @@ class TestCrossRingModules(unittest.TestCase):
         flit = self.create_test_flit(1, (1, 3), "req")  # 向上
 
         # 先放入inject TU FIFO
-        tu_fifo = self.node.inject_direction_fifos["req"]["TU"]
+        tu_fifo = self.node.inject_input_fifos["req"]["TU"]
         tu_fifo.write_input(flit)
 
         # 运行周期更新
@@ -556,7 +556,7 @@ class TestCrossRingModules(unittest.TestCase):
         # 创建多个本地flit
         for i in range(3):
             local_flit = self.create_test_flit(i, (1, 1), "req")
-            eq_fifo = self.node.inject_direction_fifos["req"]["EQ"]
+            eq_fifo = self.node.inject_input_fifos["req"]["EQ"]
             eq_fifo.write_input(local_flit)
 
         # 运行初始周期更新
@@ -599,8 +599,8 @@ class TestCrossRingModules(unittest.TestCase):
 
         # 检查结果
         # TR方向应该有向右的flit
-        tr_fifo = self.node.inject_direction_fifos["req"]["TR"]
-        eq_fifo = self.node.inject_direction_fifos["req"]["EQ"]
+        tr_fifo = self.node.inject_input_fifos["req"]["TR"]
+        eq_fifo = self.node.inject_input_fifos["req"]["EQ"]
         # 至少其中一个方向应该有flit
         self.assertTrue(tr_fifo.valid_signal() or eq_fifo.valid_signal())
 

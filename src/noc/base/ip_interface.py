@@ -153,7 +153,10 @@ class PipelinedFIFO:
     def __init__(self, name: str, depth: int):
         self.name = name
         self.max_depth = depth
-        self.internal_queue = deque(maxlen=depth)
+        # 确保总容量等于配置深度：internal_queue + output_register = depth
+        # 至少保证internal_queue深度为1，以避免退化情况
+        internal_depth = max(1, depth - 1)
+        self.internal_queue = deque(maxlen=internal_depth)
         self.output_register = None
         self.output_valid = False  # 输出有效信号
         self.read_this_cycle = False  # 本周期是否被读取

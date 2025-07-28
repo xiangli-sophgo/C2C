@@ -38,7 +38,7 @@ def create_demo_crossring_model():
         node = SimpleNamespace()
 
         # 注入方向FIFOs
-        node.inject_direction_fifos = {"TL": create_demo_fifo(), "TR": create_demo_fifo(), "TU": create_demo_fifo(), "TD": create_demo_fifo()}
+        node.inject_input_fifos = {"TL": create_demo_fifo(), "TR": create_demo_fifo(), "TU": create_demo_fifo(), "TD": create_demo_fifo()}
 
         # 提取输入FIFOs
         node.eject_input_fifos = {"TL": create_demo_fifo(), "TR": create_demo_fifo(), "TU": create_demo_fifo(), "TD": create_demo_fifo()}
@@ -184,7 +184,7 @@ def demo_animated():
             plt.pause(0.8)
 
             if cycle % 10 == 0:
-                node_count = sum(1 for node in demo_model.nodes.values() for fifo in node.inject_direction_fifos.values() if fifo.queue)
+                node_count = sum(1 for node in demo_model.nodes.values() for fifo in node.inject_input_fifos.values() if fifo.queue)
                 link_count = sum(1 for link in demo_model.links.values() for slice_obj in link.slices if slice_obj.slot and slice_obj.slot.valid)
                 print(f"周期 {cycle}: 节点队列 {node_count}, 链路活跃 {link_count}")
 
@@ -200,8 +200,8 @@ def update_demo_model(model):
     """更新演示模型的数据"""
     # 随机更新节点FIFO数据
     for node in model.nodes.values():
-        # 更新inject_direction_fifos
-        for direction, fifo in node.inject_direction_fifos.items():
+        # 更新inject_input_fifos
+        for direction, fifo in node.inject_input_fifos.items():
             # 随机添加或移除flit
             if random.random() < 0.2 and len(fifo.queue) < 3:
                 flit = _FlitProxy(pid=random.randint(1, 4), fid=f"F{random.randint(0, 7)}", etag=random.choice(["T0", "T1", "T2"]), ih=random.random() < 0.1, iv=random.random() < 0.1)

@@ -44,14 +44,29 @@ class CrossRingNodeVisualizer:
         self.rows = config.NUM_ROW
         self.parent = parent
 
-        # 提取深度
-        self.IQ_OUT_DEPTH = config.fifo_config.IQ_OUT_FIFO_DEPTH
-        self.EQ_IN_DEPTH = config.fifo_config.EQ_IN_FIFO_DEPTH
-        self.RB_IN_DEPTH = config.fifo_config.RB_IN_FIFO_DEPTH
-        self.RB_OUT_DEPTH = config.fifo_config.RB_OUT_FIFO_DEPTH
-        self.IQ_CH_depth = config.fifo_config.IQ_CH_DEPTH
-        self.EQ_CH_depth = config.fifo_config.EQ_CH_DEPTH
-        self.SLICE_PER_LINK = config.basic_config.SLICE_PER_LINK
+        # 历史保存功能
+        from collections import deque
+
+        self.node_history = deque(maxlen=50)  # 保存最近50个周期的节点状态
+
+        # 提取深度 - 兼容不同的配置格式
+        if hasattr(config, 'fifo_config'):
+            self.IQ_OUT_DEPTH = config.fifo_config.IQ_OUT_FIFO_DEPTH
+            self.EQ_IN_DEPTH = config.fifo_config.EQ_IN_FIFO_DEPTH
+            self.RB_IN_DEPTH = config.fifo_config.RB_IN_FIFO_DEPTH
+            self.RB_OUT_DEPTH = config.fifo_config.RB_OUT_FIFO_DEPTH
+            self.IQ_CH_depth = config.fifo_config.IQ_CH_DEPTH
+            self.EQ_CH_depth = config.fifo_config.EQ_CH_DEPTH
+            self.SLICE_PER_LINK = config.basic_config.SLICE_PER_LINK
+        else:
+            # demo格式配置
+            self.IQ_OUT_DEPTH = getattr(config, 'IQ_OUT_FIFO_DEPTH', 8)
+            self.EQ_IN_DEPTH = getattr(config, 'EQ_IN_FIFO_DEPTH', 8)
+            self.RB_IN_DEPTH = getattr(config, 'RB_IN_FIFO_DEPTH', 4)
+            self.RB_OUT_DEPTH = getattr(config, 'RB_OUT_FIFO_DEPTH', 4)
+            self.IQ_CH_depth = getattr(config, 'IQ_CH_FIFO_DEPTH', 4)
+            self.EQ_CH_depth = getattr(config, 'EQ_CH_FIFO_DEPTH', 4)
+            self.SLICE_PER_LINK = getattr(config, 'SLICE_PER_LINK', 8)
 
         # 固定几何参数
         self.square = 0.3  # flit 方块边长
@@ -156,7 +171,7 @@ class CrossRingNodeVisualizer:
     def _draw_modules(self):
         """绘制所有模块"""
         # 获取通道名称
-        ch_names = self.config.CH_NAME_LIST
+        ch_names = getattr(self.config, 'CH_NAME_LIST', ['gdma', 'ddr'])
 
         # ------------------- unified module configs ------------------- #
         iq_config = dict(
@@ -284,7 +299,7 @@ class CrossRingNodeVisualizer:
         # 添加边距
         margin = 2
         self.ax.set_xlim(min_x - margin, max_x + margin)
-        self.ax.set_ylim(min_y - margin * 3, max_y + margin * 3)
+        self.ax.set_ylim(min_y - margin * 4, max_y + margin * 0)
 
     def _draw_node_module(self, x, y, module_size, module_config):
         """绘制节点模块"""
@@ -535,371 +550,193 @@ class CrossRingNodeVisualizer:
 
         return x, y
 
-    def _draw_fifo(self, x, y, depth, orientation, lane, patch_dict, text_dict):
-        """绘制单个FIFO"""
-        patches = []
-        texts = []
+    # def _get_inject_queues_data(self, model, node_id):
+    #     """从网络中提取inject queue数据（适配层）"""
+    #     inject_data = {}
 
-        for i in range(depth):
-            if orientation == "vertical":
-                slot_x = x
-                slot_y = y + (i - depth / 2 + 0.5) * (self.square + self.gap)
-            else:  # horizontal
-                slot_x = x + (i - depth / 2 + 0.5) * (self.square + self.gap)
-                slot_y = y
+    #     if not model or not hasattr(model, "nodes"):
+    #         return inject_data
 
-            # 创建slot矩形
-            rect = Rectangle((slot_x - self.square / 2, slot_y - self.square / 2), self.square, self.square, facecolor="white", edgecolor="black", linewidth=self.slot_frame_lw)
-            self.ax.add_patch(rect)
-            patches.append(rect)
+    #     try:
+    #         node = model.nodes.get(node_id)
+    #         if not node:
+    #             return inject_data
 
-            # 创建文本
-            text = self.ax.text(slot_x, slot_y, "", fontsize=self.fontsize, ha="center", va="center", weight="bold", family="serif")
-            texts.append(text)
+    #         # 提取IQ_OUT_FIFO数据
+    #         for direction, fifo in node.inject_queue.inject_input_fifos[self.parent.current_channel].items():
+    #             inject_data[direction] = {node_id: list(fifo.internal_queue)}
 
-        # 添加FIFO标签
-        if orientation == "vertical":
-            label_x = x + self.square / 2 + self.text_gap
-            label_y = y
+    #     except Exception as e:
+    #         pass  # print(f"警告: 提取inject queue数据失败: {e}")
+
+    #     return inject_data
+
+    # def _get_eject_queues_data(self, network, node_id):
+    #     """从网络中提取eject queue数据（适配层）"""
+    #     eject_data = {}
+
+    #     if not network or not hasattr(network, "nodes"):
+    #         return eject_data
+
+    #     try:
+    #         node = network.nodes.get(node_id)
+    #         if not node:
+    #             return eject_data
+
+    #         # 提取eject_input_fifos数据
+    #         for direction, fifo in node.eject_queue.eject_input_fifos[self.parent.current_channel].items():
+    #             eject_data[direction] = {node_id: list(fifo.internal_queue)}
+
+    #     except Exception as e:
+    #         pass  # print(f"警告: 提取eject queue数据失败: {e}")
+
+    #     return eject_data
+
+    # def _get_ring_bridge_data(self, network, node_id):
+    #     """从网络中提取ring bridge数据（适配层）"""
+    #     rb_data = {}
+
+    #     if not network or not hasattr(network, "nodes"):
+    #         return rb_data
+
+    #     try:
+    #         node = network.nodes.get(node_id)
+    #         if not node or not hasattr(node, "ring_bridge"):
+    #             return rb_data
+
+    #         ring_bridge = node.ring_bridge
+
+    #         # 提取ring_bridge input和output数据
+    #         for direction, fifo in ring_bridge.ring_bridge_input_fifos[self.parent.current_channel].items():
+    #             rb_data[f"{direction}_in"] = {(node_id, node_id): list(fifo.internal_queue)}
+
+    #         for direction, fifo in ring_bridge.ring_bridge_output_fifos[self.parent.current_channel].items():
+    #             rb_data[f"{direction}_out"] = {(node_id, node_id): list(fifo.internal_queue)}
+
+    #     except Exception as e:
+    #         pass  # print(f"警告: 提取ring bridge数据失败: {e}")
+
+    #     return rb_data
+
+    # def _get_iq_channel_data(self, network, node_id):
+    #     """从网络中提取IQ channel数据（适配层）"""
+    #     iq_ch_data = {}
+
+    #     if not network or not hasattr(network, "nodes"):
+    #         return iq_ch_data
+
+    #     try:
+    #         node = network.nodes.get(node_id)
+    #         if not node:
+    #             return iq_ch_data
+
+    #         for ip_name, ip_interface in node.ip_inject_channel_buffers.items():
+    #             iq_ch_data[ip_name] = {node_id: list(ip_interface[self.parent.current_channel].internal_queue)}
+
+    #     except Exception as e:
+    #         pass  # print(f"警告: 提取IQ channel数据失败: {e}")
+
+    #     return iq_ch_data
+
+    # def _get_eq_channel_data(self, network, node_id):
+    #     """从网络中提取EQ channel数据（适配层）"""
+    #     eq_ch_data = {}
+
+    #     if not network or not hasattr(network, "nodes"):
+    #         return eq_ch_data
+
+    #     try:
+    #         node = network.nodes.get(node_id)
+    #         if not node:
+    #             return eq_ch_data
+
+    #         for ip_name, ip_interface in node.ip_eject_channel_buffers.items():
+    #             eq_ch_data[ip_name] = {node_id: list(ip_interface[self.parent.current_channel].internal_queue)}
+
+    #     except Exception as e:
+    #         pass  # print(f"警告: 提取EQ channel数据失败: {e}")
+
+    #     return eq_ch_data
+
+    # def _get_crosspoint_data(self, network, node_id, direction):
+    #     """从网络中提取crosspoint数据（适配层）"""
+    #     cp_data = {}
+
+    #     if not network or not hasattr(network, "nodes"):
+    #         return cp_data
+
+    #     try:
+    #         node = network.nodes.get(node_id)
+    #         if not node:
+    #             return cp_data
+
+    #         # 获取对应方向的CrossPoint
+    #         if direction == "horizontal":
+    #             cp = node.horizontal_crosspoint
+    #         elif direction == "vertical":
+    #             cp = node.vertical_crosspoint
+    #         else:
+    #             return cp_data
+
+    #         # 提取CrossPoint状态信息
+    #         cp_data = defaultdict(list)
+    #         for direction, slices in cp.slice_connections.items():
+    #             cp_data[direction] = [slices["arrival"].current_slots[self.parent.current_channel], slices["departure"].current_slots[self.parent.current_channel]]
+
+    #     except Exception as e:
+    #         pass  # print(f"警告: 提取crosspoint数据失败: {e}")
+
+    #     return cp_data
+
+    def _get_flit_style(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None):
+        """
+        返回 (facecolor, alpha, linewidth, edgecolor)
+        - facecolor 沿用调色板逻辑（高亮 / 调色板）
+        - alpha / linewidth 由 flit.ETag_priority 决定
+        """
+        # E-Tag样式映射
+        _ETAG_ALPHA = {"T0": 1.0, "T1": 0.9, "T2": 0.75}
+        _ETAG_LW = {"T0": 2.0, "T1": 1.5, "T2": 1.0}
+        _ETAG_EDGE = {"T0": "darkred", "T1": "darkblue", "T2": "black"}
+
+        # 获取基础颜色
+        face_color = self._get_flit_color(flit, use_highlight, expected_packet_id, highlight_color)
+
+        # 获取E-Tag优先级（兼容字典和对象格式）
+        if isinstance(flit, dict):
+            etag = flit.get("ETag_priority", "T2")
         else:
-            label_x = x
-            label_y = y - self.square / 2 - self.text_gap
-
-        self.ax.text(
-            label_x,
-            label_y,
-            lane,
-            fontsize=self.fontsize,
-            ha="left" if orientation == "vertical" else "center",
-            va="center" if orientation == "vertical" else "top",
-            rotation=0 if orientation == "vertical" else 0,
-            family="serif",
-        )
-
-        patch_dict[lane] = patches
-        text_dict[lane] = texts
-
-    def draw_node(self, node_id, network):
-        """绘制指定节点的详细视图"""
-        # 清空旧的 patch->info 映射
-        self.patch_info_map.clear()
-        # 本帧尚未发现高亮 flit
-        self.current_highlight_flit = None
-
-        # 如果轴内无任何图元，说明已被 clear()，需要重新画框架
-        if len(self.ax.patches) == 0:
-            self._draw_modules()  # 重建 FIFO / RB 边框与槽
-
-        self.node_id = node_id
-
-        # 模拟数据结构 - 这里需要适配实际的network数据结构
-        # 原版从network中提取以下数据：
-        # IQ = network.inject_queues
-        # EQ = network.eject_queues
-        # RB = network.ring_bridge
-        # IQ_Ch = network.IQ_channel_buffer
-        # EQ_Ch = network.EQ_channel_buffer
-        # CP_H = network.cross_point["horizontal"]
-        # CP_V = network.cross_point["vertical"]
-
-        # 这里我们先用模拟数据，之后可以适配实际的数据结构
-        IQ = self._get_inject_queues_data(network, node_id)
-        EQ = self._get_eject_queues_data(network, node_id)
-        RB = self._get_ring_bridge_data(network, node_id)
-        IQ_Ch = self._get_iq_channel_data(network, node_id)
-        EQ_Ch = self._get_eq_channel_data(network, node_id)
-        CP_H = self._get_crosspoint_data(network, node_id, "horizontal")
-        CP_V = self._get_crosspoint_data(network, node_id, "vertical")
-
-        # 更新Inject Queue显示
-        for lane, patches in self.iq_patches.items():
-            if "_" in lane:
-                q = IQ_Ch.get(lane, {}).get(self.node_id, [])
-            else:
-                q = IQ.get(lane, {}).get(self.node_id, [])
-
-            for idx, p in enumerate(patches):
-                t = self.iq_texts[lane][idx]
-                if idx < len(q):
-                    flit = q[idx]
-                    packet_id = getattr(flit, "packet_id", None)
-                    flit_id = getattr(flit, "flit_id", str(flit))
-
-                    # 设置颜色（基于packet_id）和显示文本
-                    face, alpha, lw, edge = self._get_flit_style(
-                        flit,
-                        use_highlight=self.use_highlight,
-                        expected_packet_id=self.highlight_pid,
-                    )
-                    p.set_facecolor(face)
-                    p.set_alpha(alpha)
-                    p.set_linewidth(lw)
-                    p.set_edgecolor(edge)
-
-                    info = f"{packet_id}-{flit_id}"
-                    t.set_text(info)
-                    t.set_visible(self.use_highlight and packet_id == self.highlight_pid)
-                    self.patch_info_map[p] = (t, flit)
-
-                    # 若匹配追踪的 packet_id，记录以便结束后刷新 info_text
-                    if self.use_highlight and getattr(flit, "packet_id", None) == self.highlight_pid:
-                        self.current_highlight_flit = flit
-                else:
-                    p.set_facecolor("none")
-                    t.set_visible(False)
-                    if p in self.patch_info_map:
-                        self.patch_info_map.pop(p, None)
-
-        # 更新Eject Queue显示（类似逻辑）
-        for lane, patches in self.eq_patches.items():
-            if "_" in lane:
-                q = EQ_Ch.get(lane, {}).get(self.node_id - self.cols, [])
-            else:
-                q = EQ.get(lane, {}).get(self.node_id - self.cols, [])
-
-            for idx, p in enumerate(patches):
-                t = self.eq_texts[lane][idx]
-                if idx < len(q):
-                    flit = q[idx]
-                    packet_id = getattr(flit, "packet_id", None)
-                    flit_id = getattr(flit, "flit_id", str(flit))
-
-                    face, alpha, lw, edge = self._get_flit_style(
-                        flit,
-                        use_highlight=self.use_highlight,
-                        expected_packet_id=self.highlight_pid,
-                    )
-                    p.set_facecolor(face)
-                    p.set_alpha(alpha)
-                    p.set_linewidth(lw)
-                    p.set_edgecolor(edge)
-
-                    info = f"{packet_id}-{flit_id}"
-                    t.set_text(info)
-                    t.set_visible(self.use_highlight and packet_id == self.highlight_pid)
-                    self.patch_info_map[p] = (t, flit)
-
-                    if self.use_highlight and getattr(flit, "packet_id", None) == self.highlight_pid:
-                        self.current_highlight_flit = flit
-                else:
-                    p.set_facecolor("none")
-                    t.set_visible(False)
-                    if p in self.patch_info_map:
-                        self.patch_info_map.pop(p, None)
-
-        # 更新Ring Bridge显示（类似逻辑）
-        for lane, patches in self.rb_patches.items():
-            q = RB.get(lane, {}).get((self.node_id, self.node_id - self.cols), [])
-
-            for idx, p in enumerate(patches):
-                t = self.rb_texts[lane][idx]
-                if idx < len(q):
-                    flit = q[idx]
-                    packet_id = getattr(flit, "packet_id", None)
-                    flit_id = getattr(flit, "flit_id", str(flit))
-
-                    face, alpha, lw, edge = self._get_flit_style(
-                        flit,
-                        use_highlight=self.use_highlight,
-                        expected_packet_id=self.highlight_pid,
-                    )
-                    p.set_facecolor(face)
-                    p.set_alpha(alpha)
-                    p.set_linewidth(lw)
-                    p.set_edgecolor(edge)
-
-                    info = f"{packet_id}-{flit_id}"
-                    t.set_text(info)
-                    t.set_visible(self.use_highlight and packet_id == self.highlight_pid)
-                    self.patch_info_map[p] = (t, flit)
-
-                    if self.use_highlight and getattr(flit, "packet_id", None) == self.highlight_pid:
-                        self.current_highlight_flit = flit
-                else:
-                    p.set_facecolor("none")
-                    t.set_visible(False)
-                    if p in self.patch_info_map:
-                        self.patch_info_map.pop(p, None)
-
-    def _get_inject_queues_data(self, network, node_id):
-        """从网络中提取inject queue数据（适配层）"""
-        inject_data = {}
-
-        if not network or not hasattr(network, "nodes"):
-            return inject_data
-
-        try:
-            node = network.nodes.get(node_id)
-            if not node:
-                return inject_data
-
-            # 提取inject_direction_fifos数据
-            if hasattr(node, "inject_direction_fifos"):
-                for direction, fifo in node.inject_direction_fifos.items():
-                    if hasattr(fifo, "queue") and fifo.queue:
-                        inject_data[direction] = {node_id: list(fifo.queue)}
-
-            # 提取channel_buffer数据
-            if hasattr(node, "channel_buffer"):
-                for channel_name, buffer in node.channel_buffer.items():
-                    if hasattr(buffer, "queue") and buffer.queue:
-                        inject_data[channel_name] = {node_id: list(buffer.queue)}
-
-        except Exception as e:
-            pass  # print(f"警告: 提取inject queue数据失败: {e}")
-
-        return inject_data
-
-    def _get_eject_queues_data(self, network, node_id):
-        """从网络中提取eject queue数据（适配层）"""
-        eject_data = {}
-
-        if not network or not hasattr(network, "nodes"):
-            return eject_data
-
-        try:
-            node = network.nodes.get(node_id)
-            if not node:
-                return eject_data
-
-            # 提取eject_input_fifos数据
-            if hasattr(node, "eject_input_fifos"):
-                for direction, fifo in node.eject_input_fifos.items():
-                    if hasattr(fifo, "queue") and fifo.queue:
-                        eject_data[direction] = {node_id: list(fifo.queue)}
-
-            # 提取ip_eject_channel_buffers数据
-            if hasattr(node, "ip_eject_channel_buffers"):
-                for channel_name, buffer in node.ip_eject_channel_buffers.items():
-                    if hasattr(buffer, "queue") and buffer.queue:
-                        eject_data[channel_name] = {node_id: list(buffer.queue)}
-
-        except Exception as e:
-            pass  # print(f"警告: 提取eject queue数据失败: {e}")
-
-        return eject_data
-
-    def _get_ring_bridge_data(self, network, node_id):
-        """从网络中提取ring bridge数据（适配层）"""
-        rb_data = {}
-
-        if not network or not hasattr(network, "nodes"):
-            return rb_data
-
-        try:
-            node = network.nodes.get(node_id)
-            if not node or not hasattr(node, "ring_bridge"):
-                return rb_data
-
-            ring_bridge = node.ring_bridge
-
-            # 提取ring_bridge input和output数据
-            if hasattr(ring_bridge, "ring_bridge_input"):
-                for direction, fifo in ring_bridge.ring_bridge_input.items():
-                    if hasattr(fifo, "queue") and fifo.queue:
-                        rb_data[f"{direction}_in"] = {(node_id, node_id): list(fifo.queue)}
-
-            if hasattr(ring_bridge, "ring_bridge_output"):
-                for direction, fifo in ring_bridge.ring_bridge_output.items():
-                    if hasattr(fifo, "queue") and fifo.queue:
-                        rb_data[f"{direction}_out"] = {(node_id, node_id): list(fifo.queue)}
-
-        except Exception as e:
-            pass  # print(f"警告: 提取ring bridge数据失败: {e}")
-
-        return rb_data
-
-    def _get_iq_channel_data(self, network, node_id):
-        """从网络中提取IQ channel数据（适配层）"""
-        iq_ch_data = {}
-
-        if not network or not hasattr(network, "nodes"):
-            return iq_ch_data
-
-        try:
-            node = network.nodes.get(node_id)
-            if not node:
-                return iq_ch_data
-
-            # 从IP接口提取l2h_fifos数据
-            if hasattr(node, "ip_interfaces"):
-                for ip_name, ip_interface in node.ip_interfaces.items():
-                    if hasattr(ip_interface, "l2h_fifos"):
-                        for channel_name, fifo in ip_interface.l2h_fifos.items():
-                            if hasattr(fifo, "queue") and fifo.queue:
-                                full_channel_name = f"{ip_name}_{channel_name}"
-                                iq_ch_data[full_channel_name] = {node_id: list(fifo.queue)}
-
-        except Exception as e:
-            pass  # print(f"警告: 提取IQ channel数据失败: {e}")
-
-        return iq_ch_data
-
-    def _get_eq_channel_data(self, network, node_id):
-        """从网络中提取EQ channel数据（适配层）"""
-        eq_ch_data = {}
-
-        if not network or not hasattr(network, "nodes"):
-            return eq_ch_data
-
-        try:
-            node = network.nodes.get(node_id)
-            if not node:
-                return eq_ch_data
-
-            # 从IP接口提取h2l_fifos数据
-            if hasattr(node, "ip_interfaces"):
-                for ip_name, ip_interface in node.ip_interfaces.items():
-                    if hasattr(ip_interface, "h2l_fifos"):
-                        for channel_name, fifo in ip_interface.h2l_fifos.items():
-                            if hasattr(fifo, "queue") and fifo.queue:
-                                full_channel_name = f"{ip_name}_{channel_name}"
-                                eq_ch_data[full_channel_name] = {node_id: list(fifo.queue)}
-
-        except Exception as e:
-            pass  # print(f"警告: 提取EQ channel数据失败: {e}")
-
-        return eq_ch_data
-
-    def _get_crosspoint_data(self, network, node_id, direction):
-        """从网络中提取crosspoint数据（适配层）"""
-        cp_data = {}
-
-        if not network or not hasattr(network, "nodes"):
-            return cp_data
-
-        try:
-            node = network.nodes.get(node_id)
-            if not node:
-                return cp_data
-
-            # 获取对应方向的CrossPoint
-            if direction == "horizontal" and hasattr(node, "horizontal_cp"):
-                cp = node.horizontal_cp
-            elif direction == "vertical" and hasattr(node, "vertical_cp"):
-                cp = node.vertical_cp
-            else:
-                return cp_data
-
-            # 提取CrossPoint状态信息
-            cp_data = {
-                "arbitration_state": getattr(cp, "arbitration_state", "idle"),
-                "active_connections": getattr(cp, "active_connections", []),
-                "priority_state": getattr(cp, "priority_state", "normal"),
-            }
-
-        except Exception as e:
-            pass  # print(f"警告: 提取crosspoint数据失败: {e}")
-
-        return cp_data
-
-    def _get_flit_style(self, flit, use_highlight=True, expected_packet_id=0, highlight_color=None):
-        """使用父类的flit样式方法"""
-        return self.parent._get_flit_style(flit, use_highlight, expected_packet_id, highlight_color)
-
-    def _get_flit_color(self, flit, use_highlight=True, expected_packet_id=1, highlight_color=None):
-        """使用父类的flit颜色方法"""
-        return self.parent._get_flit_color(flit, use_highlight, expected_packet_id, highlight_color)
+            etag = getattr(flit, "ETag_priority", "T2")  # 缺省视为 T2
+        alpha = _ETAG_ALPHA.get(etag, 0.8)
+        line_width = _ETAG_LW.get(etag, 1.0)
+        edge_color = _ETAG_EDGE.get(etag, "black")
+
+        return face_color, alpha, line_width, edge_color
+
+    def _get_flit_color(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None):
+        """获取flit颜色，支持字典和对象两种格式的flit数据"""
+        # 兼容字典和对象两种格式获取packet_id
+        if isinstance(flit, dict):
+            flit_pid = flit.get("packet_id")
+        else:
+            flit_pid = getattr(flit, "packet_id", None)
+
+        # 高亮模式：目标 flit → 指定颜色，其余 → 灰
+        if use_highlight and expected_packet_id is not None:
+            hl_color = highlight_color or "red"
+            return hl_color if str(flit_pid) == str(expected_packet_id) else "lightgrey"
+
+        # 普通模式：根据packet_id使用调色板颜色
+        if flit_pid is not None:
+            try:
+                # 使用与父类相同的颜色映射
+                color_index = int(flit_pid) % len(self.parent._colors)
+                selected_color = self.parent._colors[color_index]
+                return selected_color
+            except Exception as e:
+                return "lightblue"
+        else:
+            return "lightblue"  # 默认颜色
 
     def _on_click(self, event):
         """处理点击事件"""
@@ -909,8 +746,13 @@ class CrossRingNodeVisualizer:
             contains, _ = patch.contains(event)
             if contains:
                 # 只有在高亮模式下才允许切换文本可见性
-                pid = getattr(flit, "packet_id", None)
-                fid = getattr(flit, "flit_id", None)
+                # 兼容字典和对象两种格式
+                if isinstance(flit, dict):
+                    pid = flit.get("packet_id", None)
+                    fid = flit.get("flit_id", None)
+                else:
+                    pid = getattr(flit, "packet_id", None)
+                    fid = getattr(flit, "flit_id", None)
                 if self.use_highlight and pid == self.highlight_pid:
                     vis = not txt.get_visible()
                     txt.set_visible(vis)
@@ -918,7 +760,7 @@ class CrossRingNodeVisualizer:
                     if vis:
                         txt.set_zorder(patch.get_zorder() + 1)
                 # 在右下角显示完整 flit 信息
-                self.info_text.set_text(str(flit))
+                self.info_text.set_text(self._format_flit_info(flit))
                 # 记录当前点击的 flit，方便后续帧仍显示最新信息
                 self.current_highlight_flit = flit
                 # 通知父级高亮
@@ -938,12 +780,519 @@ class CrossRingNodeVisualizer:
         self.use_highlight = use_highlight
         self.highlight_pid = highlight_pid
 
-        # 更新所有patch的文本可见性
+        # 更新所有patch的颜色和文本可见性
         for patch, (txt, flit) in self.patch_info_map.items():
-            pid = getattr(flit, "packet_id", None)
+            # 兼容字典和对象两种格式
+            if isinstance(flit, dict):
+                pid = flit.get("packet_id", None)
+            else:
+                pid = getattr(flit, "packet_id", None)
+
+            # 重新计算并应用flit样式（包括颜色）
+            if flit:
+                face, alpha, lw, edge = self._get_flit_style(
+                    flit,
+                    use_highlight=self.use_highlight,
+                    expected_packet_id=self.highlight_pid,
+                )
+                patch.set_facecolor(face)
+                patch.set_alpha(alpha)
+                patch.set_linewidth(lw)
+                patch.set_edgecolor(edge)
+
+            # 更新文本可见性
             if self.use_highlight and pid == self.highlight_pid:
                 txt.set_visible(True)
             else:
                 txt.set_visible(False)
+
         if not self.use_highlight:
             self.info_text.set_text("")
+
+        # 触发重绘
+        self.fig.canvas.draw_idle()
+
+    def _format_flit_info(self, flit):
+        """格式化flit信息显示"""
+        if not flit:
+            return "无flit信息"
+
+        # 兼容字典和对象两种格式
+        if isinstance(flit, dict):
+            info_lines = []
+            # 按重要性排序显示关键信息
+            key_order = ["packet_id", "flit_id", "ETag_priority", "itag_h", "itag_v", "channel", "direction"]
+
+            for key in key_order:
+                if key in flit and flit[key] is not None:
+                    value = flit[key]
+                    # 格式化显示
+                    if key == "packet_id":
+                        info_lines.append(f"Packet ID: {value}")
+                    elif key == "flit_id":
+                        info_lines.append(f"Flit ID: {value}")
+                    elif key == "ETag_priority":
+                        info_lines.append(f"E-Tag: {value}")
+                    elif key == "itag_h":
+                        info_lines.append(f"I-Tag H: {value}")
+                    elif key == "itag_v":
+                        info_lines.append(f"I-Tag V: {value}")
+                    # elif key == "channel":
+                    #     info_lines.append(f"通道: {value.upper()}")
+                    # elif key == "direction":
+                    #     info_lines.append(f"方向: {value}")
+
+            # 添加其他未列出的属性
+            for key, value in flit.items():
+                if key not in key_order and value is not None:
+                    info_lines.append(f"{key}: {value}")
+
+            return "\n".join(info_lines) if info_lines else "无有效信息"
+        else:
+            # 对象格式的flit，使用属性访问
+            info_lines = []
+            attrs = ["packet_id", "flit_id", "ETag_priority", "itag_h", "itag_v"]
+
+            for attr in attrs:
+                value = getattr(flit, attr, None)
+                if value is not None:
+                    if attr == "packet_id":
+                        info_lines.append(f"包ID: {value}")
+                    elif attr == "flit_id":
+                        info_lines.append(f"FlitID: {value}")
+                    elif attr == "ETag_priority":
+                        info_lines.append(f"E-Tag: {value}")
+                    elif attr == "itag_h" and value:
+                        info_lines.append(f"I-Tag水平: {value}")
+                    elif attr == "itag_v" and value:
+                        info_lines.append(f"I-Tag垂直: {value}")
+
+            return "\n".join(info_lines) if info_lines else f"Flit对象: {str(flit)}"
+
+    def _extract_flit_data(self, flit, channel, direction):
+        """提取flit数据的通用方法"""
+        if not flit:
+            return None
+        return {
+            "packet_id": getattr(flit, "packet_id", None),
+            "flit_id": getattr(flit, "flit_id", None),
+            "ETag_priority": getattr(flit, "ETag_priority", None),
+            "itag_h": getattr(flit, "itag_h", False),
+            "itag_v": getattr(flit, "itag_v", False),
+            "channel": channel,
+            "direction": direction,
+        }
+
+    def _extract_fifo_data(self, fifos, node_id, channels=["req", "rsp", "data"]):
+        """提取FIFO数据的通用方法 - 包含internal_queue和output_register"""
+        result = {}
+        for channel in channels:
+            channel_fifos = fifos.get(channel, {})
+            channel_data = {}
+            for direction, fifo in channel_fifos.items():
+                if hasattr(fifo, "internal_queue"):
+                    # 提取internal_queue中的flit
+                    fifo_data = [self._extract_flit_data(flit, channel, direction) for flit in fifo.internal_queue]
+
+                    # 提取output_register中的flit（如果存在且有效）
+                    if hasattr(fifo, "output_register") and hasattr(fifo, "output_valid") and fifo.output_valid and fifo.output_register:
+                        output_flit_data = self._extract_flit_data(fifo.output_register, channel, direction)
+                        fifo_data.append(output_flit_data)
+
+                    channel_data[direction] = {node_id: fifo_data}
+            result[channel] = channel_data
+        return result
+
+    def save_history_snapshot(self, network, cycle):
+        """保存节点历史快照 - 优化版本，减少重复遍历"""
+        try:
+            nodes_snapshot = {}
+
+            if hasattr(network, "nodes"):
+                for node_id, node in network.nodes.items():
+                    node_data = {
+                        "inject_queues": {},
+                        "eject_queues": {},
+                        "ring_bridge": {},
+                        "iq_channels": {},
+                        "eq_channels": {},
+                        "crosspoint_h": {},
+                        "crosspoint_v": {},
+                        "metadata": {"node_id": node_id, "timestamp": cycle},
+                    }
+
+                    # 1. 保存Inject Queue数据（使用通用方法）
+                    try:
+                        if hasattr(node, "inject_queue") and hasattr(node.inject_queue, "inject_input_fifos"):
+                            node_data["inject_queues"] = self._extract_fifo_data(node.inject_queue.inject_input_fifos, node_id)
+                    except:
+                        node_data["inject_queues"] = {}
+
+                    # 2. 保存Eject Queue数据（使用通用方法）
+                    try:
+                        if hasattr(node, "eject_queue") and hasattr(node.eject_queue, "eject_input_fifos"):
+                            node_data["eject_queues"] = self._extract_fifo_data(node.eject_queue.eject_input_fifos, node_id)
+                    except:
+                        node_data["eject_queues"] = {}
+
+                    # 3. 保存Ring Bridge数据（优化版本）
+                    try:
+                        if hasattr(node, "ring_bridge"):
+                            ring_bridge = node.ring_bridge
+                            for channel in ["req", "rsp", "data"]:
+                                channel_data = {}
+                                # 合并input和output的处理
+                                for fifo_type, attr_name in [("_in", "ring_bridge_input_fifos"), ("_out", "ring_bridge_output_fifos")]:
+                                    if hasattr(ring_bridge, attr_name):
+                                        fifos = getattr(ring_bridge, attr_name).get(channel, {})
+                                        for direction, fifo in fifos.items():
+                                            if hasattr(fifo, "internal_queue"):
+                                                fifo_data = [self._extract_flit_data(flit, channel, direction) for flit in fifo.internal_queue]
+                                                channel_data[f"{direction}{fifo_type}"] = {node_id: fifo_data}
+                                node_data["ring_bridge"][channel] = channel_data
+                    except:
+                        node_data["ring_bridge"] = {}
+
+                    # 4. 保存IP Channel数据（合并IQ和EQ处理）
+                    try:
+                        for channel in ["req", "rsp", "data"]:
+                            # IQ channels
+                            iq_data = {}
+                            if hasattr(node, "ip_inject_channel_buffers"):
+                                for ip_id, ip_interface in node.ip_inject_channel_buffers.items():
+                                    if channel in ip_interface and hasattr(ip_interface[channel], "internal_queue"):
+                                        # 提取internal_queue中的flit
+                                        fifo_data = [self._extract_flit_data(flit, channel, "inject") for flit in ip_interface[channel].internal_queue]
+
+                                        # 提取output_register中的flit（如果存在且有效）
+                                        fifo = ip_interface[channel]
+                                        if hasattr(fifo, "output_register") and hasattr(fifo, "output_valid") and fifo.output_valid and fifo.output_register:
+                                            output_flit_data = self._extract_flit_data(fifo.output_register, channel, "inject")
+                                            fifo_data.append(output_flit_data)
+
+                                        iq_data[ip_id] = fifo_data
+                            node_data["iq_channels"][channel] = iq_data
+
+                            # EQ channels
+                            eq_data = {}
+                            if hasattr(node, "ip_eject_channel_buffers"):
+                                for ip_id, ip_interface in node.ip_eject_channel_buffers.items():
+                                    if channel in ip_interface and hasattr(ip_interface[channel], "internal_queue"):
+                                        # 提取internal_queue中的flit
+                                        fifo_data = [self._extract_flit_data(flit, channel, "eject") for flit in ip_interface[channel].internal_queue]
+
+                                        # 提取output_register中的flit（如果存在且有效）
+                                        fifo = ip_interface[channel]
+                                        if hasattr(fifo, "output_register") and hasattr(fifo, "output_valid") and fifo.output_valid and fifo.output_register:
+                                            output_flit_data = self._extract_flit_data(fifo.output_register, channel, "eject")
+                                            fifo_data.append(output_flit_data)
+
+                                        eq_data[ip_id] = fifo_data
+                            node_data["eq_channels"][channel] = eq_data
+                    except:
+                        node_data["iq_channels"] = {}
+                        node_data["eq_channels"] = {}
+
+                    # 5. 保存CrossPoint数据（通用处理）
+                    try:
+                        for cp_name, attr_name in [("crosspoint_h", "horizontal_crosspoint"), ("crosspoint_v", "vertical_crosspoint")]:
+                            if hasattr(node, attr_name):
+                                cp = getattr(node, attr_name)
+                                cp_data = {}
+                                if hasattr(cp, "slice_connections"):
+                                    for direction, slices in cp.slice_connections.items():
+                                        # CrossPoint数据结构: [arrival_slots, departure_slots]
+                                        arrival_slots = slices.get("arrival", {}).get("current_slots", {})
+                                        departure_slots = slices.get("departure", {}).get("current_slots", {})
+                                        # 使用当前通道的数据，默认为data
+                                        current_channel = getattr(self.parent, "current_channel", "data") if self.parent else "data"
+                                        cp_data[direction] = [arrival_slots.get(current_channel, []), departure_slots.get(current_channel, [])]
+                                node_data[cp_name] = cp_data
+                    except:
+                        node_data["crosspoint_h"] = {}
+                        node_data["crosspoint_v"] = {}
+
+                    nodes_snapshot[node_id] = node_data
+
+            # 保存优化后的完整快照
+            snapshot_data = {
+                "cycle": cycle,
+                "timestamp": cycle,
+                "nodes": nodes_snapshot,
+                "metadata": {"total_nodes": len(nodes_snapshot), "channels": ["req", "rsp", "data"], "optimized": True},
+            }
+
+            self.node_history.append((cycle, snapshot_data))
+
+        except Exception as e:
+            # 静默忽略快照保存错误，但保留基本结构
+            fallback_snapshot = {"cycle": cycle, "nodes": {}, "metadata": {"error": True, "error_msg": str(e)}}
+            self.node_history.append((cycle, fallback_snapshot))
+
+    def render_node_from_snapshot(self, node_id, cycle):
+        """从快照数据渲染节点"""
+        try:
+            # 查找对应周期的历史数据
+            history_snapshot = None
+            for hist_cycle, snapshot_data in self.node_history:
+                if hist_cycle == cycle:
+                    history_snapshot = snapshot_data
+                    break
+
+            if history_snapshot:
+                # 直接使用统一格式：从完整快照中提取当前节点和当前通道的数据
+                nodes_data = history_snapshot.get("nodes", {})
+                node_data = nodes_data.get(node_id)
+                
+                if node_data:
+                    # 获取当前显示的通道
+                    current_channel = getattr(self.parent, "current_channel", "data") if self.parent else "data"
+                    # 直接从快照数据渲染节点
+                    self._render_from_snapshot_data(node_id, node_data, current_channel)
+                else:
+                    self._show_no_data_message(node_id, "节点数据不存在")
+            else:
+                self._show_no_data_message(node_id, "无历史数据")
+
+        except Exception as e:
+            self._show_no_data_message(node_id, f"历史数据错误: {str(e)}")
+
+
+    def _render_from_snapshot_data(self, node_id, node_data, current_channel):
+        """直接从快照数据渲染节点组件"""
+        # 清空旧的 patch->info 映射
+        self.patch_info_map.clear()
+        # 本帧尚未发现高亮 flit
+        self.current_highlight_flit = None
+
+        # 如果轴内无任何图元，说明已被 clear()，需要重新画框架
+        if len(self.ax.patches) == 0:
+            self._draw_modules()  # 重建 FIFO / RB 边框与槽
+
+        self.node_id = node_id
+
+        # 直接从快照数据渲染各个组件
+        try:
+            # 1. 渲染 Inject Queues
+            inject_queues = node_data.get("inject_queues", {})
+            channel_data = inject_queues.get(current_channel, {})
+            self._render_component_from_snapshot("IQ", channel_data, node_id)
+
+            # 2. 渲染 Eject Queues
+            eject_queues = node_data.get("eject_queues", {})
+            channel_data = eject_queues.get(current_channel, {})
+            self._render_component_from_snapshot("EQ", channel_data, node_id)
+
+            # 3. 渲染 Ring Bridge
+            ring_bridge = node_data.get("ring_bridge", {})
+            channel_data = ring_bridge.get(current_channel, {})
+            self._render_component_from_snapshot("RB", channel_data, node_id)
+
+            # 4. 渲染 IP Channels
+            iq_channels = node_data.get("iq_channels", {})
+            eq_channels = node_data.get("eq_channels", {})
+
+            if current_channel in iq_channels:
+                self._render_ip_channels_from_snapshot("IQ_Ch", iq_channels[current_channel], node_id)
+
+            if current_channel in eq_channels:
+                self._render_ip_channels_from_snapshot("EQ_Ch", eq_channels[current_channel], node_id)
+
+            # 5. 渲染 CrossPoint (不区分通道，直接使用原始数据)
+            crosspoint_h = node_data.get("crosspoint_h", {})
+            crosspoint_v = node_data.get("crosspoint_v", {})
+
+            if crosspoint_h:
+                self._render_component_from_snapshot("CP_H", crosspoint_h, node_id)
+
+            if crosspoint_v:
+                self._render_component_from_snapshot("CP_V", crosspoint_v, node_id)
+
+        except Exception as e:
+            # 渲染失败时显示错误信息
+            self._show_no_data_message(node_id, f"渲染错误: {str(e)}")
+        
+        # 触发重绘以更新显示
+        self.fig.canvas.draw_idle()
+
+    def _render_component_from_snapshot(self, component_type, channel_data, node_id):
+        """从快照数据渲染指定组件的所有方向"""
+        if not channel_data:
+            return
+
+        # 根据组件类型确定需要处理的方向
+        if component_type in ["IQ", "EQ"]:
+            directions = ["TR", "TL", "TU", "TD"]
+        elif component_type == "RB":
+            directions = ["TR_in", "TL_in", "TU_in", "TD_in", "TR_out", "TL_out", "TU_out", "TD_out", "EQ_out"]
+        elif component_type == "CP_H":
+            directions = ["TR", "TL"]  # 水平CrossPoint处理TR/TL方向
+        elif component_type == "CP_V":
+            directions = ["TU", "TD"]  # 垂直CrossPoint处理TU/TD方向
+        else:
+            return
+
+        # 渲染每个方向的数据
+        for direction in directions:
+            if direction in channel_data:
+                direction_data = channel_data[direction]
+
+                # 根据组件类型直接操作patch属性
+                if component_type == "IQ":
+                    if node_id in direction_data:
+                        self._render_fifo_patches(self.iq_patches, self.iq_texts, direction, direction_data[node_id])
+                elif component_type == "EQ":
+                    if node_id in direction_data:
+                        self._render_fifo_patches(self.eq_patches, self.eq_texts, direction, direction_data[node_id])
+                elif component_type == "RB":
+                    if node_id in direction_data:
+                        self._render_fifo_patches(self.rb_patches, self.rb_texts, direction, direction_data[node_id])
+                elif component_type == "CP_H":
+                    self._render_crosspoint_patches(self.cph_patches, self.cph_texts, direction, direction_data)
+                elif component_type == "CP_V":
+                    self._render_crosspoint_patches(self.cpv_patches, self.cpv_texts, direction, direction_data)
+
+    def _render_ip_channels_from_snapshot(self, channel_type, channel_data, node_id):
+        """从快照数据渲染IP通道数据"""
+        if not channel_data:
+            return
+
+        # IP通道数据使用IP接口名称作为键，需要找到正确的键
+        # 通常格式为 "gdma_0", "gdma_1" 等，对应节点0, 1等
+        ip_interface_key = None
+        for key in channel_data.keys():
+            # 尝试从IP接口名称提取节点ID
+            if f"_{node_id}" in key or key.endswith(f"_{node_id}"):
+                ip_interface_key = key
+                break
+        
+        if not ip_interface_key:
+            return
+            
+        flit_list = channel_data[ip_interface_key]
+        if channel_type == "IQ_Ch":
+            # IQ通道使用"Ch"作为lane名称
+            self._render_fifo_patches(self.iq_patches, self.iq_texts, "Ch", flit_list)
+        elif channel_type == "EQ_Ch":
+            # EQ通道使用"Ch"作为lane名称
+            self._render_fifo_patches(self.eq_patches, self.eq_texts, "Ch", flit_list)
+
+    def _render_fifo_patches(self, patch_dict, text_dict, lane_name, flit_list):
+        """渲染FIFO类型patch的flit数据"""
+        if lane_name not in patch_dict or lane_name not in text_dict:
+            return
+
+        patches = patch_dict[lane_name]
+        texts = text_dict[lane_name]
+
+        # 清空所有patch
+        for p in patches:
+            p.set_facecolor("none")
+            p.set_alpha(1.0)
+            p.set_linewidth(0)
+            p.set_edgecolor("none")
+
+        for t in texts:
+            t.set_visible(False)
+
+        # 渲染flit数据
+        for idx, flit in enumerate(flit_list):
+            if idx >= len(patches):
+                break
+
+            p = patches[idx]
+            t = texts[idx]
+
+            if flit:
+                # 兼容字典和对象两种格式
+                if isinstance(flit, dict):
+                    packet_id = flit.get("packet_id", None)
+                    flit_id = flit.get("flit_id", str(flit))
+                else:
+                    packet_id = getattr(flit, "packet_id", None)
+                    flit_id = getattr(flit, "flit_id", str(flit))
+
+                face, alpha, lw, edge = self._get_flit_style(
+                    flit,
+                    use_highlight=self.use_highlight,
+                    expected_packet_id=self.highlight_pid,
+                )
+                p.set_facecolor(face)
+                p.set_alpha(alpha)
+                p.set_linewidth(lw)
+                p.set_edgecolor(edge)
+
+                info = f"{packet_id}-{flit_id}"
+                t.set_text(info)
+                t.set_visible(self.use_highlight and packet_id == self.highlight_pid)
+                self.patch_info_map[p] = (t, flit)
+
+                if self.use_highlight and getattr(flit, "packet_id", None) == self.highlight_pid:
+                    self.current_highlight_flit = flit
+            else:
+                if p in self.patch_info_map:
+                    self.patch_info_map.pop(p, None)
+
+    def _render_crosspoint_patches(self, patch_dict, text_dict, direction, slice_data):
+        """渲染CrossPoint类型patch的slice数据"""
+        if direction not in patch_dict or direction not in text_dict:
+            return
+
+        patches = patch_dict[direction]
+        texts = text_dict[direction]
+
+        # CrossPoint数据结构: [arrival_slots, departure_slots]
+        if not isinstance(slice_data, list) or len(slice_data) < 2:
+            return
+
+        arrival_slots = slice_data[0] if slice_data[0] else []
+        departure_slots = slice_data[1] if slice_data[1] else []
+        all_slots = arrival_slots + departure_slots
+
+        # 清空所有patch
+        for p in patches:
+            p.set_facecolor("none")
+            p.set_alpha(1.0)
+            p.set_linewidth(0)
+            p.set_edgecolor("none")
+
+        for t in texts:
+            t.set_visible(False)
+
+        # 渲染slot数据
+        for idx, flit in enumerate(all_slots):
+            if idx >= len(patches):
+                break
+
+            p = patches[idx]
+            t = texts[idx]
+
+            if flit:
+                packet_id = getattr(flit, "packet_id", None)
+                flit_id = getattr(flit, "flit_id", str(flit))
+
+                face, alpha, lw, edge = self._get_flit_style(
+                    flit,
+                    use_highlight=self.use_highlight,
+                    expected_packet_id=self.highlight_pid,
+                )
+                p.set_facecolor(face)
+                p.set_alpha(alpha)
+                p.set_linewidth(lw)
+                p.set_edgecolor(edge)
+
+                info = f"{packet_id}-{flit_id}"
+                t.set_text(info)
+                t.set_visible(self.use_highlight and packet_id == self.highlight_pid)
+                self.patch_info_map[p] = (t, flit)
+
+                if self.use_highlight and getattr(flit, "packet_id", None) == self.highlight_pid:
+                    self.current_highlight_flit = flit
+            else:
+                if p in self.patch_info_map:
+                    self.patch_info_map.pop(p, None)
+
+    def _show_no_data_message(self, node_id, message):
+        """显示无数据消息"""
+        self.ax.clear()
+        self.ax.text(0.5, 0.5, f"节点 {node_id}\n{message}", ha="center", va="center", transform=self.ax.transAxes, fontsize=12, family="sans-serif")
