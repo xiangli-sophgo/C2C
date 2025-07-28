@@ -23,7 +23,7 @@ import matplotlib
 # 添加src路径
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.noc.visualization.link_state_visualizer import CrossRingLinkStateVisualizer, _FlitProxy
+from src.noc.visualization.link_state_visualizer import LinkStateVisualizer, _FlitProxy
 
 
 def create_demo_crossring_model():
@@ -132,15 +132,13 @@ def demo_static():
     print("-" * 40)
 
     # 创建配置
-    config = SimpleNamespace(
-        NUM_ROW=2, NUM_COL=2, IQ_OUT_FIFO_DEPTH=8, EQ_IN_FIFO_DEPTH=8, RB_IN_FIFO_DEPTH=4, RB_OUT_FIFO_DEPTH=4, IQ_CH_FIFO_DEPTH=4, EQ_CH_FIFO_DEPTH=4, SLICE_PER_LINK=8
-    )
+    config = SimpleNamespace(NUM_ROW=2, NUM_COL=2, IQ_OUT_FIFO_DEPTH=8, EQ_IN_FIFO_DEPTH=8, RB_IN_FIFO_DEPTH=4, RB_OUT_FIFO_DEPTH=4, IQ_CH_FIFO_DEPTH=4, EQ_CH_FIFO_DEPTH=4, SLICE_PER_LINK=8)
 
     # 创建演示模型
     demo_model = create_demo_crossring_model()
 
     # 创建可视化器
-    visualizer = CrossRingLinkStateVisualizer(config, demo_model)
+    visualizer = LinkStateVisualizer(config, demo_model)
 
     print("💡 静态演示内容:")
     print("- 左侧: 2x2 CrossRing网络拓扑")
@@ -162,13 +160,11 @@ def demo_animated():
     print("-" * 40)
 
     # 创建配置
-    config = SimpleNamespace(
-        NUM_ROW=2, NUM_COL=2, IQ_OUT_FIFO_DEPTH=8, EQ_IN_FIFO_DEPTH=8, RB_IN_FIFO_DEPTH=4, RB_OUT_FIFO_DEPTH=4, IQ_CH_FIFO_DEPTH=4, EQ_CH_FIFO_DEPTH=4, SLICE_PER_LINK=8
-    )
+    config = SimpleNamespace(NUM_ROW=2, NUM_COL=2, IQ_OUT_FIFO_DEPTH=8, EQ_IN_FIFO_DEPTH=8, RB_IN_FIFO_DEPTH=4, RB_OUT_FIFO_DEPTH=4, IQ_CH_FIFO_DEPTH=4, EQ_CH_FIFO_DEPTH=4, SLICE_PER_LINK=8)
 
     # 创建可视化器
     demo_model = create_demo_crossring_model()
-    visualizer = CrossRingLinkStateVisualizer(config, demo_model)
+    visualizer = LinkStateVisualizer(config, demo_model)
 
     print("💡 动态演示内容:")
     print("- 实时更新节点FIFO状态")
@@ -208,9 +204,7 @@ def update_demo_model(model):
         for direction, fifo in node.inject_direction_fifos.items():
             # 随机添加或移除flit
             if random.random() < 0.2 and len(fifo.queue) < 3:
-                flit = _FlitProxy(
-                    pid=random.randint(1, 4), fid=f"F{random.randint(0, 7)}", etag=random.choice(["T0", "T1", "T2"]), ih=random.random() < 0.1, iv=random.random() < 0.1
-                )
+                flit = _FlitProxy(pid=random.randint(1, 4), fid=f"F{random.randint(0, 7)}", etag=random.choice(["T0", "T1", "T2"]), ih=random.random() < 0.1, iv=random.random() < 0.1)
                 fifo.queue.append(flit)
             elif random.random() < 0.3 and fifo.queue:
                 fifo.queue.pop(0)
@@ -218,9 +212,7 @@ def update_demo_model(model):
         # 更新eject_input_fifos
         for direction, fifo in node.eject_input_fifos.items():
             if random.random() < 0.15 and len(fifo.queue) < 2:
-                flit = _FlitProxy(
-                    pid=random.randint(1, 4), fid=f"F{random.randint(0, 7)}", etag=random.choice(["T0", "T1", "T2"]), ih=random.random() < 0.1, iv=random.random() < 0.1
-                )
+                flit = _FlitProxy(pid=random.randint(1, 4), fid=f"F{random.randint(0, 7)}", etag=random.choice(["T0", "T1", "T2"]), ih=random.random() < 0.1, iv=random.random() < 0.1)
                 fifo.queue.append(flit)
             elif random.random() < 0.25 and fifo.queue:
                 fifo.queue.pop(0)
@@ -228,9 +220,7 @@ def update_demo_model(model):
         # 更新channel_buffer
         for channel, buffer in node.channel_buffer.items():
             if random.random() < 0.1 and len(buffer.queue) < 2:
-                flit = _FlitProxy(
-                    pid=random.randint(1, 4), fid=f"F{random.randint(0, 7)}", etag=random.choice(["T0", "T1", "T2"]), ih=random.random() < 0.1, iv=random.random() < 0.1
-                )
+                flit = _FlitProxy(pid=random.randint(1, 4), fid=f"F{random.randint(0, 7)}", etag=random.choice(["T0", "T1", "T2"]), ih=random.random() < 0.1, iv=random.random() < 0.1)
                 buffer.queue.append(flit)
             elif random.random() < 0.2 and buffer.queue:
                 buffer.queue.pop(0)

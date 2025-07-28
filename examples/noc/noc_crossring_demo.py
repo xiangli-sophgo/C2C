@@ -67,19 +67,19 @@ def main():
     model = CrossRingModel(config)
 
     save_dir = None
-    save_dir = f"../../output/noc/CrossRing/{rows}x{cols}/"
+    # save_dir = f"../../output/noc/CrossRing/{rows}x{cols}/"
 
     # 3. 配置各种选项
     model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)  # Traffic文件设置，节点的IP会根据数据流连接。
-    model.setup_debug(trace_packets=[1, 2], sleep_time=0.0)
+    # model.setup_debug(trace_packets=[1, 2], sleep_time=0.0)
     model.setup_result_analysis(flow_distribution=1, bandwidth_analysis=1, latency_analysis=1, save_figures=0, save_dir=save_dir)  # 可视化设置
 
     # 4. 配置实时可视化（可选）
-    model.setup_visualization(enable=1, update_interval=2, start_cycle=60)
+    model.setup_visualization(enable=1, update_interval=1, start_cycle=0)
 
     # 5. 运行仿真 - 延长时间以观察flit流动
     print("▶️  开始仿真")
-    model.run_simulation(max_time_ns=2000.0, progress_interval_ns=1000.0, results_analysis=1, verbose=1)
+    model.run_simulation(max_time_ns=2000.0, progress_interval_ns=1000.0, results_analysis=0, verbose=1)
 
 
 if __name__ == "__main__":

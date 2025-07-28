@@ -12,7 +12,7 @@ NoC可视化模块
 - Torus: 环形网格拓扑（未来支持）
 """
 
-from .crossring_node_visualizer import CrossRingNodeVisualizer
+# from .crossring_node_visualizer import CrossRingNodeVisualizer
 
 __all__ = [
     "CrossRingNodeVisualizer",

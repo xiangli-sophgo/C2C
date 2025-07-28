@@ -60,7 +60,7 @@ class CrossRingModel(BaseNoCModel):
             traffic_file_path: 可选的traffic文件路径，用于优化IP接口创建
         """
         # 调用父类初始化
-        super().__init__(config, model_name="CrossRingModel", traffic_file_path=traffic_file_path)
+        super().__init__(config, model_name="CrossRing", traffic_file_path=traffic_file_path)
 
         # CrossRing网络组件 - 使用新的架构
         self.nodes: Dict[NodeId, Any] = {}  # {node_id: CrossRingNode}
@@ -95,7 +95,7 @@ class CrossRingModel(BaseNoCModel):
 
         # 可视化配置
         self._viz_config = {"flow_distribution": False, "bandwidth_analysis": False, "save_figures": True, "save_dir": "output"}
-        
+
         # 实时可视化组件
         self._realtime_visualizer = None
         self._visualization_enabled = False
@@ -310,17 +310,48 @@ class CrossRingModel(BaseNoCModel):
         file_path = traffic_file_path or self.traffic_file_path or "traffic_data"
 
         try:
-            # 分析所有traffic文件中需要的IP接口
+            # 分析所有traffic文件中需要的IP接口，同时收集IP类型用于更新CH_NAME_LIST
             all_required_ips = []
-            from src.noc.utils.traffic_scheduler import TrafficFileReader
+            all_ip_types = set()
 
+            # 直接解析traffic文件，避免重复读取
             for chain in traffic_chains:
                 for filename in chain:
-                    traffic_reader = TrafficFileReader(filename=filename, traffic_file_path=file_path, config=self.config, time_offset=0, traffic_id="analysis")
+                    abs_path = os.path.join(file_path, filename)
 
-                    ip_info = traffic_reader.get_required_ip_interfaces()
-                    required_ips = ip_info["required_ips"]
-                    all_required_ips.extend(required_ips)
+                    # 解析文件获取IP类型
+                    with open(abs_path, "r") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line or line.startswith("#"):
+                                continue
+
+                            # 支持逗号和空格分隔符
+                            if "," in line:
+                                parts = line.split(",")
+                            else:
+                                parts = line.split()
+
+                            if len(parts) < 7:
+                                continue
+
+                            try:
+                                _, src_node, src_ip, dst_node, dst_ip, _, _ = parts[:7]
+                                src_node, dst_node = int(src_node), int(dst_node)
+
+                                # 收集需要的IP接口和类型
+                                all_required_ips.append((src_node, src_ip))
+                                all_required_ips.append((dst_node, dst_ip))
+                                all_ip_types.add(src_ip)
+                                all_ip_types.add(dst_ip)
+
+                            except (ValueError, IndexError):
+                                continue
+
+            # 直接使用traffic文件中的IP类型更新CH_NAME_LIST
+            if all_ip_types:
+                traffic_ch_names = sorted(list(all_ip_types))  # 保持一致性
+                self.config.update_channel_names(traffic_ch_names)
 
             # 去重
             unique_required_ips = list(set(all_required_ips))
@@ -339,7 +370,7 @@ class CrossRingModel(BaseNoCModel):
     def setup_visualization(self, enable=True, update_interval=10, start_cycle=0):
         """
         设置实时可视化
-        
+
         Args:
             enable: 是否启用实时可视化
             update_interval: 可视化更新间隔（周期数）
@@ -349,7 +380,7 @@ class CrossRingModel(BaseNoCModel):
         self._visualization_update_interval = update_interval
         self._visualization_start_cycle = start_cycle
         self._visualization_initialized = False
-        
+
         if enable:
             print("✅ 实时可视化已配置")
             print(f"   开始周期: {start_cycle}")
@@ -921,7 +952,7 @@ class CrossRingModel(BaseNoCModel):
         if self._visualization_enabled and self.cycle >= self._visualization_start_cycle:
             if not self._visualization_initialized:
                 self._initialize_visualization()
-            
+
             if self._realtime_visualizer and self.cycle % self._visualization_update_interval == 0:
                 self._update_visualization()
 
@@ -1045,7 +1076,7 @@ class CrossRingModel(BaseNoCModel):
 
         Args:
             flow_distribution: 是否生成流量分布图
-            bandwidth_analysis: 是否生成带宽分析图  
+            bandwidth_analysis: 是否生成带宽分析图
             latency_analysis: 是否生成延迟分析图
             save_figures: 是否保存图片文件到磁盘
             save_dir: 保存目录，如果为None或空字符串则不保存任何文件
@@ -1059,7 +1090,9 @@ class CrossRingModel(BaseNoCModel):
         # 图片保存需要同时满足save_dir不为空且save_figures为True
         actual_save_figures = bool(save_dir) and save_figures
 
-        self._viz_config.update({"flow_distribution": flow_distribution, "bandwidth_analysis": bandwidth_analysis, "latency_analysis": latency_analysis, "save_figures": actual_save_figures, "save_dir": save_dir})
+        self._viz_config.update(
+            {"flow_distribution": flow_distribution, "bandwidth_analysis": bandwidth_analysis, "latency_analysis": latency_analysis, "save_figures": actual_save_figures, "save_dir": save_dir}
+        )
 
     def print_debug_status(self) -> None:
         """打印调试状态"""
@@ -1206,9 +1239,7 @@ class CrossRingModel(BaseNoCModel):
             "cycle_accurate": cycle_accurate,
         }
 
-    def analyze_simulation_results(
-        self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output", verbose: bool = True
-    ) -> Dict[str, Any]:
+    def analyze_simulation_results(self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output", verbose: bool = True) -> Dict[str, Any]:
         """
         分析仿真结果 - 调用CrossRing专用分析器
 
@@ -1228,9 +1259,7 @@ class CrossRingModel(BaseNoCModel):
 
         if hasattr(self, "_viz_config"):
             # 任何一个分析类型启用就启用可视化
-            viz_enabled = (self._viz_config.get("flow_distribution", False) or 
-                          self._viz_config.get("bandwidth_analysis", False) or
-                          self._viz_config.get("latency_analysis", False))
+            viz_enabled = self._viz_config.get("flow_distribution", False) or self._viz_config.get("bandwidth_analysis", False) or self._viz_config.get("latency_analysis", False)
             # 总是使用配置的save_dir和save_figures，不管是否启用可视化
             save_figures = self._viz_config["save_figures"]
             save_dir = self._viz_config["save_dir"]
@@ -1253,9 +1282,7 @@ class CrossRingModel(BaseNoCModel):
         analyzer = ResultAnalyzer()
         # 传递可视化配置到ResultAnalyzer
         viz_config = getattr(self, "_viz_config", {})
-        analysis_results = analyzer.analyze_noc_results(
-            self.request_tracker, self.config, self, results, enable_visualization, save_results, timestamped_dir, save_figures, verbose, viz_config
-        )
+        analysis_results = analyzer.analyze_noc_results(self.request_tracker, self.config, self, results, enable_visualization, save_results, timestamped_dir, save_figures, verbose, viz_config)
 
         # ResultAnalyzer现在会根据save_figures参数直接处理显示或保存
 
@@ -1638,49 +1665,50 @@ class CrossRingModel(BaseNoCModel):
         return self.fifo_stats_collector.get_summary_report()
 
     # ========== 可视化相关方法 ==========
-    
+
     def _initialize_visualization(self):
         """初始化可视化组件"""
         if self._visualization_initialized:
             return
-            
+
         try:
-            from src.noc.visualization.link_state_visualizer import CrossRingLinkStateVisualizer
+            from src.noc.visualization.link_state_visualizer import LinkStateVisualizer
             import matplotlib.pyplot as plt
-            
+
             # 创建可视化器
-            self._realtime_visualizer = CrossRingLinkStateVisualizer(
-                config=self.config, 
-                network=self
-            )
-            
+            self._realtime_visualizer = LinkStateVisualizer(config=self.config, model=self)
+
             # 显示可视化窗口
             plt.ion()  # 开启交互模式
             self._realtime_visualizer.show()
-            
+
             print(f"🎪 可视化窗口已打开 (周期 {self.cycle})")
             self._visualization_initialized = True
-            
+
         except ImportError as e:
             print(f"❌ 无法启用可视化: 缺少依赖库 {e}")
             self._visualization_enabled = False
         except Exception as e:
             print(f"❌ 可视化初始化失败: {e}")
+            import traceback
+
             self._visualization_enabled = False
+            traceback.print_exc()
 
     def _update_visualization(self):
         """更新可视化显示"""
         if not self._realtime_visualizer:
             return
-            
+
         try:
             # 更新可视化器状态
             self._realtime_visualizer.update(self, cycle=self.cycle)
-            
+
             # 强制刷新显示
             import matplotlib.pyplot as plt
-            plt.pause(0.01)  # 短暂暂停以刷新GUI
-            
+
+            plt.pause(0.1)  # 短暂暂停以刷新GUI
+
         except Exception as e:
             print(f"⚠️  可视化更新失败 (周期 {self.cycle}): {e}")
 
@@ -1689,7 +1717,8 @@ class CrossRingModel(BaseNoCModel):
         if self._realtime_visualizer:
             try:
                 import matplotlib.pyplot as plt
-                plt.close('all')  # 关闭所有matplotlib窗口
+
+                plt.close("all")  # 关闭所有matplotlib窗口
                 self._realtime_visualizer = None
                 self._visualization_initialized = False
                 print("📊 可视化窗口已关闭")
@@ -1703,12 +1732,7 @@ class CrossRingModel(BaseNoCModel):
 
     def __repr__(self) -> str:
         """字符串表示"""
-        return (
-            f"CrossRingModel({self.config.config_name}, "
-            f"{self.config.NUM_ROW}x{self.config.NUM_COL}, "
-            f"cycle={self.cycle}, "
-            f"active_requests={self.get_total_active_requests()})"
-        )
+        return f"CrossRingModel({self.config.config_name}, " f"{self.config.NUM_ROW}x{self.config.NUM_COL}, " f"cycle={self.cycle}, " f"active_requests={self.get_total_active_requests()})"
 
     # ========== 统一接口方法（用于兼容性） ==========
 

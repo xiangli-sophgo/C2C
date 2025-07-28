@@ -177,6 +177,10 @@ class CrossRingConfig(BaseNoCConfig):
             "ddr": 2,
             "l2m": 2,
         }
+        self.CH_NAME_LIST = []
+        for key in self.CHANNEL_SPEC:
+            for idx in range(self.CHANNEL_SPEC[key]):
+                self.CH_NAME_LIST.append(f"{key}_{idx}")
 
         # 自动生成相关配置
         self._generate_derived_config()
@@ -834,3 +838,21 @@ class CrossRingConfig(BaseNoCConfig):
                 "max_num": self.tag_config.ITAG_MAX_NUM_V,
             },
         }
+
+    def update_channel_names(self, ch_name_list: List[str]) -> None:
+        """
+        更新通道名称列表（CH_NAME_LIST）。
+        
+        这个方法允许在traffic生成时动态修改CH_NAME_LIST，
+        使得节点挂载的IP能够使用自定义的通道名称。
+        
+        Args:
+            ch_name_list: 新的通道名称列表，例如 ["gdma_0", "gdma_1", "ddr_0", "ddr_1"]
+        
+        Note:
+            - 这是所有节点的通道名称集合，不需要分不同的节点
+            - 更新后的CH_NAME_LIST会影响IP接口创建和可视化显示
+            - 建议在模型初始化之前调用此方法
+        """
+        self.CH_NAME_LIST = ch_name_list.copy()
+        print(f"✅ 已更新CH_NAME_LIST: {self.CH_NAME_LIST}")
