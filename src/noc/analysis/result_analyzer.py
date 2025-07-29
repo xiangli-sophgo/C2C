@@ -501,9 +501,7 @@ class ResultAnalyzer:
         mixed_data_avg = sum(m.data_latency for m in metrics) / len(metrics) if len(metrics) > 0 else 0
         mixed_data_max = max(m.data_latency for m in metrics) if len(metrics) > 0 else 0
 
-        print(
-            f"  Data 延迟  - 读: avg {read_data_avg:.2f}, max {read_data_max}；写: avg {write_data_avg:.2f}, max {write_data_max}；混合: avg {mixed_data_avg:.2f}, max {mixed_data_max}"
-        )
+        print(f"  Data 延迟  - 读: avg {read_data_avg:.2f}, max {read_data_max}；写: avg {write_data_avg:.2f}, max {write_data_max}；混合: avg {mixed_data_avg:.2f}, max {mixed_data_max}")
 
         # Trans延迟
         if read_metrics:
@@ -521,9 +519,7 @@ class ResultAnalyzer:
         mixed_trans_avg = sum(m.transaction_latency for m in metrics) / len(metrics) if len(metrics) > 0 else 0
         mixed_trans_max = max(m.transaction_latency for m in metrics) if len(metrics) > 0 else 0
 
-        print(
-            f"  Trans 延迟  - 读: avg {read_trans_avg:.2f}, max {read_trans_max}；写: avg {write_trans_avg:.2f}, max {write_trans_max}；混合: avg {mixed_trans_avg:.2f}, max {mixed_trans_max}"
-        )
+        print(f"  Trans 延迟  - 读: avg {read_trans_avg:.2f}, max {read_trans_max}；写: avg {write_trans_avg:.2f}, max {write_trans_max}；混合: avg {mixed_trans_avg:.2f}, max {mixed_trans_max}")
 
         # 总带宽显示（使用加权带宽）
         if "latency_metrics" in locals() and "总体带宽" in latency_metrics:
@@ -703,57 +699,106 @@ class ResultAnalyzer:
                 # 收集横向环统计数据
                 if hasattr(node, "horizontal_crosspoint"):
                     hcp = node.horizontal_crosspoint
+                    if hasattr(hcp, "stats"):
+                        stats = hcp.stats
 
-                    # Circuits统计
-                    tag_analysis["Circuits统计"]["req_h"] += getattr(hcp, "circuit_req_count", 0)
-                    tag_analysis["Circuits统计"]["rsp_h"] += getattr(hcp, "circuit_rsp_count", 0)
-                    tag_analysis["Circuits统计"]["data_h"] += getattr(hcp, "circuit_data_count", 0)
+                        # Circuits统计（绕环事件）
+                        tag_analysis["Circuits统计"]["req_h"] += stats.get("bypass_events", {}).get("req", 0)
+                        tag_analysis["Circuits统计"]["rsp_h"] += stats.get("bypass_events", {}).get("rsp", 0)
+                        tag_analysis["Circuits统计"]["data_h"] += stats.get("bypass_events", {}).get("data", 0)
 
-                    # Wait cycle统计
-                    tag_analysis["Wait_cycle统计"]["req_h"] += getattr(hcp, "wait_req_cycles", 0)
-                    tag_analysis["Wait_cycle统计"]["rsp_h"] += getattr(hcp, "wait_rsp_cycles", 0)
-                    tag_analysis["Wait_cycle统计"]["data_h"] += getattr(hcp, "wait_data_cycles", 0)
-
-                    # I-Tag统计
-                    tag_analysis["ITag统计"]["h"] += getattr(hcp, "itag_trigger_count", 0)
+                        # I-Tag统计
+                        tag_analysis["ITag统计"]["h"] += stats.get("itag_triggers", {}).get("req", 0)
+                        tag_analysis["ITag统计"]["h"] += stats.get("itag_triggers", {}).get("rsp", 0)
+                        tag_analysis["ITag统计"]["h"] += stats.get("itag_triggers", {}).get("data", 0)
 
                 # 收集纵向环统计数据
                 if hasattr(node, "vertical_crosspoint"):
                     vcp = node.vertical_crosspoint
+                    if hasattr(vcp, "stats"):
+                        stats = vcp.stats
 
-                    # Circuits统计
-                    tag_analysis["Circuits统计"]["req_v"] += getattr(vcp, "circuit_req_count", 0)
-                    tag_analysis["Circuits统计"]["rsp_v"] += getattr(vcp, "circuit_rsp_count", 0)
-                    tag_analysis["Circuits统计"]["data_v"] += getattr(vcp, "circuit_data_count", 0)
+                        # Circuits统计（绕环事件）
+                        tag_analysis["Circuits统计"]["req_v"] += stats.get("bypass_events", {}).get("req", 0)
+                        tag_analysis["Circuits统计"]["rsp_v"] += stats.get("bypass_events", {}).get("rsp", 0)
+                        tag_analysis["Circuits统计"]["data_v"] += stats.get("bypass_events", {}).get("data", 0)
 
-                    # Wait cycle统计
-                    tag_analysis["Wait_cycle统计"]["req_v"] += getattr(vcp, "wait_req_cycles", 0)
-                    tag_analysis["Wait_cycle统计"]["rsp_v"] += getattr(vcp, "wait_rsp_cycles", 0)
-                    tag_analysis["Wait_cycle统计"]["data_v"] += getattr(vcp, "wait_data_cycles", 0)
-
-                    # I-Tag统计
-                    tag_analysis["ITag统计"]["v"] += getattr(vcp, "itag_trigger_count", 0)
+                        # I-Tag统计
+                        tag_analysis["ITag统计"]["v"] += stats.get("itag_triggers", {}).get("req", 0)
+                        tag_analysis["ITag统计"]["v"] += stats.get("itag_triggers", {}).get("rsp", 0)
+                        tag_analysis["ITag统计"]["v"] += stats.get("itag_triggers", {}).get("data", 0)
 
                 # 收集Ring Bridge E-Tag统计
-                if hasattr(node, "ring_bridge"):
-                    rb = node.ring_bridge
-                    tag_analysis["RB_ETag统计"]["T1"] += getattr(rb, "etag_t1_count", 0)
-                    tag_analysis["RB_ETag统计"]["T0"] += getattr(rb, "etag_t0_count", 0)
+                if hasattr(node, "ring_bridge") and hasattr(node.ring_bridge, "stats"):
+                    rb_stats = node.ring_bridge.stats
+                    if "etag_upgrades" in rb_stats:
+                        for channel in ["req", "rsp", "data"]:
+                            tag_analysis["RB_ETag统计"]["T1"] += rb_stats["etag_upgrades"].get(channel, {}).get("T2_to_T1", 0)
+                            tag_analysis["RB_ETag统计"]["T0"] += rb_stats["etag_upgrades"].get(channel, {}).get("T1_to_T0", 0)
 
                 # 收集Eject Queue E-Tag统计
-                if hasattr(node, "eject_queue"):
-                    eq = node.eject_queue
-                    tag_analysis["EQ_ETag统计"]["T1"] += getattr(eq, "etag_t1_count", 0)
-                    tag_analysis["EQ_ETag统计"]["T0"] += getattr(eq, "etag_t0_count", 0)
+                if hasattr(node, "eject_queue") and hasattr(node.eject_queue, "stats"):
+                    eq_stats = node.eject_queue.stats
+                    if "etag_upgrades" in eq_stats:
+                        for channel in ["req", "rsp", "data"]:
+                            tag_analysis["EQ_ETag统计"]["T1"] += eq_stats["etag_upgrades"].get(channel, {}).get("T2_to_T1", 0)
+                            tag_analysis["EQ_ETag统计"]["T0"] += eq_stats["etag_upgrades"].get(channel, {}).get("T1_to_T0", 0)
 
-                # 收集Retry统计
-                if hasattr(node, "ip_interfaces"):
-                    for ip_interface in node.ip_interfaces.values():
-                        tag_analysis["Retry统计"]["read"] += getattr(ip_interface, "retry_read_count", 0)
-                        tag_analysis["Retry统计"]["write"] += getattr(ip_interface, "retry_write_count", 0)
+            # 收集Retry统计和等待周期统计（从模型的IP接口中）
+            if hasattr(model, "ip_interfaces"):
+                # 处理多维IP接口结构: ip_interfaces[node_id][ip_type]
+                for node_interfaces in model.ip_interfaces.values():
+                    # 检查是否是嵌套字典结构
+                    if isinstance(node_interfaces, dict):
+                        # 多维结构：遍历每个节点的所有IP接口
+                        for ip_interface in node_interfaces.values():
+                            # Retry统计
+                            tag_analysis["Retry统计"]["read"] += getattr(ip_interface, "read_retry_num_stat", 0)
+                            tag_analysis["Retry统计"]["write"] += getattr(ip_interface, "write_retry_num_stat", 0)
+
+                            # 等待周期统计
+                            tag_analysis["Wait_cycle统计"]["req_h"] += getattr(ip_interface, "req_wait_cycles_h", 0)
+                            tag_analysis["Wait_cycle统计"]["req_v"] += getattr(ip_interface, "req_wait_cycles_v", 0)
+                            tag_analysis["Wait_cycle统计"]["rsp_h"] += getattr(ip_interface, "rsp_wait_cycles_h", 0)
+                            tag_analysis["Wait_cycle统计"]["rsp_v"] += getattr(ip_interface, "rsp_wait_cycles_v", 0)
+                            tag_analysis["Wait_cycle统计"]["data_h"] += getattr(ip_interface, "data_wait_cycles_h", 0)
+                            tag_analysis["Wait_cycle统计"]["data_v"] += getattr(ip_interface, "data_wait_cycles_v", 0)
+
+                            # Circuits统计（绕环完成事件）
+                            tag_analysis["Circuits统计"]["req_h"] += getattr(ip_interface, "req_cir_h_num", 0)
+                            tag_analysis["Circuits统计"]["req_v"] += getattr(ip_interface, "req_cir_v_num", 0)
+                            tag_analysis["Circuits统计"]["rsp_h"] += getattr(ip_interface, "rsp_cir_h_num", 0)
+                            tag_analysis["Circuits统计"]["rsp_v"] += getattr(ip_interface, "rsp_cir_v_num", 0)
+                            tag_analysis["Circuits统计"]["data_h"] += getattr(ip_interface, "data_cir_h_num", 0)
+                            tag_analysis["Circuits统计"]["data_v"] += getattr(ip_interface, "data_cir_v_num", 0)
+                    else:
+                        # 简单结构：直接是IP接口对象
+                        ip_interface = node_interfaces
+                        # Retry统计
+                        tag_analysis["Retry统计"]["read"] += getattr(ip_interface, "read_retry_num_stat", 0)
+                        tag_analysis["Retry统计"]["write"] += getattr(ip_interface, "write_retry_num_stat", 0)
+
+                        # 等待周期统计
+                        tag_analysis["Wait_cycle统计"]["req_h"] += getattr(ip_interface, "req_wait_cycles_h", 0)
+                        tag_analysis["Wait_cycle统计"]["req_v"] += getattr(ip_interface, "req_wait_cycles_v", 0)
+                        tag_analysis["Wait_cycle统计"]["rsp_h"] += getattr(ip_interface, "rsp_wait_cycles_h", 0)
+                        tag_analysis["Wait_cycle统计"]["rsp_v"] += getattr(ip_interface, "rsp_wait_cycles_v", 0)
+                        tag_analysis["Wait_cycle统计"]["data_h"] += getattr(ip_interface, "data_wait_cycles_h", 0)
+                        tag_analysis["Wait_cycle统计"]["data_v"] += getattr(ip_interface, "data_wait_cycles_v", 0)
+
+                        # Circuits统计（绕环完成事件）
+                        tag_analysis["Circuits统计"]["req_h"] += getattr(ip_interface, "req_cir_h_num", 0)
+                        tag_analysis["Circuits统计"]["req_v"] += getattr(ip_interface, "req_cir_v_num", 0)
+                        tag_analysis["Circuits统计"]["rsp_h"] += getattr(ip_interface, "rsp_cir_h_num", 0)
+                        tag_analysis["Circuits统计"]["rsp_v"] += getattr(ip_interface, "rsp_cir_v_num", 0)
+                        tag_analysis["Circuits统计"]["data_h"] += getattr(ip_interface, "data_cir_h_num", 0)
+                        tag_analysis["Circuits统计"]["data_v"] += getattr(ip_interface, "data_cir_v_num", 0)
 
         except Exception as e:
             print(f"收集Tag和绕环数据时出错: {e}")
+            import traceback
+
+            traceback.print_exc()
 
         # 打印Tag分析结果（仅在verbose=True时）
         if verbose:
@@ -778,7 +823,7 @@ class ResultAnalyzer:
             print(f"  EQ ETag统计 - T1: {eq_etag['T1']}, T0: {eq_etag['T0']}")
 
             itag = tag_analysis["ITag统计"]
-            print(f"  注入标签 - 横向: {itag['h']}, 纵向: {itag['v']}")
+            print(f"  ITag统计 - 横向: {itag['h']}, 纵向: {itag['v']}")
 
             retry = tag_analysis["Retry统计"]
             print(f"  Retry数量 - 读: {retry['read']}, 写: {retry['write']}")
@@ -1510,9 +1555,7 @@ class ResultAnalyzer:
                 write_requests = ip_analysis[ip_type]["写请求数"]
 
                 # 在X轴标签下方添加请求数信息
-                ax.text(
-                    i, -max(max(read_bw), max(write_bw)) * 0.1, f"总请求: {total_requests}\n(读:{read_requests}, 写:{write_requests})", ha="center", va="top", fontsize=8, alpha=0.7
-                )
+                ax.text(i, -max(max(read_bw), max(write_bw)) * 0.1, f"总请求: {total_requests}\n(读:{read_requests}, 写:{write_requests})", ha="center", va="top", fontsize=8, alpha=0.7)
 
             plt.tight_layout()
 
@@ -2171,7 +2214,7 @@ class ResultAnalyzer:
 
             # 使用viz_config控制独立的图表生成
             viz_config = viz_config or {}
-            
+
             # 带宽分析图（包括带宽曲线图）
             if viz_config.get("bandwidth_analysis", False):
                 bw_path = self.plot_bandwidth_curves(metrics, save_dir=save_dir, save_figures=save_figures, verbose=verbose)

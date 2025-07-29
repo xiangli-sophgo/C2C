@@ -195,15 +195,6 @@ class CrossRingConfig(BaseNoCConfig):
             self.SN_DDR_WDB_SIZE = self.tracker_config.SN_DDR_W_TRACKER_OSTD * self.basic_config.BURST
             self.SN_L2M_RDB_SIZE = self.tracker_config.SN_L2M_R_TRACKER_OSTD * self.basic_config.BURST
             self.SN_L2M_WDB_SIZE = self.tracker_config.SN_L2M_W_TRACKER_OSTD * self.basic_config.BURST
-        else:
-            # 如果tracker_config是字典或未初始化，使用默认值
-            tracker = TrackerConfiguration()
-            self.RN_RDB_SIZE = tracker.RN_R_TRACKER_OSTD * self.basic_config.BURST
-            self.RN_WDB_SIZE = tracker.RN_W_TRACKER_OSTD * self.basic_config.BURST
-            self.SN_DDR_RDB_SIZE = tracker.SN_DDR_R_TRACKER_OSTD * self.basic_config.BURST
-            self.SN_DDR_WDB_SIZE = tracker.SN_DDR_W_TRACKER_OSTD * self.basic_config.BURST
-            self.SN_L2M_RDB_SIZE = tracker.SN_L2M_R_TRACKER_OSTD * self.basic_config.BURST
-            self.SN_L2M_WDB_SIZE = tracker.SN_L2M_W_TRACKER_OSTD * self.basic_config.BURST
 
         # 生成通道名称列表
         self.ch_name_list = []
@@ -274,25 +265,15 @@ class CrossRingConfig(BaseNoCConfig):
             tu_t2 = tag_cfg.TU_ETAG_T2_UE_MAX
             tu_t1 = tag_cfg.TU_ETAG_T1_UE_MAX
             td_t2 = tag_cfg.TD_ETAG_T2_UE_MAX
-        elif isinstance(tag_cfg, dict):
-            tr_t2 = tag_cfg.get("TR_ETAG_T2_UE_MAX", 0)
-            tl_t2 = tag_cfg.get("TL_ETAG_T2_UE_MAX", 0)
-            tl_t1 = tag_cfg.get("TL_ETAG_T1_UE_MAX", 0)
-            td_t2 = tag_cfg.get("TD_ETAG_T2_UE_MAX", 0)
-            tu_t2 = tag_cfg.get("TU_ETAG_T2_UE_MAX", 0)
-            tu_t1 = tag_cfg.get("TU_ETAG_T1_UE_MAX", 0)
         else:
-            tl_t2 = tl_t1 = tr_t2 = td_t2 = tu_t2 = tu_t1 = 0
+            raise ValueError
 
         # 安全地获取FIFO深度
-        if hasattr(fifo_cfg, "RB_IN_DEPTH"):
+        if hasattr(fifo_cfg, "RB_IN_FIFO_DEPTH"):
             rb_depth = fifo_cfg.RB_IN_FIFO_DEPTH
             eq_depth = fifo_cfg.EQ_IN_FIFO_DEPTH
-        elif isinstance(fifo_cfg, dict):
-            rb_depth = fifo_cfg.get("RB_IN_FIFO_DEPTH", 16)
-            eq_depth = fifo_cfg.get("EQ_IN_FIFO_DEPTH", 16)
         else:
-            rb_depth = eq_depth = 8
+            raise ValueError
 
         if tl_t2 <= 0:
             errors.append(f"TL ETag T2必须为正数 (TL_ETAG_T2_UE_MAX={tl_t2})")
@@ -321,9 +302,7 @@ class CrossRingConfig(BaseNoCConfig):
                 errors.append(f"SN Tracker OSTD必须为正数 (SN_DDR_R_TRACKER_OSTD={tracker.SN_DDR_R_TRACKER_OSTD}, SN_L2M_R_TRACKER_OSTD={tracker.SN_L2M_R_TRACKER_OSTD})")
             # 缓冲区大小一致性验证
             if hasattr(self, "RN_RDB_SIZE") and self.RN_RDB_SIZE != tracker.RN_R_TRACKER_OSTD * self.basic_config.BURST:
-                errors.append(
-                    f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (RN_RDB_SIZE={self.RN_RDB_SIZE}, RN_R_TRACKER_OSTD={tracker.RN_R_TRACKER_OSTD}, BURST={self.basic_config.BURST})"
-                )
+                errors.append(f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (RN_RDB_SIZE={self.RN_RDB_SIZE}, RN_R_TRACKER_OSTD={tracker.RN_R_TRACKER_OSTD}, BURST={self.basic_config.BURST})")
         elif isinstance(tracker, dict):
             rn_r_ostd = tracker.get("RN_R_TRACKER_OSTD", 64)
             rn_w_ostd = tracker.get("RN_W_TRACKER_OSTD", 32)
@@ -853,4 +832,3 @@ class CrossRingConfig(BaseNoCConfig):
             - 建议在模型初始化之前调用此方法
         """
         self.CH_NAME_LIST = ch_name_list.copy()
-        print(f"✅ 已更新CH_NAME_LIST: {self.CH_NAME_LIST}")

@@ -177,8 +177,8 @@ class CrossPoint:
         self.etag_entry_managers: Dict[str, EntryAllocationTracker] = {}
         self._initialize_etag_entry_managers()
 
-        # T0全局队列 - 每个通道独立的轮询队列（这个不能简化！）
-        self.t0_global_queues: Dict[str, List[CrossRingSlot]] = {"req": [], "rsp": [], "data": []}  # 请求通道T0队列  # 响应通道T0队列  # 数据通道T0队列
+        # T0全局队列 - 每个通道独立的轮询队列
+        self.t0_global_queues: Dict[str, List[CrossRingSlot]] = {"req": [], "rsp": [], "data": []}
 
         # I-Tag预约机制状态 - 每个通道每个环路方向独立管理
         self.itag_reservations: Dict[str, Dict[str, ITagReservationState]] = {
@@ -248,24 +248,21 @@ class CrossPoint:
             if sub_direction == "TL":
                 t2_max = self.config.tag_config.TL_ETAG_T2_UE_MAX
                 t1_max = self.config.tag_config.TL_ETAG_T1_UE_MAX
-                has_dedicated = True  # TL有专用entry
+                has_dedicated = True  # TL有T0专用entry
             elif sub_direction == "TR":
                 t2_max = self.config.tag_config.TR_ETAG_T2_UE_MAX
                 t1_max = self.config.fifo_config.RB_IN_FIFO_DEPTH  # TR的T1_UE_MAX = RB_IN_FIFO_DEPTH
-                has_dedicated = False  # TR无专用entry
+                has_dedicated = False  # TR无T0专用entry
             elif sub_direction == "TU":
                 t2_max = self.config.tag_config.TU_ETAG_T2_UE_MAX
                 t1_max = self.config.tag_config.TU_ETAG_T1_UE_MAX
-                has_dedicated = True  # TU有专用entry
+                has_dedicated = True  # TU有T0专用entry
             elif sub_direction == "TD":
                 t2_max = self.config.tag_config.TD_ETAG_T2_UE_MAX
                 t1_max = self.config.fifo_config.EQ_IN_FIFO_DEPTH  # TD的T1_UE_MAX = EQ_IN_FIFO_DEPTH
-                has_dedicated = False  # TD无专用entry
+                has_dedicated = False  # TD无T0专用entry
             else:
-                # 默认配置
-                t2_max = 8
-                t1_max = 15
-                has_dedicated = True
+                raise ValueError(f"错误的方向{sub_direction}")
 
             # 创建entry管理器
             self.etag_entry_managers[sub_direction] = EntryAllocationTracker(total_depth=total_depth, t2_max_entries=t2_max, t1_max_entries=t1_max, has_dedicated_entries=has_dedicated)
@@ -321,15 +318,7 @@ class CrossPoint:
                     continue
 
                 # 判断是否应该下环以及下环目标
-                should_eject, eject_target = self._should_eject_flit_unified(flit, direction)
-
-                # 删除调试输出
-                # if self.parent_node and self.parent_node.node_id == 7 and hasattr(flit, "packet_id") and flit.packet_id == 1:
-                #     current_pos = getattr(flit, "current_position", "?")
-                #     print(
-                #         f"🔍 节点7 {self.direction.value}CP: flit {flit.packet_id}.{getattr(flit, 'sub_id', '?')} "
-                #         f"从{current_pos} 方向{direction} 下环={should_eject} 目标={eject_target}"
-                #     )
+                should_eject, eject_target = self._should_eject_flit(flit, direction)
 
                 if should_eject:
                     if eject_target == "RB":
@@ -448,9 +437,9 @@ class CrossPoint:
                 success = self._execute_eject_to_eq_fifo(plan)
                 if success:
                     self.stats["flits_ejected"][plan["channel"]] += 1
-                else:
-                    if hasattr(plan["flit"], "packet_id"):
-                        raise RuntimeError(f"CrossPoint {self.crosspoint_id} 无法将packet {plan['flit'].packet_id} 下环到EQ {plan['direction']}")
+                # else:
+                #     if hasattr(plan["flit"], "packet_id"):
+                #         raise RuntimeError(f"CrossPoint {self.crosspoint_id} 无法将packet {plan['flit'].packet_id} 下环到EQ {plan['direction']}")
 
         # ========== 执行上环传输计划 ==========
         # 按优先级排序执行（ring_bridge优先于FIFO）
@@ -476,7 +465,7 @@ class CrossPoint:
                             if not plan["source_fifo"].priority_write(plan["flit"]):
                                 raise RuntimeError(f"CrossPoint {self.crosspoint_id} 无法将packet {plan['flit'].packet_id} 放回FIFO，数据可能丢失！")
 
-    def _should_eject_flit_unified(self, flit: CrossRingFlit, arrival_direction: str) -> Tuple[bool, str]:
+    def _should_eject_flit(self, flit: CrossRingFlit, arrival_direction: str) -> Tuple[bool, str]:
         """
         基于路径信息的下环决策逻辑
 
@@ -493,49 +482,23 @@ class CrossPoint:
             return False, ""
 
         current_node = self.parent_node.node_id
-        # 删除debug输出
-        # if flit.packet_id == 10 and flit.flit_id == 2:
-        #     print(f"🔍 节点{current_node} {self.direction.value}CP: flit {flit.packet_id} 到达")
-
-        # 删除调试信息
-        debug_enabled = False  # hasattr(flit, "packet_id") and str(flit.packet_id).startswith("5")
-        # if debug_enabled:
-        #     print(
-        #         f"🔍 节点{current_node} {self.direction.value}CP: flit {flit.packet_id}.{getattr(flit, 'flit_index', '?')} "
-        #         f"从{getattr(flit, 'source', '?')} 方向{arrival_direction} "
-        #         f"下环=? 目标={getattr(flit, 'destination', getattr(flit, 'dest_node_id', '?'))}"
-        #     )
-        #     if hasattr(flit, "path"):
-        #         print(f"    路径={flit.path}, 当前位置在路径中的索引={getattr(flit, 'path_index', '?')}")
 
         # 基于路径判断
         # 检查是否到达最终目标
         if current_node == flit.path[-1]:  # 路径的最后一个节点是目标
-            if debug_enabled:
-                print(f"    到达路径最终目标节点")
             # 根据来源方向决定下环目标
             if arrival_direction in ["TR", "TL"] and self.direction == CrossPointDirection.HORIZONTAL:
-                if debug_enabled:
-                    print(f"    下环决策: True -> RB (水平环到达目标)")
                 return True, "RB"  # 水平环到达目标，通过RB下环
             elif arrival_direction in ["TU", "TD"] and self.direction == CrossPointDirection.VERTICAL:
-                if debug_enabled:
-                    print(f"    下环决策: True -> EQ (垂直环到达目标)")
                 return True, "EQ"  # 垂直环到达目标，直接下环到IP
             else:
-                if debug_enabled:
-                    print(f"    下环决策: True -> EQ (其他情况)")
                 return True, "EQ"  # Ring Bridge来的，直接到IP
 
         # 查找当前节点在路径中的位置
         try:
             path_index = flit.path.index(current_node)
-            if debug_enabled:
-                print(f"    当前节点在路径索引: {path_index}")
             if path_index < len(flit.path) - 1:
                 next_node = flit.path[path_index + 1]
-                if debug_enabled:
-                    print(f"    下一跳节点: {next_node}")
                 # 更新path_index
                 if hasattr(flit, "path_index"):
                     flit.path_index = path_index
@@ -544,55 +507,31 @@ class CrossPoint:
                 if self.direction == CrossPointDirection.HORIZONTAL:
                     # 水平环：如果下一跳需要垂直移动，下环到RB
                     needs_vertical = self._needs_vertical_move(current_node, next_node)
-                    if debug_enabled:
-                        print(f"    水平环，需要垂直移动: {needs_vertical}")
                     if arrival_direction in ["TR", "TL"] and needs_vertical:
-                        if debug_enabled:
-                            print(f"    下环决策: True -> RB (维度转换)")
                         return True, "RB"
                 elif self.direction == CrossPointDirection.VERTICAL:
                     # 垂直环：如果下一跳需要水平移动，下环到RB
                     needs_horizontal = self._needs_horizontal_move(current_node, next_node)
-                    if debug_enabled:
-                        print(f"    垂直环，需要水平移动: {needs_horizontal}")
                     if arrival_direction in ["TU", "TD"] and needs_horizontal:
-                        if debug_enabled:
-                            print(f"    下环决策: True -> RB (维度转换)")
                         return True, "RB"
         except ValueError:
-            if debug_enabled:
-                print(f"    当前节点{current_node}不在路径{flit.path}中，检查绕环情况")
             # 当前节点不在路径中，可能是绕环情况
             # 对于绕环flit，检查是否到达了路径的目标节点
             if current_node == flit.path[-1]:  # 绕环到达目标节点
-                if debug_enabled:
-                    print(f"    绕环到达目标节点")
                 if arrival_direction in ["TR", "TL"] and self.direction == CrossPointDirection.HORIZONTAL:
-                    if debug_enabled:
-                        print(f"    下环决策: True -> RB (绕环水平环到达目标)")
                     return True, "RB"  # 水平环到达目标，通过RB下环
                 elif arrival_direction in ["TU", "TD"] and self.direction == CrossPointDirection.VERTICAL:
-                    if debug_enabled:
-                        print(f"    下环决策: True -> EQ (绕环垂直环到达目标)")
                     return True, "EQ"  # 垂直环到达目标，直接下环到IP
                 else:
-                    if debug_enabled:
-                        print(f"    下环决策: True -> EQ (绕环其他情况)")
                     return True, "EQ"  # 默认下环到IP
             # 否则继续绕环
-            if debug_enabled:
-                print(f"    继续绕环")
             pass
 
         # 来自Ring Bridge的flit，直接下环到IP
         if arrival_direction not in ["TR", "TL", "TU", "TD"]:
-            if debug_enabled:
-                print(f"    下环决策: True -> EQ (来自Ring Bridge)")
             return True, "EQ"
 
         # 继续在当前环传输
-        if debug_enabled:
-            print(f"    下环决策: False (继续在当前环传输)")
         return False, ""
 
     def _needs_vertical_move(self, current_node: int, next_node: int) -> bool:
@@ -647,7 +586,6 @@ class CrossPoint:
         # 获取该方向的entry管理器
         if direction not in self.etag_entry_managers:
             raise ValueError(f"未找到方向 {direction} 的entry管理器")
-            return False
 
         entry_manager = self.etag_entry_managers[direction]
 
@@ -726,7 +664,6 @@ class CrossPoint:
                     return success
         else:
             # update阶段：不分配entry，只检查是否符合条件
-            # 如果没有allocated_entry_info，说明compute阶段分配失败
             return False
 
         return False
@@ -1104,6 +1041,8 @@ class CrossPoint:
         # 从ring_bridge获取实际flit
         if self.parent_node and hasattr(self.parent_node, "get_ring_bridge_output_flit"):
             actual_flit = self.parent_node.get_ring_bridge_output_flit(direction, channel)
+            if actual_flit.packet_id == 6 and actual_flit.flit_id == 1:
+                print(actual_flit)
             if actual_flit:
                 return self._inject_flit_to_departure_slice(actual_flit, direction, channel)
 
@@ -1174,12 +1113,73 @@ class CrossPoint:
 
         # 更新flit状态信息
         flit.current_node_id = self.node_id
-        flit.current_link_id = f"link_{self.node_id}_{direction}"
+
+        # 构建正确的链路ID - 需要确定目标节点
+        if hasattr(departure_slice, "link") and departure_slice.link:
+            # 如果slice有链路引用，使用链路的ID
+            flit.current_link_id = departure_slice.link.link_id
+        else:
+            # 回退方案：基于方向和坐标计算目标节点
+            target_node = self._calculate_target_node_for_direction(direction)
+            if target_node == self.node_id:
+                # 自环链路
+                reverse_direction = {"TR": "TL", "TL": "TR", "TU": "TD", "TD": "TU"}.get(direction, direction)
+                flit.current_link_id = f"link_{self.node_id}_{direction}_{reverse_direction}_{target_node}"
+            else:
+                # 普通链路
+                flit.current_link_id = f"link_{self.node_id}_{direction}_{target_node}"
+
         flit.current_slice_index = 0
         flit.crosspoint_direction = "departure"
         flit.current_position = self.node_id
 
         return True
+
+    def _calculate_target_node_for_direction(self, direction: str) -> int:
+        """
+        根据方向计算目标节点ID
+
+        Args:
+            direction: 方向（TR/TL/TU/TD）
+
+        Returns:
+            目标节点ID
+        """
+        if not self.parent_node or not hasattr(self.parent_node, "config"):
+            return self.node_id  # 如果无法获取配置，返回自环
+
+        num_cols = self.parent_node.config.NUM_COL
+        num_rows = self.parent_node.config.NUM_ROW
+
+        current_row = self.node_id // num_cols
+        current_col = self.node_id % num_cols
+
+        if direction == "TR":  # Turn Right - 向右
+            target_col = (current_col + 1) % num_cols if current_col < num_cols - 1 else current_col
+            if target_col == current_col:  # 边界情况，自环
+                return self.node_id
+            return current_row * num_cols + target_col
+
+        elif direction == "TL":  # Turn Left - 向左
+            target_col = (current_col - 1) % num_cols if current_col > 0 else current_col
+            if target_col == current_col:  # 边界情况，自环
+                return self.node_id
+            return current_row * num_cols + target_col
+
+        elif direction == "TU":  # Turn Up - 向上
+            target_row = (current_row - 1) % num_rows if current_row > 0 else current_row
+            if target_row == current_row:  # 边界情况，自环
+                return self.node_id
+            return target_row * num_cols + current_col
+
+        elif direction == "TD":  # Turn Down - 向下
+            target_row = (current_row + 1) % num_rows if current_row < num_rows - 1 else current_row
+            if target_row == current_row:  # 边界情况，自环
+                return self.node_id
+            return target_row * num_cols + current_col
+
+        else:
+            return self.node_id  # 未知方向，返回自环
 
     def _handle_successful_ejection(self, slot: CrossRingSlot, channel: str, direction: str) -> None:
         """
@@ -1202,27 +1202,27 @@ class CrossPoint:
             if removed_count > 0:
                 pass
 
-        # 清理slot的E-Tag标记（slot要被重用）
+        # 清理slot的E-Tag标记
         slot.clear_etag()
 
-        # 清理allocated_entry_info（如果有的话）
+        # 清理allocated_entry_info
         if hasattr(slot, "allocated_entry_info"):
             delattr(slot, "allocated_entry_info")
 
-    def step(self, cycle: int, node_inject_fifos: Dict[str, Dict[str, Any]], node_eject_fifos: Dict[str, Dict[str, Any]]) -> None:
-        """
-        CrossPoint主步进函数 - 执行两阶段处理
+    # def step(self, cycle: int, node_inject_fifos: Dict[str, Dict[str, Any]], node_eject_fifos: Dict[str, Dict[str, Any]]) -> None:
+    #     """
+    #     CrossPoint主步进函数 - 执行两阶段处理
 
-        Args:
-            cycle: 当前周期
-            node_inject_fifos: 节点的inject_input_fifos
-            node_eject_fifos: 节点的eject_input_fifos
-        """
-        # 第一阶段：计算阶段
-        self.step_compute_phase(cycle, node_inject_fifos, node_eject_fifos)
+    #     Args:
+    #         cycle: 当前周期
+    #         node_inject_fifos: 节点的inject_input_fifos
+    #         node_eject_fifos: 节点的eject_input_fifos
+    #     """
+    #     # 第一阶段：计算阶段
+    #     self.step_compute_phase(cycle, node_inject_fifos, node_eject_fifos)
 
-        # 第二阶段：更新阶段
-        self.step_update_phase(cycle, node_inject_fifos, node_eject_fifos)
+    #     # 第二阶段：更新阶段
+    #     self.step_update_phase(cycle, node_inject_fifos, node_eject_fifos)
 
     def get_crosspoint_status(self) -> Dict[str, Any]:
         """

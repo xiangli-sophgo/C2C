@@ -441,7 +441,7 @@ class CrossRingModel(BaseNoCModel):
         from .link import Direction
 
         # 获取slice配置
-        normal_slices = getattr(self.config.basic_config, "NORMAL_LINK_SLICES", 8)
+        normal_slices = getattr(self.config.basic_config, "SLICE_PER_LINK", 8)
         self_slices = getattr(self.config.basic_config, "SELF_LINK_SLICES", 2)
 
         link_count = 0
@@ -1099,7 +1099,7 @@ class CrossRingModel(BaseNoCModel):
     def setup_visualization(self, enable: bool = True, update_interval: int = 1, start_cycle: int = 0) -> None:
         """
         配置实时可视化
-        
+
         Args:
             enable: 是否启用可视化
             update_interval: 更新间隔（秒），用作plt.pause的参数
@@ -1108,16 +1108,16 @@ class CrossRingModel(BaseNoCModel):
         self._visualization_enabled = enable
         self._visualization_frame_interval = update_interval
         self._visualization_start_cycle = start_cycle
-        
+
         if enable:
             print(f"✅ 可视化已启用: 更新间隔={update_interval}s, 开始周期={start_cycle}")
         else:
             print("❌ 可视化已禁用")
-    
+
     def cleanup_visualization(self) -> None:
         """
         清理可视化资源，禁用时间间隔
-        
+
         用于用户按'q'退出可视化后，让仿真无延迟运行
         """
         if self._visualization_enabled:
@@ -1126,11 +1126,17 @@ class CrossRingModel(BaseNoCModel):
             self.debug_config["sleep_time"] = 0.0  # 同时禁用debug模式的延迟
             self.user_interrupted = False  # 重置中断标志，让仿真继续运行
             print("🚀 可视化已退出，仿真将无延迟运行")
-        
+
         if self._realtime_visualizer:
             try:
                 import matplotlib.pyplot as plt
-                plt.close("all")
+
+                # 只关闭可视化相关的图形，不关闭所有窗口
+                # if hasattr(self._realtime_visualizer, 'fig') and self._realtime_visualizer.fig:
+                #     plt.close(self._realtime_visualizer.fig)
+                # else:
+                #     # 如果无法获取特定图形，只关闭当前活跃图形
+                #     plt.close()
                 self._realtime_visualizer = None
                 self._visualization_initialized = False
                 print("📊 可视化窗口已关闭")
@@ -1749,7 +1755,7 @@ class CrossRingModel(BaseNoCModel):
 
             # 强制刷新显示
             import matplotlib.pyplot as plt
-            
+
             # 检查matplotlib窗口是否关闭（用户点击X或按q）
             if not plt.get_fignums():  # 如果没有打开的图形窗口
                 print("🔒 检测到可视化窗口已关闭，触发清理...")
@@ -1780,18 +1786,23 @@ class CrossRingModel(BaseNoCModel):
             # 出错时也触发清理，避免卡住
             self.cleanup_visualization()
 
-    def close_visualization(self):
-        """关闭可视化窗口"""
-        if self._realtime_visualizer:
-            try:
-                import matplotlib.pyplot as plt
+    # def close_visualization(self):
+    #     """关闭可视化窗口"""
+    #     if self._realtime_visualizer:
+    #         try:
+    #             import matplotlib.pyplot as plt
 
-                plt.close("all")  # 关闭所有matplotlib窗口
-                self._realtime_visualizer = None
-                self._visualization_initialized = False
-                print("📊 可视化窗口已关闭")
-            except Exception as e:
-                print(f"⚠️  关闭可视化失败: {e}")
+    #             # # 只关闭可视化相关的图形，不关闭所有窗口
+    #             # if hasattr(self._realtime_visualizer, 'fig') and self._realtime_visualizer.fig:
+    #             #     plt.close(self._realtime_visualizer.fig)
+    #             # else:
+    #             #     # 如果无法获取特定图形，只关闭当前活跃图形
+    #             #     plt.close()
+    #             self._realtime_visualizer = None
+    #             self._visualization_initialized = False
+    #             print("📊 可视化窗口已关闭")
+    #         except Exception as e:
+    #             print(f"⚠️  关闭可视化失败: {e}")
 
     def __del__(self):
         """析构函数"""
@@ -2013,7 +2024,7 @@ class CrossRingModel(BaseNoCModel):
         print("=" * 55)
 
     # ========== 重写run_simulation以集成可视化控制 ==========
-    
+
     def run_simulation(
         self, max_time_ns: float = 5000.0, stats_start_time_ns: float = 0.0, progress_interval_ns: float = 1000.0, results_analysis: bool = False, verbose: bool = True
     ) -> Dict[str, Any]:
@@ -2069,7 +2080,7 @@ class CrossRingModel(BaseNoCModel):
                 if self._visualization_enabled and cycle >= self._visualization_start_cycle:
                     if cycle % self._visualization_update_interval == 0:  # 每N个周期更新一次
                         self._update_visualization()
-                    
+
                     # 如果可视化被用户退出，_visualization_enabled会被设为False
                     # 这时仿真继续但不再有延迟
 
@@ -2103,7 +2114,7 @@ class CrossRingModel(BaseNoCModel):
             self.is_running = False
             self.is_finished = True
             self.end_time = time.time()
-            
+
             # 确保可视化资源被清理
             if self._visualization_enabled:
                 self.cleanup_visualization()

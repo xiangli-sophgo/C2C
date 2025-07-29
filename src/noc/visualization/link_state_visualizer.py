@@ -230,8 +230,27 @@ class LinkStateVisualizer:
         # 计算节点位置
         self.node_positions = {}
         node_size = 0.4
-        spacing_x = 2.0
-        spacing_y = 1.5
+
+        # 根据SLICE_PER_LINK动态调整节点间距
+        slice_per_link = getattr(self.config.basic_config, "SLICE_PER_LINK", 8)
+        # 基础间距
+        base_spacing_x = 2.0
+        base_spacing_y = 1.5
+
+        # 动态调整系数：slice数量越多，间距越大
+        # 当slice_per_link=8时，系数为1.0（保持原间距）
+        # 当slice_per_link增加时，按比例增加间距
+        spacing_factor = max(1.0, slice_per_link / 8.0 * 0.8 + 0.2)  # 最小0.2倍增长
+
+        spacing_x = base_spacing_x * spacing_factor
+        spacing_y = base_spacing_y * spacing_factor
+
+        # 调试信息：显示间距调整情况
+        if slice_per_link != 8:  # 只在非默认值时显示
+            print(f"🔧 节点间距已根据SLICE_PER_LINK={slice_per_link}动态调整:")
+            print(f"   间距系数: {spacing_factor:.2f}")
+            print(f"   水平间距: {spacing_x:.2f} (基础: {base_spacing_x})")
+            print(f"   垂直间距: {spacing_y:.2f} (基础: {base_spacing_y})")
 
         for row in range(self.rows):
             for col in range(self.cols):
@@ -384,13 +403,13 @@ class LinkStateVisualizer:
                     first_channel = list(link.ring_slices.keys())[0]
                     slice_num = len(link.ring_slices[first_channel])
                 else:
-                    slice_num = getattr(self.config.basic_config, "SLICE_PER_LINK", None) or 8
+                    slice_num = getattr(self.config.basic_config, "SLICE_PER_LINK", 8)
             else:
                 # 根据链路类型确定slice数量
                 if src == dest:  # 自环链路
-                    slice_num = getattr(self.config.basic_config, "SELF_LINK_SLICES", None) or 2
+                    slice_num = getattr(self.config.basic_config, "SELF_LINK_SLICES", 2)
                 else:  # 正常链路
-                    slice_num = getattr(self.config.basic_config, "SLICE_PER_LINK", None) or 8
+                    slice_num = getattr(self.config.basic_config, "SLICE_PER_LINK", 8)
 
         src_pos = self.node_positions[src]
         dest_pos = self.node_positions[dest]
@@ -476,26 +495,44 @@ class LinkStateVisualizer:
         src_id, dest_id = self._parse_link_id(link_id)
         node_pair = (min(src_id, dest_id), max(src_id, dest_id)) if src_id is not None and dest_id is not None else None
 
+        # 根据链路方向确定应该使用哪个side
+        def get_link_direction_side(link_id, src_id, dest_id):
+            """根据链路方向确定应该使用side1还是side2"""
+            if "_TR_" in link_id or "_TD_" in link_id:
+                # TR (右) 和 TD (下): 使用side1
+                return "side1"
+            elif "_TL_" in link_id or "_TU_" in link_id:
+                # TL (左) 和 TU (上): 使用side2  
+                return "side2"
+            else:
+                # 默认情况
+                return "side1"
+        
+        target_side = get_link_direction_side(link_id, src_id, dest_id)
+        
         # 检查是否已经为这对节点创建了slice（保证对齐）
         if node_pair and node_pair in self.node_pair_slots:
-            # 使用已有的slot位置
+            # 使用已有的slot位置，但为当前链路创建独立的rectangle
             existing_slots = self.node_pair_slots[node_pair]
-            for i, (slot_positions, slot_id) in enumerate(existing_slots):
-                if i < len(existing_slots):
-                    # 为当前链路方向创建slot（关联到已有位置）
-                    # 这里不需要重新创建rectangle，只需要更新映射
-                    for rect, (rect_link_ids, _, rect_slot_id) in self.rect_info_map.items():
-                        if rect_slot_id == slot_id:
-                            # 添加当前链路到现有slot的映射中
-                            if isinstance(rect_link_ids, list):
-                                if link_id not in rect_link_ids:
-                                    rect_link_ids.append(link_id)
-                            else:
-                                rect_link_ids = [rect_link_ids, link_id]
-                            self.rect_info_map[rect] = (rect_link_ids, None, rect_slot_id)
-                            break
+            # 为TL/TU方向的链路重新排序slot位置
+            target_side_slots = [s for s in existing_slots if s[1].startswith(target_side + "_")]
+            
+            if "_TL_" in link_id or "_TU_" in link_id:
+                # TL/TU方向需要反转slice的物理位置顺序
+                target_side_slots = list(reversed(target_side_slots))
+            
+            for slot_positions, slot_id in target_side_slots:
+                slot_x, slot_y = slot_positions
+                slot_size = 0.08  # 保持与原来相同的大小
+                
+                # 创建当前链路专用的rectangle
+                slot = Rectangle((slot_x, slot_y), slot_size, slot_size, facecolor="none", edgecolor="gray", linewidth=0.8, linestyle="--", alpha=0.7)
+                self.link_ax.add_patch(slot)
+                
+                # 为当前链路创建独立的映射（不共享rect）
+                self.rect_info_map[slot] = ([link_id], None, slot_id)
         else:
-            # 首次为这对节点创建slice
+            # 首次为这对节点创建slice，创建两侧的所有slots
             slot_positions_list = []
 
             # 在链路两侧都绘制slice
@@ -589,7 +626,6 @@ class LinkStateVisualizer:
 
         self.fig.canvas.draw_idle()
         # print(f"选中节点: {node_id}")  # 删除debug输出
-
 
     def _track_packet(self, packet_id):
         """追踪包"""
@@ -688,21 +724,21 @@ class LinkStateVisualizer:
     def _connect_events(self):
         """连接各种事件处理器"""
         # 连接键盘事件
-        self.fig.canvas.mpl_connect('key_press_event', self._on_key_press)
-        
+        self.fig.canvas.mpl_connect("key_press_event", self._on_key_press)
+
         # 连接鼠标点击事件（用于节点选择等）
-        self.fig.canvas.mpl_connect('button_press_event', self._on_mouse_click)
-        
+        self.fig.canvas.mpl_connect("button_press_event", self._on_mouse_click)
+
         # 连接窗口关闭事件
-        self.fig.canvas.mpl_connect('close_event', self._on_window_close)
+        self.fig.canvas.mpl_connect("close_event", self._on_window_close)
 
     def _on_mouse_click(self, event):
         """处理鼠标点击事件"""
         if event.inaxes != self.link_ax:
             return
-        
+
         # 首先检查flit点击（slots有更高优先级）
-        if hasattr(self, 'rect_info_map'):
+        if hasattr(self, "rect_info_map"):
             for rect in self.rect_info_map:
                 contains, _ = rect.contains(event)
                 if contains:
@@ -710,14 +746,14 @@ class LinkStateVisualizer:
                     if flit:
                         self._on_flit_click(flit)
                     return
-        
+
         # 然后检查节点点击，使用距离计算
-        if hasattr(self, 'node_positions'):
+        if hasattr(self, "node_positions"):
             for node_id, pos in self.node_positions.items():
                 dx = event.xdata - pos[0]
                 dy = event.ydata - pos[1]
                 distance = (dx * dx + dy * dy) ** 0.5  # sqrt
-                
+
                 if distance <= 0.3:  # 节点点击半径
                     self._select_node(node_id)
                     break
@@ -739,14 +775,14 @@ class LinkStateVisualizer:
         """选择节点并更新右侧详细视图"""
         if node_id == self._selected_node:
             return
-        
+
         self._selected_node = node_id
-        
+
         # 更新选择框（红色虚线矩形）
         if hasattr(self, "click_box"):
             self.click_box.remove()
         self._draw_selection_box()
-        
+
         # 使用快照数据更新右侧详细视图
         if self._play_idx is not None and self._play_idx < len(self.history):
             # 回放模式：使用当前回放周期数据
@@ -756,23 +792,16 @@ class LinkStateVisualizer:
             # 实时模式：使用最新快照数据
             latest_cycle, _ = self.history[-1]
             self.node_vis.render_node_from_snapshot(node_id, latest_cycle)
-        
+
         # 更新节点标题
         self._update_node_title()
         self.fig.canvas.draw_idle()
 
     def _draw_selection_box(self):
         """绘制选中节点的红色虚线框"""
-        if hasattr(self, 'node_positions') and self._selected_node in self.node_positions:
+        if hasattr(self, "node_positions") and self._selected_node in self.node_positions:
             node_pos = self.node_positions[self._selected_node]
-            self.click_box = Rectangle(
-                (node_pos[0] - 0.3, node_pos[1] - 0.3), 
-                0.6, 0.6,  # 比节点稍大(节点是0.4)
-                facecolor="none", 
-                edgecolor="red", 
-                linewidth=1.2, 
-                linestyle="--"
-            )
+            self.click_box = Rectangle((node_pos[0] - 0.3, node_pos[1] - 0.3), 0.6, 0.6, facecolor="none", edgecolor="red", linewidth=1.2, linestyle="--")  # 比节点稍大(节点是0.4)
             self.link_ax.add_patch(self.click_box)
 
     def _on_window_close(self, event):
@@ -892,13 +921,13 @@ class LinkStateVisualizer:
                 self._parent_model.cleanup_visualization()
             else:
                 print("⚠️  模型不支持cleanup_visualization方法")
-        
+
         # 关闭matplotlib窗口
-        try:
-            import matplotlib.pyplot as plt
-            plt.close("all")
-        except Exception as e:
-            print(f"⚠️  关闭matplotlib窗口失败: {e}")
+        # try:
+        #     import matplotlib.pyplot as plt
+        #     plt.close("all")
+        # except Exception as e:
+        #     print(f"⚠️  关闭matplotlib窗口失败: {e}")
 
     def _reset_view(self):
         """重置视图"""
@@ -1097,19 +1126,20 @@ CrossRing可视化控制键:
                                     # 检查所有pipeline阶段：current_slots, input_buffer, output_buffer
                                     pipeline_stages = ["current_slots", "input_buffer", "output_buffer"]
 
-                                    for slot_channel in ["req", "rsp", "data"]:
-                                        slot_info = None
+                                    # 修复：只从当前链路通道获取对应的slot数据
+                                    slot_info = None
 
-                                        # 按优先级检查pipeline阶段
-                                        for stage in pipeline_stages:
-                                            if hasattr(slice_obj, stage):
-                                                stage_slots = getattr(slice_obj, stage)
-                                                if isinstance(stage_slots, dict) and slot_channel in stage_slots:
-                                                    slot_info = extract_flit_from_slot(stage_slots[slot_channel], slot_channel)
-                                                    if slot_info:  # 找到有效flit就停止搜索
-                                                        break
+                                    # 按优先级检查pipeline阶段
+                                    for stage in pipeline_stages:
+                                        if hasattr(slice_obj, stage):
+                                            stage_slots = getattr(slice_obj, stage)
+                                            if isinstance(stage_slots, dict) and channel in stage_slots:
+                                                slot_info = extract_flit_from_slot(stage_slots[channel], channel)
+                                                if slot_info:  # 找到有效flit就停止搜索
+                                                    break
 
-                                        slice_data["slots"][slot_channel] = slot_info
+                                    # 只保存当前通道的slot数据
+                                    slice_data["slots"][channel] = slot_info
 
                                     # 保存slice元数据
                                     slice_data["metadata"] = {"slice_idx": slice_idx, "channel": channel, "timestamp": cycle}
@@ -1276,7 +1306,7 @@ CrossRing可视化控制键:
         """更新单个slot的视觉效果"""
         # 因为我们跳过了首尾slice（range(1, slice_num-1)），需要调整索引匹配
         # slice_idx=0对应不显示，slice_idx=1对应显示的第0个slot，以此类推
-        slice_per_link = getattr(self.config.basic_config, "SLICE_PER_LINK", None) or 8
+        slice_per_link = getattr(self.config.basic_config, "SLICE_PER_LINK", 8)
         if slice_idx == 0 or slice_idx >= (slice_per_link - 1):
             return  # 跳过首尾slice
 
@@ -1293,20 +1323,39 @@ CrossRing可视化控制键:
                     link_matched = True
                     break
 
-            if link_matched and str(slice_idx) in rect_slot_idx:
-                # 更新flit信息
-                self.rect_info_map[rect] = (rect_link_ids, slot, rect_slot_idx)
+            # 检查slice索引是否匹配：rect_slot_idx格式为"side1_1", "side2_2"等
+            if link_matched and "_" in rect_slot_idx:
+                try:
+                    # 提取slot中的slice索引
+                    rect_slice_idx = int(rect_slot_idx.split("_")[1])
+                    rect_side_name = rect_slot_idx.split("_")[0]
+                    
+                    # 根据链路方向和side进行索引转换
+                    target_slice_idx = slice_idx
+                    if (("_TL_" in link_id or "_TU_" in link_id) and rect_side_name == "side2"):
+                        # TL/TU方向使用side2时，需要反转索引：1↔6, 2↔5, 3↔4
+                        slice_per_link = getattr(self.config.basic_config, "SLICE_PER_LINK", 8)
+                        max_visible_idx = slice_per_link - 2  # 6 (跳过0和7)
+                        target_slice_idx = max_visible_idx + 1 - slice_idx  # 1→6, 2→5, 3→4, 4→3, 5→2, 6→1
+                    
+                    # 匹配转换后的索引
+                    if rect_slice_idx == target_slice_idx:
+                        # Debug: 显示最终匹配成功的情况
+                        # print(f"✅ 响应flit最终匹配: link_id={link_id}, slice_idx={slice_idx}, rect_slot_idx={rect_slot_idx}")
 
-                # 获取flit样式（颜色、透明度、边框等）
-                face_color, alpha, line_width, edge_color = self._get_flit_style(slot, use_highlight=self.use_highlight, expected_packet_id=self.tracked_pid, highlight_color="red")
+                        # 更新flit信息
+                        self.rect_info_map[rect] = (rect_link_ids, slot, rect_slot_idx)
 
-                # 应用样式到rectangle
-                rect.set_facecolor(face_color)
-                rect.set_alpha(alpha)
-                rect.set_edgecolor(edge_color)
-                rect.set_linewidth(max(line_width, 0.8))  # 确保最小线宽
-                rect.set_linestyle("-")  # 有flit时使用实线
-                break
+                        # 获取flit样式并应用
+                        face_color, alpha, line_width, edge_color = self._get_flit_style(slot, use_highlight=self.use_highlight, expected_packet_id=self.tracked_pid, highlight_color="red")
+                        rect.set_facecolor(face_color)
+                        rect.set_alpha(alpha)
+                        rect.set_edgecolor(edge_color)
+                        rect.set_linewidth(max(line_width, 0.8))
+                        rect.set_linestyle("-")
+                        break  # 找到匹配的rect后立即退出循环
+                except (ValueError, IndexError):
+                    continue
 
     def _get_flit_style(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None):
         """
@@ -1366,8 +1415,3 @@ CrossRing可视化控制键:
     def show(self):
         """显示可视化界面"""
         plt.show()
-
-    def save_figure(self, filename):
-        """保存图片"""
-        self.fig.savefig(filename, dpi=300, bbox_inches="tight")
-        pass  # print(f"图片已保存到: {filename}")
