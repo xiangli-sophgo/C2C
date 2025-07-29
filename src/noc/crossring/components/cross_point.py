@@ -163,12 +163,15 @@ class CrossPoint:
         else:  # VERTICAL
             self.managed_directions = ["TU", "TD"]  # 垂直CrossPoint管理上下方向
 
-        # Slice连接管理 - 每个方向都有arrival和departure两个slice
+        # Slice连接管理 - 每个方向每个通道都有arrival和departure两个slice
         # arrival slice: 到达本节点的slice，用于下环判断
         # departure slice: 离开本节点的slice，用于上环操作
-        self.slice_connections: Dict[str, Dict[str, Optional[RingSlice]]] = {}
+        # 结构: slice_connections[direction][channel][slice_type] = RingSlice
+        self.slice_connections: Dict[str, Dict[str, Dict[str, Optional[RingSlice]]]] = {}
         for direction_name in self.managed_directions:
-            self.slice_connections[direction_name] = {"arrival": None, "departure": None}  # 从环路到达的slice（下环判断）  # 离开到环路的slice（上环操作）
+            self.slice_connections[direction_name] = {}
+            for channel in ["req", "rsp", "data"]:
+                self.slice_connections[direction_name][channel] = {"arrival": None, "departure": None}
 
         # E-Tag机制核心状态 - 分层entry管理
         self.etag_entry_managers: Dict[str, EntryAllocationTracker] = {}
@@ -267,7 +270,7 @@ class CrossPoint:
             # 创建entry管理器
             self.etag_entry_managers[sub_direction] = EntryAllocationTracker(total_depth=total_depth, t2_max_entries=t2_max, t1_max_entries=t1_max, has_dedicated_entries=has_dedicated)
 
-    def connect_slice(self, direction: str, slice_type: str, ring_slice: RingSlice) -> None:
+    def connect_slice(self, direction: str, slice_type: str, ring_slice: RingSlice, channel: str) -> None:
         """
         连接Ring Slice到CrossPoint
 
@@ -275,10 +278,12 @@ class CrossPoint:
             direction: 方向 ("TL", "TR", "TU", "TD")
             slice_type: slice类型 ("arrival"到达, "departure"离开)
             ring_slice: Ring Slice实例
+            channel: 通道类型 ("req", "rsp", "data")
         """
         if direction in self.slice_connections:
-            if slice_type in self.slice_connections[direction]:
-                self.slice_connections[direction][slice_type] = ring_slice
+            if channel in self.slice_connections[direction]:
+                if slice_type in self.slice_connections[direction][channel]:
+                    self.slice_connections[direction][channel][slice_type] = ring_slice
 
     def step_compute_phase(self, cycle: int, node_inject_fifos: Dict[str, Dict[str, Any]], node_eject_fifos: Dict[str, Dict[str, Any]]) -> None:
         """
@@ -302,12 +307,11 @@ class CrossPoint:
         # ========== 第一部分：下环分析和计划 ==========
         # 遍历所有管理方向的arrival slice，分析下环可能性
         for direction in self.managed_directions:
-            arrival_slice = self.slice_connections[direction]["arrival"]
-            if not arrival_slice:
-                continue
-
             # 检查每个通道的当前slot
             for channel in ["req", "rsp", "data"]:
+                arrival_slice = self.slice_connections[direction][channel]["arrival"]
+                if not arrival_slice:
+                    continue
                 current_slot = arrival_slice.peek_current_slot(channel)
                 if not current_slot or not current_slot.is_occupied:
                     continue
@@ -371,11 +375,10 @@ class CrossPoint:
         # ========== 第二部分：上环分析和计划 ==========
         # 按照自然优先级顺序分析上环可能性：ring_bridge输出 > 普通FIFO
         for direction in self.managed_directions:
-            departure_slice = self.slice_connections[direction]["departure"]
-            if not departure_slice:
-                continue
-
             for channel in ["req", "rsp", "data"]:
+                departure_slice = self.slice_connections[direction][channel]["departure"]
+                if not departure_slice:
+                    continue
                 # 1. 优先检查ring_bridge输出（维度转换后的flit重新注入）
                 if self.parent_node and hasattr(self.parent_node, "ring_bridge"):
                     ring_bridge_flit = self.parent_node.ring_bridge.peek_output_flit(direction, channel)
@@ -968,7 +971,7 @@ class CrossPoint:
             return
 
         # 触发I-Tag预约
-        departure_slice = self.slice_connections[direction]["departure"]
+        departure_slice = self.slice_connections[direction][channel]["departure"]
         if departure_slice:
             # 查找可预约的slot（简化实现）
             success = self._trigger_itag_reservation_internal(channel, ring_type, departure_slice, cycle)
@@ -1139,7 +1142,7 @@ class CrossPoint:
         Returns:
             是否注入成功
         """
-        departure_slice = self.slice_connections[direction]["departure"]
+        departure_slice = self.slice_connections[direction][channel]["departure"]
         if not departure_slice:
             return False
 

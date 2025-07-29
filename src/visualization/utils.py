@@ -79,8 +79,8 @@ class GraphicsUtils:
     @staticmethod
     def set_chinese_font():
         """设置中文字体"""
-        plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS']
-        plt.rcParams['axes.unicode_minus'] = False
+        from src.utils.font_config import configure_matplotlib_fonts
+        configure_matplotlib_fonts()
     
     @staticmethod
     def apply_style(style_name: str = 'seaborn'):

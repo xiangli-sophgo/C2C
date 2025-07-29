@@ -13,44 +13,14 @@ import warnings
 
 def setup_chinese_fonts():
     """配置中文字体显示"""
-
+    from src.utils.font_config import configure_matplotlib_fonts
+    
     # 抑制字体相关警告
     warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
-
-    # 尝试多种中文字体方案
-    font_candidates = [
-        "SimHei",  # Windows 黑体
-        "Microsoft YaHei",  # Windows 微软雅黑
-        "PingFang SC",  # macOS 苹方
-        "Heiti SC",  # macOS 黑体
-        "WenQuanYi Zen Hei",  # Linux 文泉驿
-        "Noto Sans CJK SC",  # Google Noto
-        "Arial Unicode MS",  # 通用Unicode字体
-        "DejaVu Sans",  # 后备字体
-    ]
-
-    # 获取系统可用字体
-    available_fonts = [f.name for f in fm.fontManager.ttflist]
-
-    # 选择第一个可用的中文字体
-    selected_font = None
-    for font in font_candidates:
-        if font in available_fonts:
-            selected_font = font
-            break
-
-    # 如果没有找到中文字体，使用备用方案
-    if not selected_font:
-        selected_font = "DejaVu Sans"
-        # print("⚠️  未找到中文字体，使用英文字体显示")
-    else:
-        # print(f"✓ 使用字体: {selected_font}")
-        pass
-    # 配置matplotlib
-    plt.rcParams["font.sans-serif"] = [selected_font] + font_candidates
-    plt.rcParams["axes.unicode_minus"] = False
-    plt.rcParams["font.size"] = 10
-
+    
+    # 使用跨平台字体配置
+    configure_matplotlib_fonts()
+    
     # 验证字体配置
     try:
         # 创建一个测试图表来验证字体

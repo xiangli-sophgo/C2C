@@ -11,9 +11,11 @@ import numpy as np
 from typing import Dict, List, Tuple, Optional, Any
 import math
 
-# 设置中文字体
-plt.rcParams["font.sans-serif"] = ["SimHei", "DejaVu Sans"]
-plt.rcParams["axes.unicode_minus"] = False
+# 导入跨平台字体配置
+from src.utils.font_config import configure_matplotlib_fonts
+
+# 配置matplotlib字体
+configure_matplotlib_fonts()
 
 
 class TopologyVisualizer:

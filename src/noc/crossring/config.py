@@ -37,11 +37,7 @@ class BasicConfiguration:
     ROUTING_STRATEGY: str = "XY"  # 默认使用XY路由
 
     # Link Slice配置 - CrossRing非环绕设计专用
-    NORMAL_LINK_SLICES: int = 8  # 正常节点间连接的slice数量
     SELF_LINK_SLICES: int = 2  # 自连接（边界节点到自己）的slice数量
-
-    # 仲裁配置（用于支持不同路由策略）
-    ARBITRATION_TIMEOUT: int = 10  # 仲裁超时周期
 
 
 @dataclass
@@ -325,7 +321,9 @@ class CrossRingConfig(BaseNoCConfig):
                 errors.append(f"SN Tracker OSTD必须为正数 (SN_DDR_R_TRACKER_OSTD={tracker.SN_DDR_R_TRACKER_OSTD}, SN_L2M_R_TRACKER_OSTD={tracker.SN_L2M_R_TRACKER_OSTD})")
             # 缓冲区大小一致性验证
             if hasattr(self, "RN_RDB_SIZE") and self.RN_RDB_SIZE != tracker.RN_R_TRACKER_OSTD * self.basic_config.BURST:
-                errors.append(f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (RN_RDB_SIZE={self.RN_RDB_SIZE}, RN_R_TRACKER_OSTD={tracker.RN_R_TRACKER_OSTD}, BURST={self.basic_config.BURST})")
+                errors.append(
+                    f"RN_RDB_SIZE必须等于RN_R_TRACKER_OSTD × BURST (RN_RDB_SIZE={self.RN_RDB_SIZE}, RN_R_TRACKER_OSTD={tracker.RN_R_TRACKER_OSTD}, BURST={self.basic_config.BURST})"
+                )
         elif isinstance(tracker, dict):
             rn_r_ostd = tracker.get("RN_R_TRACKER_OSTD", 64)
             rn_w_ostd = tracker.get("RN_W_TRACKER_OSTD", 32)
@@ -842,13 +840,13 @@ class CrossRingConfig(BaseNoCConfig):
     def update_channel_names(self, ch_name_list: List[str]) -> None:
         """
         更新通道名称列表（CH_NAME_LIST）。
-        
+
         这个方法允许在traffic生成时动态修改CH_NAME_LIST，
         使得节点挂载的IP能够使用自定义的通道名称。
-        
+
         Args:
             ch_name_list: 新的通道名称列表，例如 ["gdma_0", "gdma_1", "ddr_0", "ddr_1"]
-        
+
         Note:
             - 这是所有节点的通道名称集合，不需要分不同的节点
             - 更新后的CH_NAME_LIST会影响IP接口创建和可视化显示

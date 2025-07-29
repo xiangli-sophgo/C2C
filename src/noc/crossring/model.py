@@ -522,7 +522,7 @@ class CrossRingModel(BaseNoCModel):
                     # 连接departure slice（出链路的第一个slice）
                     if out_link and out_link.ring_slices[channel]:
                         departure_slice = out_link.ring_slices[channel][0]
-                        crosspoint.connect_slice(direction_str, "departure", departure_slice)
+                        crosspoint.connect_slice(direction_str, "departure", departure_slice, channel)
 
                     # 连接arrival slice - 需要根据CrossPoint连接规则
                     arrival_slice = None
@@ -596,7 +596,7 @@ class CrossRingModel(BaseNoCModel):
                                 arrival_slice = self_tu_link.ring_slices[channel][1]  # 自环的第1个slice
 
                     if arrival_slice:
-                        crosspoint.connect_slice(direction_str, "arrival", arrival_slice)
+                        crosspoint.connect_slice(direction_str, "arrival", arrival_slice, channel)
 
     def _get_node_links(self, node_id: int) -> Dict[str, Any]:
         """获取节点的所有链接"""
