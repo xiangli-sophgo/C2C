@@ -16,23 +16,14 @@ from src.c2c.topology.torus import TorusTopologyLogic, TorusRoutingLogic
 import numpy as np
 import seaborn as sns
 
+# 导入跨平台字体配置
+from src.utils.font_config import configure_matplotlib_fonts
+
+# 配置跨平台字体支持
+configure_matplotlib_fonts()
+
 # 设置seaborn样式
 sns.set_style("whitegrid")
-
-# 设置中文字体
-# 确保在设置样式之后再指定字体，以避免被覆盖
-# 提供一个更广泛的字体列表，以适应不同系统环境
-plt.rcParams["font.sans-serif"] = [
-    "SimHei",  # 黑体
-    "Microsoft YaHei",  # 微软雅黑
-    "WenQuanYi Zen Hei",  # 文泉驿正黑
-    "Noto Sans CJK SC",  # 思源黑体
-    "PingFang SC",  # 苹方
-    "Heiti SC",  # 黑体-简
-    "Arial Unicode MS",  # 一种包含多种字符的字体
-    "DejaVu Sans",
-]
-plt.rcParams["axes.unicode_minus"] = False  # 正确显示负号
 
 
 class ScenarioAnalyzer:

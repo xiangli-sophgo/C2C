@@ -20,11 +20,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 import copy
 from src.noc.crossring.config import CrossRingConfig
+from src.utils.font_config import configure_matplotlib_fonts
 
-# 字体支持 - 中文用SimHei，英文用Times
-plt.rcParams["font.sans-serif"] = ["SimHei", "Times New Roman", "Arial Unicode MS"]
-plt.rcParams["font.serif"] = ["Times New Roman", "Times", "serif"]
-plt.rcParams["axes.unicode_minus"] = False
+# 配置跨平台字体支持
+configure_matplotlib_fonts(verbose=False)
 
 
 class CrossRingNodeVisualizer:
@@ -209,7 +208,7 @@ class CrossRingNodeVisualizer:
 
         cross_point_horizontal_config = dict(
             title="CP",
-            lanes=["TR", "TL"],
+            lanes=["TL", "TR"],  # 修正：与实际slice_connections的键值顺序一致
             depths=[2, 2],
             orientations=["horizontal", "horizontal"],
             h_pos=["bottom", "bottom"],
@@ -220,7 +219,7 @@ class CrossRingNodeVisualizer:
 
         cross_point_vertical_config = dict(
             title="CP",
-            lanes=["TD", "TU"],
+            lanes=["TU", "TD"],  # 修正：与实际slice_connections的键值顺序一致
             depths=[2, 2],
             orientations=["vertical", "vertical"],
             h_pos=["bottom", "bottom"],
@@ -813,61 +812,63 @@ class CrossRingNodeVisualizer:
         self.fig.canvas.draw_idle()
 
     def _format_flit_info(self, flit):
-        """格式化flit信息显示"""
+        """Format flit information display, consistent with LinkStateVisualizer"""
         if not flit:
-            return "无flit信息"
-
-        # 兼容字典和对象两种格式
-        if isinstance(flit, dict):
-            info_lines = []
-            # 按重要性排序显示关键信息
-            key_order = ["packet_id", "flit_id", "ETag_priority", "itag_h", "itag_v", "channel", "direction"]
-
-            for key in key_order:
-                if key in flit and flit[key] is not None:
-                    value = flit[key]
-                    # 格式化显示
-                    if key == "packet_id":
-                        info_lines.append(f"Packet ID: {value}")
-                    elif key == "flit_id":
-                        info_lines.append(f"Flit ID: {value}")
-                    elif key == "ETag_priority":
-                        info_lines.append(f"E-Tag: {value}")
-                    elif key == "itag_h":
-                        info_lines.append(f"I-Tag H: {value}")
-                    elif key == "itag_v":
-                        info_lines.append(f"I-Tag V: {value}")
-                    # elif key == "channel":
-                    #     info_lines.append(f"通道: {value.upper()}")
-                    # elif key == "direction":
-                    #     info_lines.append(f"方向: {value}")
-
-            # 添加其他未列出的属性
-            for key, value in flit.items():
-                if key not in key_order and value is not None:
-                    info_lines.append(f"{key}: {value}")
-
-            return "\n".join(info_lines) if info_lines else "无有效信息"
-        else:
-            # 对象格式的flit，使用属性访问
-            info_lines = []
-            attrs = ["packet_id", "flit_id", "ETag_priority", "itag_h", "itag_v"]
-
-            for attr in attrs:
-                value = getattr(flit, attr, None)
-                if value is not None:
-                    if attr == "packet_id":
-                        info_lines.append(f"包ID: {value}")
-                    elif attr == "flit_id":
-                        info_lines.append(f"FlitID: {value}")
-                    elif attr == "ETag_priority":
-                        info_lines.append(f"E-Tag: {value}")
-                    elif attr == "itag_h" and value:
-                        info_lines.append(f"I-Tag水平: {value}")
-                    elif attr == "itag_v" and value:
-                        info_lines.append(f"I-Tag垂直: {value}")
-
-            return "\n".join(info_lines) if info_lines else f"Flit对象: {str(flit)}"
+            return "No flit info"
+        
+        info_lines = []
+        
+        # Basic information
+        packet_id = getattr(flit, "packet_id", None) if hasattr(flit, "packet_id") else flit.get("packet_id", None) if isinstance(flit, dict) else None
+        flit_id = getattr(flit, "flit_id", None) if hasattr(flit, "flit_id") else flit.get("flit_id", None) if isinstance(flit, dict) else None
+        
+        if packet_id is not None:
+            info_lines.append(f"Packet ID: {packet_id}")
+        if flit_id is not None:
+            info_lines.append(f"Flit ID: {flit_id}")
+        
+        # Add flit type information (request/response/data)
+        flit_type = getattr(flit, "flit_type", None) if hasattr(flit, "flit_type") else flit.get("flit_type", None) if isinstance(flit, dict) else None
+        channel = getattr(flit, "channel", None) if hasattr(flit, "channel") else flit.get("channel", None) if isinstance(flit, dict) else None
+        req_type = getattr(flit, "req_type", None) if hasattr(flit, "req_type") else flit.get("req_type", None) if isinstance(flit, dict) else None
+        
+        if channel:
+            channel_name = {"req": "Request", "rsp": "Response", "data": "Data"}.get(channel, channel)
+            if flit_type:
+                info_lines.append(f"Type: {channel_name}({flit_type})")
+            else:
+                info_lines.append(f"Type: {channel_name}")
+        
+        if req_type:
+            req_name = {"read": "Read", "write": "Write"}.get(req_type, req_type)
+            info_lines.append(f"Request: {req_name}")
+        
+        # Tag information
+        etag = getattr(flit, "ETag_priority", None) if hasattr(flit, "ETag_priority") else flit.get("ETag_priority", None) if isinstance(flit, dict) else None
+        if etag:
+            info_lines.append(f"E-Tag: {etag}")
+        
+        itag_h = getattr(flit, "itag_h", False) if hasattr(flit, "itag_h") else flit.get("itag_h", False) if isinstance(flit, dict) else False
+        itag_v = getattr(flit, "itag_v", False) if hasattr(flit, "itag_v") else flit.get("itag_v", False) if isinstance(flit, dict) else False
+        
+        if itag_h:
+            info_lines.append("I-Tag: Horizontal")
+        elif itag_v:
+            info_lines.append("I-Tag: Vertical")
+        
+        # Position information
+        current_pos = getattr(flit, "current_node_id", None) if hasattr(flit, "current_node_id") else flit.get("current_node_id", None) if isinstance(flit, dict) else None
+        if current_pos is not None:
+            info_lines.append(f"Position: {current_pos}")
+        
+        # Source-destination information
+        src = getattr(flit, "source_ip_type", None) if hasattr(flit, "source_ip_type") else flit.get("source_ip_type", None) if isinstance(flit, dict) else None
+        dst = getattr(flit, "dest_ip_type", None) if hasattr(flit, "dest_ip_type") else flit.get("dest_ip_type", None) if isinstance(flit, dict) else None
+        
+        if src and dst:
+            info_lines.append(f"Path: {src}→{dst}")
+        
+        return "\n".join(info_lines) if info_lines else "No valid info"
 
     def _extract_flit_data(self, flit, channel, direction):
         """提取flit数据的通用方法"""
@@ -1000,15 +1001,58 @@ class CrossRingNodeVisualizer:
                                 cp = getattr(node, attr_name)
                                 cp_data = {}
                                 if hasattr(cp, "slice_connections"):
-                                    for direction, slices in cp.slice_connections.items():
-                                        # CrossPoint数据结构: [arrival_slots, departure_slots]
-                                        arrival_slots = slices.get("arrival", {}).get("current_slots", {})
-                                        departure_slots = slices.get("departure", {}).get("current_slots", {})
-                                        # 使用当前通道的数据，默认为data
-                                        current_channel = getattr(self.parent, "current_channel", "data") if self.parent else "data"
-                                        cp_data[direction] = [arrival_slots.get(current_channel, []), departure_slots.get(current_channel, [])]
+                                    # 使用当前通道的数据，默认为data
+                                    current_channel = getattr(self.parent, "current_channel", "data") if self.parent else "data"
+                                    
+                                    print(f"🔍 调试: 节点{node_id} {cp_name} 有{len(cp.slice_connections)}个方向: {list(cp.slice_connections.keys())}")
+                                    
+                                    for direction, channels in cp.slice_connections.items():
+                                        print(f"🔍 调试: 节点{node_id} {cp_name} {direction}方向 channels: {list(channels.keys())}")
+                                        
+                                        # CrossPoint数据结构: slice_connections[direction][channel] = {"arrival": RingSlice, "departure": RingSlice}
+                                        slices = channels.get(current_channel, {})
+                                        arrival_slice = slices.get("arrival")
+                                        departure_slice = slices.get("departure")
+                                        
+                                        print(f"🔍 调试: 节点{node_id} {cp_name} {direction}方向 {current_channel}通道 arrival_slice={arrival_slice is not None} departure_slice={departure_slice is not None}")
+                                        
+                                        # 调试输出
+                                        if arrival_slice and hasattr(arrival_slice, "current_slots"):
+                                            arrival_slot = arrival_slice.current_slots.get(current_channel)
+                                            print(f"🔍 调试: 节点{node_id} {cp_name} {direction}方向 arrival.current_slots[{current_channel}]={arrival_slot is not None}")
+                                            if arrival_slot:
+                                                arrival_flit = getattr(arrival_slot, 'flit', None)
+                                                slot_valid = getattr(arrival_slot, 'valid', False)
+                                                print(f"🔍 调试: 节点{node_id} {cp_name} {direction}方向 arrival slot.valid={slot_valid} slot.flit={arrival_flit is not None}")
+                                                if arrival_flit:
+                                                    print(f"🔍 调试: 节点{node_id} {cp_name} {direction}方向 arrival发现flit: pid={getattr(arrival_flit, 'packet_id', 'N/A')}")
+                                        
+                                        if departure_slice and hasattr(departure_slice, "current_slots"):
+                                            departure_slot = departure_slice.current_slots.get(current_channel)
+                                            print(f"🔍 调试: 节点{node_id} {cp_name} {direction}方向 departure.current_slots[{current_channel}]={departure_slot is not None}")
+                                            if departure_slot:
+                                                departure_flit = getattr(departure_slot, 'flit', None)
+                                                slot_valid = getattr(departure_slot, 'valid', False)
+                                                print(f"🔍 调试: 节点{node_id} {cp_name} {direction}方向 departure slot.valid={slot_valid} slot.flit={departure_flit is not None}")
+                                                if departure_flit:
+                                                    print(f"🔍 调试: 节点{node_id} {cp_name} {direction}方向 departure发现flit: pid={getattr(departure_flit, 'packet_id', 'N/A')}")
+                                        
+                                        # 从RingSlice对象的current_slots中提取slot，再从slot中提取flit数据
+                                        arrival_slot = arrival_slice.current_slots.get(current_channel) if (arrival_slice and hasattr(arrival_slice, "current_slots")) else None
+                                        departure_slot = departure_slice.current_slots.get(current_channel) if (departure_slice and hasattr(departure_slice, "current_slots")) else None
+                                        
+                                        # 从slot中提取实际的flit数据
+                                        arrival_flit = getattr(arrival_slot, 'flit', None) if (arrival_slot and getattr(arrival_slot, 'valid', False)) else None
+                                        departure_flit = getattr(departure_slot, 'flit', None) if (departure_slot and getattr(departure_slot, 'valid', False)) else None
+                                        
+                                        # 转换为列表格式（单个flit或None转为列表）
+                                        arrival_slots = [arrival_flit] if arrival_flit else []
+                                        departure_slots = [departure_flit] if departure_flit else []
+                                        
+                                        cp_data[direction] = [arrival_slots, departure_slots]
                                 node_data[cp_name] = cp_data
-                    except:
+                    except Exception as e:
+                        print(f"⚠️ CrossPoint数据保存异常: {e}")
                         node_data["crosspoint_h"] = {}
                         node_data["crosspoint_v"] = {}
 
@@ -1126,9 +1170,9 @@ class CrossRingNodeVisualizer:
         elif component_type == "RB":
             directions = ["TR_in", "TL_in", "TU_in", "TD_in", "TR_out", "TL_out", "TU_out", "TD_out", "EQ_out"]
         elif component_type == "CP_H":
-            directions = ["TR", "TL"]  # 水平CrossPoint处理TR/TL方向
+            directions = ["TL", "TR"]  # 水平CrossPoint处理TL/TR方向，与实际数据结构一致
         elif component_type == "CP_V":
-            directions = ["TU", "TD"]  # 垂直CrossPoint处理TU/TD方向
+            directions = ["TU", "TD"]  # 垂直CrossPoint处理TU/TD方向，与实际数据结构一致
         else:
             return
 
@@ -1159,23 +1203,18 @@ class CrossRingNodeVisualizer:
 
         # IP通道数据使用IP接口名称作为键，需要找到正确的键
         # 通常格式为 "gdma_0", "gdma_1" 等，对应节点0, 1等
-        ip_interface_key = None
-        for key in channel_data.keys():
+        for ip_interface_key, flit_list in channel_data.items():
             # 尝试从IP接口名称提取节点ID
-            if f"_{node_id}" in key or key.endswith(f"_{node_id}"):
-                ip_interface_key = key
-                break
-        
-        if not ip_interface_key:
-            return
-            
-        flit_list = channel_data[ip_interface_key]
-        if channel_type == "IQ_Ch":
-            # IQ通道使用"Ch"作为lane名称
-            self._render_fifo_patches(self.iq_patches, self.iq_texts, "Ch", flit_list)
-        elif channel_type == "EQ_Ch":
-            # EQ通道使用"Ch"作为lane名称
-            self._render_fifo_patches(self.eq_patches, self.eq_texts, "Ch", flit_list)
+            if f"_{node_id}" in ip_interface_key or ip_interface_key.endswith(f"_{node_id}"):
+                # 提取IP类型名称（去掉节点ID后缀）
+                ip_type = ip_interface_key.rsplit('_', 1)[0] if '_' in ip_interface_key else ip_interface_key
+                
+                if channel_type == "IQ_Ch":
+                    # IQ通道使用IP类型名称作为lane名称
+                    self._render_fifo_patches(self.iq_patches, self.iq_texts, ip_type, flit_list)
+                elif channel_type == "EQ_Ch":
+                    # EQ通道使用IP类型名称作为lane名称
+                    self._render_fifo_patches(self.eq_patches, self.eq_texts, ip_type, flit_list)
 
     def _render_fifo_patches(self, patch_dict, text_dict, lane_name, flit_list):
         """渲染FIFO类型patch的flit数据"""
@@ -1236,6 +1275,7 @@ class CrossRingNodeVisualizer:
     def _render_crosspoint_patches(self, patch_dict, text_dict, direction, slice_data):
         """渲染CrossPoint类型patch的slice数据"""
         if direction not in patch_dict or direction not in text_dict:
+            print(f"🚫 调试: CrossPoint {direction}方向 patches或texts未找到")
             return
 
         patches = patch_dict[direction]
@@ -1243,11 +1283,17 @@ class CrossRingNodeVisualizer:
 
         # CrossPoint数据结构: [arrival_slots, departure_slots]
         if not isinstance(slice_data, list) or len(slice_data) < 2:
+            print(f"🚫 调试: CrossPoint {direction}方向 slice_data格式错误: {slice_data}")
             return
 
         arrival_slots = slice_data[0] if slice_data[0] else []
         departure_slots = slice_data[1] if slice_data[1] else []
         all_slots = arrival_slots + departure_slots
+        
+        print(f"🎯 调试: CrossPoint {direction}方向 arrival_slots={len(arrival_slots)} departure_slots={len(departure_slots)} all_slots={len(all_slots)}")
+        for i, flit in enumerate(all_slots):
+            if flit:
+                print(f"   - slot[{i}]: pid={getattr(flit, 'packet_id', 'N/A')} fid={getattr(flit, 'flit_id', 'N/A')}")
 
         # 清空所有patch
         for p in patches:

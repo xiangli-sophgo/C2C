@@ -25,14 +25,13 @@ warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
 
 if sys.platform == "darwin":  # macOS 的系统标识是 'darwin'
     matplotlib.use("macosx")  # 仅在 macOS 上使用该后端
-# 设置中英文字体
-plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]  # 中文字体优先使用微软雅黑
-plt.rcParams["font.serif"] = ["Times New Roman", "Times", "DejaVu Serif"]  # 英文serif字体使用Times
-plt.rcParams["axes.unicode_minus"] = False  # 解决负号显示问题
-plt.rcParams["font.size"] = 10  # 默认字体大小
-plt.rcParams["axes.titlesize"] = 12  # 标题字体大小
-plt.rcParams["axes.labelsize"] = 10  # 轴标签字体大小
-plt.rcParams["legend.fontsize"] = 9  # 图例字体大小
+
+# 导入跨平台字体配置
+from src.utils.font_config import configure_matplotlib_fonts
+
+# 配置matplotlib字体
+configure_matplotlib_fonts()
+
 import networkx as nx
 import logging
 import time
@@ -102,17 +101,7 @@ class ResultAnalyzer:
     """通用NoC结果分析器"""
 
     def __init__(self):
-        plt.rcParams["font.sans-serif"] = [
-            "SimHei",  # 黑体
-            "Microsoft YaHei",  # 微软雅黑
-            "WenQuanYi Zen Hei",  # 文泉驿正黑
-            "Noto Sans CJK SC",  # 思源黑体
-            "PingFang SC",  # 苹方
-            "Heiti SC",  # 黑体-简
-            "Arial Unicode MS",  # 一种包含多种字符的字体
-            "DejaVu Sans",
-        ]
-        plt.rcParams["axes.unicode_minus"] = False
+        # 字体配置已在模块级别通过configure_matplotlib_fonts()完成
 
         # 用于存储带宽时间序列数据（仿照旧版本）
         self.bandwidth_time_series = defaultdict(lambda: {"time": [], "start_times": [], "bytes": []})

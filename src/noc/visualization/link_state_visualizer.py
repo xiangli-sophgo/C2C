@@ -27,13 +27,12 @@ from src.noc.base.config import BaseNoCConfig
 from src.noc.crossring.config import CrossRingConfig
 from src.noc.visualization.crossring_node_visualizer import CrossRingNodeVisualizer
 from src.noc.base.model import BaseNoCModel
+from src.utils.font_config import configure_matplotlib_fonts
 
 # 移除了logging依赖
 
-# 字体支持 - 中文用SimHei，英文用Times
-plt.rcParams["font.sans-serif"] = ["SimHei", "Times New Roman", "Arial Unicode MS"]
-plt.rcParams["font.serif"] = ["Times New Roman", "Times", "serif"]
-plt.rcParams["axes.unicode_minus"] = False
+# 配置跨平台字体支持
+configure_matplotlib_fonts(verbose=False)
 
 
 # ---------- lightweight flit proxy for snapshot rendering ----------
@@ -385,13 +384,13 @@ class LinkStateVisualizer:
                     first_channel = list(link.ring_slices.keys())[0]
                     slice_num = len(link.ring_slices[first_channel])
                 else:
-                    slice_num = getattr(self.config, "SLICE_PER_LINK", 8)
+                    slice_num = getattr(self.config.basic_config, "SLICE_PER_LINK", None) or 8
             else:
                 # 根据链路类型确定slice数量
                 if src == dest:  # 自环链路
-                    slice_num = getattr(self.config, "SELF_LINK_SLICES", 2)
+                    slice_num = getattr(self.config.basic_config, "SELF_LINK_SLICES", None) or 2
                 else:  # 正常链路
-                    slice_num = getattr(self.config, "NORMAL_LINK_SLICES", 8)
+                    slice_num = getattr(self.config.basic_config, "SLICE_PER_LINK", None) or 8
 
         src_pos = self.node_positions[src]
         dest_pos = self.node_positions[dest]
@@ -596,6 +595,13 @@ class LinkStateVisualizer:
         pid = getattr(flit, "packet_id", None)
         if pid is not None:
             self._track_packet(pid)
+            
+        # 显示flit详细信息（添加这个功能）
+        if hasattr(self, 'node_vis') and self.node_vis:
+            # 格式化flit信息并显示在右下角
+            flit_info = self._format_flit_info(flit)
+            self.node_vis.info_text.set_text(flit_info)
+            self.node_vis.current_highlight_flit = flit
 
     def _track_packet(self, packet_id):
         """追踪包"""
@@ -604,6 +610,97 @@ class LinkStateVisualizer:
 
         # 同步CrossRingNodeVisualizer的高亮状态
         self.node_vis.sync_highlight(self.use_highlight, self.tracked_pid)
+        
+        # 立即重新应用所有flit的样式
+        self._reapply_all_flit_styles()
+        
+        # 触发重绘
+        self.fig.canvas.draw_idle()
+        
+    def _reapply_all_flit_styles(self):
+        """重新应用所有flit的样式，用于高亮状态改变后"""
+        for rect, (rect_link_ids, flit, rect_slot_idx) in self.rect_info_map.items():
+            if flit:
+                # 重新计算flit样式
+                face_color, alpha, line_width, edge_color = self._get_flit_style(
+                    flit, 
+                    use_highlight=self.use_highlight, 
+                    expected_packet_id=self.tracked_pid, 
+                    highlight_color="red"
+                )
+                
+                # 应用样式
+                rect.set_facecolor(face_color)
+                rect.set_alpha(alpha)
+                rect.set_edgecolor(edge_color)
+                rect.set_linewidth(max(line_width, 0.8))
+                rect.set_linestyle("-")
+            else:
+                # 空slot恢复默认样式
+                rect.set_facecolor("none")
+                rect.set_edgecolor("gray")
+                rect.set_linewidth(0.8)
+                rect.set_linestyle("--")
+                rect.set_alpha(0.7)
+
+    def _format_flit_info(self, flit):
+        """Format flit information display, consistent with CrossRingNodeVisualizer"""
+        if not flit:
+            return "No flit info"
+        
+        info_lines = []
+        
+        # Basic information
+        packet_id = getattr(flit, "packet_id", None)
+        flit_id = getattr(flit, "flit_id", None)
+        
+        if packet_id is not None:
+            info_lines.append(f"Packet ID: {packet_id}")
+        if flit_id is not None:
+            info_lines.append(f"Flit ID: {flit_id}")
+        
+        # Add flit type information (request/response/data)
+        flit_type = getattr(flit, "flit_type", None)
+        channel = getattr(flit, "channel", None)
+        req_type = getattr(flit, "req_type", None)
+        
+        if channel:
+            channel_name = {"req": "Request", "rsp": "Response", "data": "Data"}.get(channel, channel)
+            if flit_type:
+                info_lines.append(f"Type: {channel_name}({flit_type})")
+            else:
+                info_lines.append(f"Type: {channel_name}")
+        
+        if req_type:
+            req_name = {"read": "Read", "write": "Write"}.get(req_type, req_type)
+            info_lines.append(f"Request: {req_name}")
+        
+        # Tag information
+        etag = getattr(flit, "ETag_priority", None)
+        if etag:
+            info_lines.append(f"E-Tag: {etag}")
+        
+        itag_h = getattr(flit, "itag_h", False)
+        itag_v = getattr(flit, "itag_v", False)
+        
+        if itag_h:
+            info_lines.append("I-Tag: Horizontal")
+        elif itag_v:
+            info_lines.append("I-Tag: Vertical")
+        
+        # Position information
+        current_pos = getattr(flit, "current_node_id", None)
+        if current_pos is not None:
+            info_lines.append(f"Position: {current_pos}")
+        
+        # Source-destination information
+        src = getattr(flit, "source_ip_type", None)
+        dst = getattr(flit, "dest_ip_type", None)
+        
+        if src and dst:
+            info_lines.append(f"Path: {src}→{dst}")
+        
+        return "\n".join(info_lines) if info_lines else "No valid info"
 
     def _on_key_press(self, event):
         """处理键盘事件"""
@@ -801,10 +898,15 @@ CrossRing可视化控制键:
 
         # 同步CrossRingNodeVisualizer
         self.node_vis.sync_highlight(self.use_highlight, self.tracked_pid)
+        
+        # 清除右下角信息显示
+        if hasattr(self, 'node_vis') and self.node_vis and hasattr(self.node_vis, 'info_text'):
+            self.node_vis.info_text.set_text("")
+            if hasattr(self.node_vis, 'current_highlight_flit'):
+                self.node_vis.current_highlight_flit = None
 
-        # 清除所有slot颜色
-        for rect in self.rect_info_map:
-            rect.set_facecolor("none")
+        # 立即重新应用所有flit的样式
+        self._reapply_all_flit_styles()
 
         self.fig.canvas.draw_idle()
 
@@ -1075,7 +1177,7 @@ CrossRing可视化控制键:
         """更新单个slot的视觉效果"""
         # 因为我们跳过了首尾slice（range(1, slice_num-1)），需要调整索引匹配
         # slice_idx=0对应不显示，slice_idx=1对应显示的第0个slot，以此类推
-        slice_per_link = getattr(self.config, "SLICE_PER_LINK", 7)
+        slice_per_link = getattr(self.config.basic_config, "SLICE_PER_LINK", None) or 8
         if slice_idx == 0 or slice_idx >= (slice_per_link - 1):
             return  # 跳过首尾slice
 

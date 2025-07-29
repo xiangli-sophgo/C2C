@@ -15,10 +15,10 @@ import seaborn as sns
 import math
 from dataclasses import dataclass
 from collections import defaultdict
+from src.utils.font_config import configure_matplotlib_fonts
 
-# 设置中文字体和样式
-plt.rcParams["font.sans-serif"] = ["SimHei", "DejaVu Sans"]
-plt.rcParams["axes.unicode_minus"] = False
+# 配置跨平台字体支持
+configure_matplotlib_fonts()
 sns.set_style("whitegrid")
 
 

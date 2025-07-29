@@ -20,14 +20,12 @@ logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 
 if sys.platform == "darwin":  # macOS 的系统标识是 'darwin'
     matplotlib.use("macosx")  # 仅在 macOS 上使用该后端
-    # 设置macOS中文字体
-    plt.rcParams["font.sans-serif"] = ["Heiti TC", "Songti SC", "Arial Unicode MS", "DejaVu Sans"]
-else:
-    # 设置Windows中文字体
-    plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
-    
-plt.rcParams["font.serif"] = ["Times New Roman", "Times", "DejaVu Serif"]  # 英文serif字体使用Times
-plt.rcParams["axes.unicode_minus"] = False  # 解决负号显示问题
+
+# 导入跨平台字体配置
+from src.utils.font_config import configure_matplotlib_fonts
+
+# 配置matplotlib字体
+configure_matplotlib_fonts()
 
 
 def test_token_bucket_basic():
