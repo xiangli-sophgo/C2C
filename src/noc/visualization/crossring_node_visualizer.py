@@ -48,24 +48,13 @@ class CrossRingNodeVisualizer:
 
         self.node_history = deque(maxlen=50)  # 保存最近50个周期的节点状态
 
-        # 提取深度 - 兼容不同的配置格式
-        if hasattr(config, 'fifo_config'):
-            self.IQ_OUT_DEPTH = config.fifo_config.IQ_OUT_FIFO_DEPTH
-            self.EQ_IN_DEPTH = config.fifo_config.EQ_IN_FIFO_DEPTH
-            self.RB_IN_DEPTH = config.fifo_config.RB_IN_FIFO_DEPTH
-            self.RB_OUT_DEPTH = config.fifo_config.RB_OUT_FIFO_DEPTH
-            self.IQ_CH_depth = config.fifo_config.IQ_CH_DEPTH
-            self.EQ_CH_depth = config.fifo_config.EQ_CH_DEPTH
-            self.SLICE_PER_LINK = config.basic_config.SLICE_PER_LINK
-        else:
-            # demo格式配置
-            self.IQ_OUT_DEPTH = getattr(config, 'IQ_OUT_FIFO_DEPTH', 8)
-            self.EQ_IN_DEPTH = getattr(config, 'EQ_IN_FIFO_DEPTH', 8)
-            self.RB_IN_DEPTH = getattr(config, 'RB_IN_FIFO_DEPTH', 4)
-            self.RB_OUT_DEPTH = getattr(config, 'RB_OUT_FIFO_DEPTH', 4)
-            self.IQ_CH_depth = getattr(config, 'IQ_CH_FIFO_DEPTH', 4)
-            self.EQ_CH_depth = getattr(config, 'EQ_CH_FIFO_DEPTH', 4)
-            self.SLICE_PER_LINK = getattr(config, 'SLICE_PER_LINK', 8)
+        self.IQ_OUT_DEPTH = config.fifo_config.IQ_OUT_FIFO_DEPTH
+        self.EQ_IN_DEPTH = config.fifo_config.EQ_IN_FIFO_DEPTH
+        self.RB_IN_DEPTH = config.fifo_config.RB_IN_FIFO_DEPTH
+        self.RB_OUT_DEPTH = config.fifo_config.RB_OUT_FIFO_DEPTH
+        self.IQ_CH_depth = config.fifo_config.IQ_CH_DEPTH
+        self.EQ_CH_depth = config.fifo_config.EQ_CH_DEPTH
+        self.SLICE_PER_LINK = config.basic_config.SLICE_PER_LINK
 
         # 固定几何参数
         self.square = 0.3  # flit 方块边长
@@ -170,7 +159,7 @@ class CrossRingNodeVisualizer:
     def _draw_modules(self):
         """绘制所有模块"""
         # 获取通道名称
-        ch_names = getattr(self.config, 'CH_NAME_LIST', ['gdma', 'ddr'])
+        ch_names = getattr(self.config, "CH_NAME_LIST", None)
 
         # ------------------- unified module configs ------------------- #
         iq_config = dict(
@@ -197,7 +186,7 @@ class CrossRingNodeVisualizer:
 
         rb_config = dict(
             title="Ring Bridge",
-            lanes=["TL", "TR", "TU", "TD", "EQ"],
+            lanes=["TL_in", "TR_in", "TU_out", "TD_out", "EQ_out"],  # 匹配实际数据格式
             depths=[self.RB_IN_DEPTH] * 2 + [self.RB_OUT_DEPTH] * 3,
             orientations=["vertical", "vertical", "horizontal", "horizontal", "vertical"],
             h_pos=["bottom", "bottom", "top", "top", "top"],
@@ -208,22 +197,22 @@ class CrossRingNodeVisualizer:
 
         cross_point_horizontal_config = dict(
             title="CP",
-            lanes=["TL", "TR"],  # 修正：与实际slice_connections的键值顺序一致
-            depths=[2, 2],
-            orientations=["horizontal", "horizontal"],
-            h_pos=["bottom", "bottom"],
-            v_pos=["right", "right"],
+            lanes=["TL_arr", "TL_dep", "TR_arr", "TR_dep"],  # 拆分arrival和departure
+            depths=[1, 1, 1, 1],
+            orientations=["horizontal", "horizontal", "horizontal", "horizontal"],
+            h_pos=["bottom", "bottom", "top", "top"],
+            v_pos=["right", "left", "left", "right"],
             patch_dict=self.cph_patches,
             text_dict=self.cph_texts,
         )
 
         cross_point_vertical_config = dict(
             title="CP",
-            lanes=["TU", "TD"],  # 修正：与实际slice_connections的键值顺序一致
-            depths=[2, 2],
-            orientations=["vertical", "vertical"],
-            h_pos=["bottom", "bottom"],
-            v_pos=["left", "left"],
+            lanes=["TU_arr", "TU_dep", "TD_arr", "TD_dep"],  # 拆分arrival和departure
+            depths=[1, 1, 1, 1],
+            orientations=["vertical", "vertical", "vertical", "vertical"],
+            h_pos=["bottom", "top", "top", "bottom"],
+            v_pos=["left", "left", "left", "left"],
             patch_dict=self.cpv_patches,
             text_dict=self.cpv_texts,
         )
@@ -398,7 +387,17 @@ class CrossRingNodeVisualizer:
                     ha = "left"
                 else:
                     raise ValueError(f"Unknown v_position: {vpos}")
-                if lane[:2] in ["TL", "TR", "TU", "TD", "EQ"]:
+                # 处理CrossPoint标签 - 每个方向只显示一次标签
+                if lane[:2] in ["TL", "TR", "TU", "TD", "EQ"] and title == "CP":
+                    # 对于CrossPoint，只在arrival slot显示标签，位置统一
+                    if "_arr" in lane:
+                        # 为水平方向的CrossPoint调整标签位置，使其居中对齐
+                        (label_x, label_y) = (
+                            (x + module_width / 2, y + module_height / 2 + square / 2) if lane[:2] in ["TL"] else (x + module_width / 2 - square * 2 / 3, y + module_height / 2 - square)
+                        )
+                        self.ax.text(label_x, label_y, lane[:2].upper(), ha=ha, va="center", fontsize=fontsize, family="serif")
+                elif lane[:2] in ["TL", "TR", "TU", "TD", "EQ"]:
+                    # 非CrossPoint的标签正常显示
                     self.ax.text(text_x, lane_y + square / 2, lane[:2].upper(), ha=ha, va="center", fontsize=fontsize, family="serif")
                 else:
                     self.ax.text(text_x, lane_y + square / 2, lane[0].upper() + lane[-1], ha=ha, va="center", fontsize=fontsize, family="serif")
@@ -462,13 +461,24 @@ class CrossRingNodeVisualizer:
                     slot_dir = 1
                     va = "bottom"
                 elif hpos == "mid" or hpos is None:
-                    lane_y = y - (depth / 2) * (square + gap)
+                    lane_y = y + module_height / 2 - (depth / 2) * (square + gap)
+                    text_y = y + module_height / 2 - (depth / 2) * (square + gap)
                     slot_dir = 1
                     va = "center"
                 else:
                     raise ValueError(f"Unknown h_position: {hpos}")
 
-                if lane[:2] in ["TL", "TR", "TU", "TD", "EQ"]:
+                # 处理CrossPoint标签 - 每个方向只显示一次标签
+                if lane[:2] in ["TL", "TR", "TU", "TD", "EQ"] and title == "CP":
+                    # 对于CrossPoint，只在arrival slot显示标签，位置统一
+                    if "_arr" in lane:
+                        # 为垂直方向的CrossPoint调整标签位置，使其居中对齐
+                        (label_x, label_y) = (
+                            (x + module_width / 2 - square, y + module_height / 2 - square * 5 / 7) if lane[:2] in ["TU"] else (x + module_width / 2 + square / 3, y + module_height / 2)
+                        )
+                        self.ax.text(label_x, label_y, lane[:2].upper(), ha="center", va=va, fontsize=fontsize, family="serif")
+                elif lane[:2] in ["TL", "TR", "TU", "TD", "EQ"]:
+                    # 非CrossPoint的标签正常显示
                     self.ax.text(lane_x + square / 2, text_y, lane[:2].upper(), ha="center", va=va, fontsize=fontsize, family="serif")
                 else:
                     self.ax.text(lane_x + square / 2, text_y, lane[0].upper() + lane[-1], ha="center", va=va, fontsize=fontsize, family="serif")
@@ -549,149 +559,11 @@ class CrossRingNodeVisualizer:
 
         return x, y
 
-    # def _get_inject_queues_data(self, model, node_id):
-    #     """从网络中提取inject queue数据（适配层）"""
-    #     inject_data = {}
-
-    #     if not model or not hasattr(model, "nodes"):
-    #         return inject_data
-
-    #     try:
-    #         node = model.nodes.get(node_id)
-    #         if not node:
-    #             return inject_data
-
-    #         # 提取IQ_OUT_FIFO数据
-    #         for direction, fifo in node.inject_queue.inject_input_fifos[self.parent.current_channel].items():
-    #             inject_data[direction] = {node_id: list(fifo.internal_queue)}
-
-    #     except Exception as e:
-    #         pass  # print(f"警告: 提取inject queue数据失败: {e}")
-
-    #     return inject_data
-
-    # def _get_eject_queues_data(self, network, node_id):
-    #     """从网络中提取eject queue数据（适配层）"""
-    #     eject_data = {}
-
-    #     if not network or not hasattr(network, "nodes"):
-    #         return eject_data
-
-    #     try:
-    #         node = network.nodes.get(node_id)
-    #         if not node:
-    #             return eject_data
-
-    #         # 提取eject_input_fifos数据
-    #         for direction, fifo in node.eject_queue.eject_input_fifos[self.parent.current_channel].items():
-    #             eject_data[direction] = {node_id: list(fifo.internal_queue)}
-
-    #     except Exception as e:
-    #         pass  # print(f"警告: 提取eject queue数据失败: {e}")
-
-    #     return eject_data
-
-    # def _get_ring_bridge_data(self, network, node_id):
-    #     """从网络中提取ring bridge数据（适配层）"""
-    #     rb_data = {}
-
-    #     if not network or not hasattr(network, "nodes"):
-    #         return rb_data
-
-    #     try:
-    #         node = network.nodes.get(node_id)
-    #         if not node or not hasattr(node, "ring_bridge"):
-    #             return rb_data
-
-    #         ring_bridge = node.ring_bridge
-
-    #         # 提取ring_bridge input和output数据
-    #         for direction, fifo in ring_bridge.ring_bridge_input_fifos[self.parent.current_channel].items():
-    #             rb_data[f"{direction}_in"] = {(node_id, node_id): list(fifo.internal_queue)}
-
-    #         for direction, fifo in ring_bridge.ring_bridge_output_fifos[self.parent.current_channel].items():
-    #             rb_data[f"{direction}_out"] = {(node_id, node_id): list(fifo.internal_queue)}
-
-    #     except Exception as e:
-    #         pass  # print(f"警告: 提取ring bridge数据失败: {e}")
-
-    #     return rb_data
-
-    # def _get_iq_channel_data(self, network, node_id):
-    #     """从网络中提取IQ channel数据（适配层）"""
-    #     iq_ch_data = {}
-
-    #     if not network or not hasattr(network, "nodes"):
-    #         return iq_ch_data
-
-    #     try:
-    #         node = network.nodes.get(node_id)
-    #         if not node:
-    #             return iq_ch_data
-
-    #         for ip_name, ip_interface in node.ip_inject_channel_buffers.items():
-    #             iq_ch_data[ip_name] = {node_id: list(ip_interface[self.parent.current_channel].internal_queue)}
-
-    #     except Exception as e:
-    #         pass  # print(f"警告: 提取IQ channel数据失败: {e}")
-
-    #     return iq_ch_data
-
-    # def _get_eq_channel_data(self, network, node_id):
-    #     """从网络中提取EQ channel数据（适配层）"""
-    #     eq_ch_data = {}
-
-    #     if not network or not hasattr(network, "nodes"):
-    #         return eq_ch_data
-
-    #     try:
-    #         node = network.nodes.get(node_id)
-    #         if not node:
-    #             return eq_ch_data
-
-    #         for ip_name, ip_interface in node.ip_eject_channel_buffers.items():
-    #             eq_ch_data[ip_name] = {node_id: list(ip_interface[self.parent.current_channel].internal_queue)}
-
-    #     except Exception as e:
-    #         pass  # print(f"警告: 提取EQ channel数据失败: {e}")
-
-    #     return eq_ch_data
-
-    # def _get_crosspoint_data(self, network, node_id, direction):
-    #     """从网络中提取crosspoint数据（适配层）"""
-    #     cp_data = {}
-
-    #     if not network or not hasattr(network, "nodes"):
-    #         return cp_data
-
-    #     try:
-    #         node = network.nodes.get(node_id)
-    #         if not node:
-    #             return cp_data
-
-    #         # 获取对应方向的CrossPoint
-    #         if direction == "horizontal":
-    #             cp = node.horizontal_crosspoint
-    #         elif direction == "vertical":
-    #             cp = node.vertical_crosspoint
-    #         else:
-    #             return cp_data
-
-    #         # 提取CrossPoint状态信息
-    #         cp_data = defaultdict(list)
-    #         for direction, slices in cp.slice_connections.items():
-    #             cp_data[direction] = [slices["arrival"].current_slots[self.parent.current_channel], slices["departure"].current_slots[self.parent.current_channel]]
-
-    #     except Exception as e:
-    #         pass  # print(f"警告: 提取crosspoint数据失败: {e}")
-
-    #     return cp_data
-
     def _get_flit_style(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None):
         """
         返回 (facecolor, alpha, linewidth, edgecolor)
         - facecolor 沿用调色板逻辑（高亮 / 调色板）
-        - alpha / linewidth 由 flit.ETag_priority 决定
+        - alpha / linewidth 由 flit.ETag_priority 和 flit_id 决定
         """
         # E-Tag样式映射
         _ETAG_ALPHA = {"T0": 1.0, "T1": 0.9, "T2": 0.75}
@@ -706,9 +578,23 @@ class CrossRingNodeVisualizer:
             etag = flit.get("ETag_priority", "T2")
         else:
             etag = getattr(flit, "ETag_priority", "T2")  # 缺省视为 T2
-        alpha = _ETAG_ALPHA.get(etag, 0.8)
+        base_alpha = _ETAG_ALPHA.get(etag, 0.8)
         line_width = _ETAG_LW.get(etag, 1.0)
         edge_color = _ETAG_EDGE.get(etag, "black")
+
+        # 根据flit_id调整透明度（同一packet的不同flit使用不同透明度）
+        if isinstance(flit, dict):
+            flit_id = flit.get("flit_id", 0)
+        else:
+            flit_id = getattr(flit, "flit_id", 0)
+
+        if flit_id is not None:
+            # 为同一packet内的不同flit分配不同透明度
+            # flit_id=0 -> 1.0倍透明度, flit_id=1 -> 0.8倍, flit_id=2 -> 0.6倍, 等等
+            flit_alpha_modifier = max(0.4, 1.0 - (int(flit_id) * 0.2))
+            alpha = base_alpha * flit_alpha_modifier
+        else:
+            alpha = base_alpha
 
         return face_color, alpha, line_width, edge_color
 
@@ -815,59 +701,59 @@ class CrossRingNodeVisualizer:
         """Format flit information display, consistent with LinkStateVisualizer"""
         if not flit:
             return "No flit info"
-        
+
         info_lines = []
-        
+
         # Basic information
         packet_id = getattr(flit, "packet_id", None) if hasattr(flit, "packet_id") else flit.get("packet_id", None) if isinstance(flit, dict) else None
         flit_id = getattr(flit, "flit_id", None) if hasattr(flit, "flit_id") else flit.get("flit_id", None) if isinstance(flit, dict) else None
-        
+
         if packet_id is not None:
             info_lines.append(f"Packet ID: {packet_id}")
         if flit_id is not None:
             info_lines.append(f"Flit ID: {flit_id}")
-        
+
         # Add flit type information (request/response/data)
         flit_type = getattr(flit, "flit_type", None) if hasattr(flit, "flit_type") else flit.get("flit_type", None) if isinstance(flit, dict) else None
         channel = getattr(flit, "channel", None) if hasattr(flit, "channel") else flit.get("channel", None) if isinstance(flit, dict) else None
         req_type = getattr(flit, "req_type", None) if hasattr(flit, "req_type") else flit.get("req_type", None) if isinstance(flit, dict) else None
-        
+
         if channel:
             channel_name = {"req": "Request", "rsp": "Response", "data": "Data"}.get(channel, channel)
             if flit_type:
                 info_lines.append(f"Type: {channel_name}({flit_type})")
             else:
                 info_lines.append(f"Type: {channel_name}")
-        
+
         if req_type:
             req_name = {"read": "Read", "write": "Write"}.get(req_type, req_type)
             info_lines.append(f"Request: {req_name}")
-        
+
         # Tag information
         etag = getattr(flit, "ETag_priority", None) if hasattr(flit, "ETag_priority") else flit.get("ETag_priority", None) if isinstance(flit, dict) else None
         if etag:
             info_lines.append(f"E-Tag: {etag}")
-        
+
         itag_h = getattr(flit, "itag_h", False) if hasattr(flit, "itag_h") else flit.get("itag_h", False) if isinstance(flit, dict) else False
         itag_v = getattr(flit, "itag_v", False) if hasattr(flit, "itag_v") else flit.get("itag_v", False) if isinstance(flit, dict) else False
-        
+
         if itag_h:
             info_lines.append("I-Tag: Horizontal")
         elif itag_v:
             info_lines.append("I-Tag: Vertical")
-        
+
         # Position information
         current_pos = getattr(flit, "current_node_id", None) if hasattr(flit, "current_node_id") else flit.get("current_node_id", None) if isinstance(flit, dict) else None
         if current_pos is not None:
             info_lines.append(f"Position: {current_pos}")
-        
+
         # Source-destination information
         src = getattr(flit, "source_ip_type", None) if hasattr(flit, "source_ip_type") else flit.get("source_ip_type", None) if isinstance(flit, dict) else None
         dst = getattr(flit, "dest_ip_type", None) if hasattr(flit, "dest_ip_type") else flit.get("dest_ip_type", None) if isinstance(flit, dict) else None
-        
+
         if src and dst:
             info_lines.append(f"Path: {src}→{dst}")
-        
+
         return "\n".join(info_lines) if info_lines else "No valid info"
 
     def _extract_flit_data(self, flit, channel, direction):
@@ -904,6 +790,27 @@ class CrossRingNodeVisualizer:
             result[channel] = channel_data
         return result
 
+    def _extract_ip_channel_data(self, ip_channel_buffers, direction_type, channels=["req", "rsp", "data"]):
+        """提取IP Channel数据的通用方法 - 包含internal_queue和output_register
+        提取当前节点的所有IP接口数据"""
+        result = {}
+        for channel in channels:
+            channel_data = {}
+            for ip_id, ip_interface in ip_channel_buffers.items():
+                if channel in ip_interface and hasattr(ip_interface[channel], "internal_queue"):
+                    # 提取internal_queue中的flit
+                    fifo_data = [self._extract_flit_data(flit, channel, direction_type) for flit in ip_interface[channel].internal_queue]
+
+                    # 提取output_register中的flit（如果存在且有效）
+                    fifo = ip_interface[channel]
+                    if hasattr(fifo, "output_register") and hasattr(fifo, "output_valid") and fifo.output_valid and fifo.output_register:
+                        output_flit_data = self._extract_flit_data(fifo.output_register, channel, direction_type)
+                        fifo_data.append(output_flit_data)
+
+                    channel_data[ip_id] = fifo_data
+            result[channel] = channel_data
+        return result
+
     def save_history_snapshot(self, network, cycle):
         """保存节点历史快照 - 优化版本，减少重复遍历"""
         try:
@@ -936,60 +843,38 @@ class CrossRingNodeVisualizer:
                     except:
                         node_data["eject_queues"] = {}
 
-                    # 3. 保存Ring Bridge数据（优化版本）
+                    # 3. 保存Ring Bridge数据（使用通用方法）
                     try:
                         if hasattr(node, "ring_bridge"):
                             ring_bridge = node.ring_bridge
-                            for channel in ["req", "rsp", "data"]:
-                                channel_data = {}
-                                # 合并input和output的处理
-                                for fifo_type, attr_name in [("_in", "ring_bridge_input_fifos"), ("_out", "ring_bridge_output_fifos")]:
-                                    if hasattr(ring_bridge, attr_name):
-                                        fifos = getattr(ring_bridge, attr_name).get(channel, {})
-                                        for direction, fifo in fifos.items():
-                                            if hasattr(fifo, "internal_queue"):
-                                                fifo_data = [self._extract_flit_data(flit, channel, direction) for flit in fifo.internal_queue]
-                                                channel_data[f"{direction}{fifo_type}"] = {node_id: fifo_data}
-                                node_data["ring_bridge"][channel] = channel_data
+                            rb_data = {}
+                            # 处理input和output FIFO
+                            for fifo_type, attr_name in [("_in", "ring_bridge_input_fifos"), ("_out", "ring_bridge_output_fifos")]:
+                                if hasattr(ring_bridge, attr_name):
+                                    fifos = getattr(ring_bridge, attr_name)
+                                    # 使用通用方法提取FIFO数据
+                                    extracted_data = self._extract_fifo_data(fifos, node_id)
+                                    # 重新组织数据格式以匹配原有的命名约定
+                                    for channel, channel_data in extracted_data.items():
+                                        if channel not in rb_data:
+                                            rb_data[channel] = {}
+                                        for direction, data in channel_data.items():
+                                            rb_data[channel][f"{direction}{fifo_type}"] = data
+                            node_data["ring_bridge"] = rb_data
                     except:
                         node_data["ring_bridge"] = {}
 
-                    # 4. 保存IP Channel数据（合并IQ和EQ处理）
+                    # 4. 保存IP Channel数据（使用通用方法，保存当前节点的所有IP接口数据）
                     try:
-                        for channel in ["req", "rsp", "data"]:
-                            # IQ channels
-                            iq_data = {}
-                            if hasattr(node, "ip_inject_channel_buffers"):
-                                for ip_id, ip_interface in node.ip_inject_channel_buffers.items():
-                                    if channel in ip_interface and hasattr(ip_interface[channel], "internal_queue"):
-                                        # 提取internal_queue中的flit
-                                        fifo_data = [self._extract_flit_data(flit, channel, "inject") for flit in ip_interface[channel].internal_queue]
+                        if hasattr(node, "ip_inject_channel_buffers"):
+                            node_data["iq_channels"] = self._extract_ip_channel_data(node.ip_inject_channel_buffers, "inject")
+                        else:
+                            node_data["iq_channels"] = {}
 
-                                        # 提取output_register中的flit（如果存在且有效）
-                                        fifo = ip_interface[channel]
-                                        if hasattr(fifo, "output_register") and hasattr(fifo, "output_valid") and fifo.output_valid and fifo.output_register:
-                                            output_flit_data = self._extract_flit_data(fifo.output_register, channel, "inject")
-                                            fifo_data.append(output_flit_data)
-
-                                        iq_data[ip_id] = fifo_data
-                            node_data["iq_channels"][channel] = iq_data
-
-                            # EQ channels
-                            eq_data = {}
-                            if hasattr(node, "ip_eject_channel_buffers"):
-                                for ip_id, ip_interface in node.ip_eject_channel_buffers.items():
-                                    if channel in ip_interface and hasattr(ip_interface[channel], "internal_queue"):
-                                        # 提取internal_queue中的flit
-                                        fifo_data = [self._extract_flit_data(flit, channel, "eject") for flit in ip_interface[channel].internal_queue]
-
-                                        # 提取output_register中的flit（如果存在且有效）
-                                        fifo = ip_interface[channel]
-                                        if hasattr(fifo, "output_register") and hasattr(fifo, "output_valid") and fifo.output_valid and fifo.output_register:
-                                            output_flit_data = self._extract_flit_data(fifo.output_register, channel, "eject")
-                                            fifo_data.append(output_flit_data)
-
-                                        eq_data[ip_id] = fifo_data
-                            node_data["eq_channels"][channel] = eq_data
+                        if hasattr(node, "ip_eject_channel_buffers"):
+                            node_data["eq_channels"] = self._extract_ip_channel_data(node.ip_eject_channel_buffers, "eject")
+                        else:
+                            node_data["eq_channels"] = {}
                     except:
                         node_data["iq_channels"] = {}
                         node_data["eq_channels"] = {}
@@ -1003,52 +888,25 @@ class CrossRingNodeVisualizer:
                                 if hasattr(cp, "slice_connections"):
                                     # 使用当前通道的数据，默认为data
                                     current_channel = getattr(self.parent, "current_channel", "data") if self.parent else "data"
-                                    
-                                    print(f"🔍 调试: 节点{node_id} {cp_name} 有{len(cp.slice_connections)}个方向: {list(cp.slice_connections.keys())}")
-                                    
+
                                     for direction, channels in cp.slice_connections.items():
-                                        print(f"🔍 调试: 节点{node_id} {cp_name} {direction}方向 channels: {list(channels.keys())}")
-                                        
                                         # CrossPoint数据结构: slice_connections[direction][channel] = {"arrival": RingSlice, "departure": RingSlice}
                                         slices = channels.get(current_channel, {})
                                         arrival_slice = slices.get("arrival")
                                         departure_slice = slices.get("departure")
-                                        
-                                        print(f"🔍 调试: 节点{node_id} {cp_name} {direction}方向 {current_channel}通道 arrival_slice={arrival_slice is not None} departure_slice={departure_slice is not None}")
-                                        
-                                        # 调试输出
-                                        if arrival_slice and hasattr(arrival_slice, "current_slots"):
-                                            arrival_slot = arrival_slice.current_slots.get(current_channel)
-                                            print(f"🔍 调试: 节点{node_id} {cp_name} {direction}方向 arrival.current_slots[{current_channel}]={arrival_slot is not None}")
-                                            if arrival_slot:
-                                                arrival_flit = getattr(arrival_slot, 'flit', None)
-                                                slot_valid = getattr(arrival_slot, 'valid', False)
-                                                print(f"🔍 调试: 节点{node_id} {cp_name} {direction}方向 arrival slot.valid={slot_valid} slot.flit={arrival_flit is not None}")
-                                                if arrival_flit:
-                                                    print(f"🔍 调试: 节点{node_id} {cp_name} {direction}方向 arrival发现flit: pid={getattr(arrival_flit, 'packet_id', 'N/A')}")
-                                        
-                                        if departure_slice and hasattr(departure_slice, "current_slots"):
-                                            departure_slot = departure_slice.current_slots.get(current_channel)
-                                            print(f"🔍 调试: 节点{node_id} {cp_name} {direction}方向 departure.current_slots[{current_channel}]={departure_slot is not None}")
-                                            if departure_slot:
-                                                departure_flit = getattr(departure_slot, 'flit', None)
-                                                slot_valid = getattr(departure_slot, 'valid', False)
-                                                print(f"🔍 调试: 节点{node_id} {cp_name} {direction}方向 departure slot.valid={slot_valid} slot.flit={departure_flit is not None}")
-                                                if departure_flit:
-                                                    print(f"🔍 调试: 节点{node_id} {cp_name} {direction}方向 departure发现flit: pid={getattr(departure_flit, 'packet_id', 'N/A')}")
-                                        
+
                                         # 从RingSlice对象的current_slots中提取slot，再从slot中提取flit数据
                                         arrival_slot = arrival_slice.current_slots.get(current_channel) if (arrival_slice and hasattr(arrival_slice, "current_slots")) else None
                                         departure_slot = departure_slice.current_slots.get(current_channel) if (departure_slice and hasattr(departure_slice, "current_slots")) else None
-                                        
+
                                         # 从slot中提取实际的flit数据
-                                        arrival_flit = getattr(arrival_slot, 'flit', None) if (arrival_slot and getattr(arrival_slot, 'valid', False)) else None
-                                        departure_flit = getattr(departure_slot, 'flit', None) if (departure_slot and getattr(departure_slot, 'valid', False)) else None
-                                        
+                                        arrival_flit = getattr(arrival_slot, "flit", None) if (arrival_slot and getattr(arrival_slot, "valid", False)) else None
+                                        departure_flit = getattr(departure_slot, "flit", None) if (departure_slot and getattr(departure_slot, "valid", False)) else None
+
                                         # 转换为列表格式（单个flit或None转为列表）
                                         arrival_slots = [arrival_flit] if arrival_flit else []
                                         departure_slots = [departure_flit] if departure_flit else []
-                                        
+
                                         cp_data[direction] = [arrival_slots, departure_slots]
                                 node_data[cp_name] = cp_data
                     except Exception as e:
@@ -1087,7 +945,7 @@ class CrossRingNodeVisualizer:
                 # 直接使用统一格式：从完整快照中提取当前节点和当前通道的数据
                 nodes_data = history_snapshot.get("nodes", {})
                 node_data = nodes_data.get(node_id)
-                
+
                 if node_data:
                     # 获取当前显示的通道
                     current_channel = getattr(self.parent, "current_channel", "data") if self.parent else "data"
@@ -1101,6 +959,31 @@ class CrossRingNodeVisualizer:
         except Exception as e:
             self._show_no_data_message(node_id, f"历史数据错误: {str(e)}")
 
+    def _clear_all_components(self, current_channel):
+        """清空所有组件的显示"""
+        # 清空IQ的所有lanes
+        for lane_name, patches in self.iq_patches.items():
+            if patches:
+                self._clear_fifo_patches(patches, self.iq_texts.get(lane_name, []))
+
+        # 清空EQ的所有lanes
+        for lane_name, patches in self.eq_patches.items():
+            if patches:
+                self._clear_fifo_patches(patches, self.eq_texts.get(lane_name, []))
+
+        # 清空RB的所有lanes
+        for lane_name, patches in self.rb_patches.items():
+            if patches:
+                self._clear_fifo_patches(patches, self.rb_texts.get(lane_name, []))
+
+        # 清空CrossPoint
+        for lane_name, patches in self.cph_patches.items():
+            if patches:
+                self._clear_fifo_patches(patches, self.cph_texts.get(lane_name, []))
+
+        for lane_name, patches in self.cpv_patches.items():
+            if patches:
+                self._clear_fifo_patches(patches, self.cpv_texts.get(lane_name, []))
 
     def _render_from_snapshot_data(self, node_id, node_data, current_channel):
         """直接从快照数据渲染节点组件"""
@@ -1114,6 +997,9 @@ class CrossRingNodeVisualizer:
             self._draw_modules()  # 重建 FIFO / RB 边框与槽
 
         self.node_id = node_id
+
+        # 先清空所有组件的显示（确保没有数据时也能清空）
+        self._clear_all_components(current_channel)
 
         # 直接从快照数据渲染各个组件
         try:
@@ -1136,11 +1022,9 @@ class CrossRingNodeVisualizer:
             iq_channels = node_data.get("iq_channels", {})
             eq_channels = node_data.get("eq_channels", {})
 
-            if current_channel in iq_channels:
-                self._render_ip_channels_from_snapshot("IQ_Ch", iq_channels[current_channel], node_id)
-
-            if current_channel in eq_channels:
-                self._render_ip_channels_from_snapshot("EQ_Ch", eq_channels[current_channel], node_id)
+            # 总是调用渲染函数，即使没有数据（函数内部会处理清空）
+            self._render_ip_channels_from_snapshot("IQ_Ch", iq_channels.get(current_channel, {}), node_id)
+            self._render_ip_channels_from_snapshot("EQ_Ch", eq_channels.get(current_channel, {}), node_id)
 
             # 5. 渲染 CrossPoint (不区分通道，直接使用原始数据)
             crosspoint_h = node_data.get("crosspoint_h", {})
@@ -1155,7 +1039,7 @@ class CrossRingNodeVisualizer:
         except Exception as e:
             # 渲染失败时显示错误信息
             self._show_no_data_message(node_id, f"渲染错误: {str(e)}")
-        
+
         # 触发重绘以更新显示
         self.fig.canvas.draw_idle()
 
@@ -1166,9 +1050,11 @@ class CrossRingNodeVisualizer:
 
         # 根据组件类型确定需要处理的方向
         if component_type in ["IQ", "EQ"]:
-            directions = ["TR", "TL", "TU", "TD"]
+            # 注意：IQ包含方向lanes（如TU、TD）和IP通道lanes（如gdma_0、ddr_0）
+            # 这里只处理方向lanes，IP通道lanes由_render_ip_channels_from_snapshot处理
+            directions = ["TR", "TL", "TU", "TD", "EQ"]  # 添加EQ方向，因为IQ配置中有
         elif component_type == "RB":
-            directions = ["TR_in", "TL_in", "TU_in", "TD_in", "TR_out", "TL_out", "TU_out", "TD_out", "EQ_out"]
+            directions = ["TL_in", "TR_in", "TU_out", "TD_out", "EQ_out"]  # 匹配新的配置
         elif component_type == "CP_H":
             directions = ["TL", "TR"]  # 水平CrossPoint处理TL/TR方向，与实际数据结构一致
         elif component_type == "CP_V":
@@ -1184,37 +1070,81 @@ class CrossRingNodeVisualizer:
                 # 根据组件类型直接操作patch属性
                 if component_type == "IQ":
                     if node_id in direction_data:
-                        self._render_fifo_patches(self.iq_patches, self.iq_texts, direction, direction_data[node_id])
+                        # 检查这个方向是否存在于iq_patches中
+                        if direction in self.iq_patches:
+                            self._render_fifo_patches(self.iq_patches, self.iq_texts, direction, direction_data[node_id])
                 elif component_type == "EQ":
                     if node_id in direction_data:
-                        self._render_fifo_patches(self.eq_patches, self.eq_texts, direction, direction_data[node_id])
+                        # 检查这个方向是否存在于eq_patches中
+                        if direction in self.eq_patches:
+                            self._render_fifo_patches(self.eq_patches, self.eq_texts, direction, direction_data[node_id])
                 elif component_type == "RB":
                     if node_id in direction_data:
+                        # Ring Bridge现在直接使用完整的direction名称
                         self._render_fifo_patches(self.rb_patches, self.rb_texts, direction, direction_data[node_id])
                 elif component_type == "CP_H":
-                    self._render_crosspoint_patches(self.cph_patches, self.cph_texts, direction, direction_data)
+                    # 水平CrossPoint需要将数据映射到新的lane名称
+                    self._render_crosspoint_patches_split(self.cph_patches, self.cph_texts, direction, direction_data)
                 elif component_type == "CP_V":
-                    self._render_crosspoint_patches(self.cpv_patches, self.cpv_texts, direction, direction_data)
+                    # 垂直CrossPoint需要将数据映射到新的lane名称
+                    self._render_crosspoint_patches_split(self.cpv_patches, self.cpv_texts, direction, direction_data)
 
     def _render_ip_channels_from_snapshot(self, channel_type, channel_data, node_id):
         """从快照数据渲染IP通道数据"""
+        # 获取通道名称配置
+        ch_names = getattr(self.config, "CH_NAME_LIST", ["gdma", "ddr"])
+
+        # 注意：清空操作已经在_clear_all_components中完成
+
         if not channel_data:
+            # 即使没有数据也要返回，因为清空操作已经完成
             return
 
-        # IP通道数据使用IP接口名称作为键，需要找到正确的键
-        # 通常格式为 "gdma_0", "gdma_1" 等，对应节点0, 1等
+        # IP通道数据：每个节点的数据中包含该节点的IP接口
+        # ip_interface_key可能是复合键，如 "0_gdma", "1_ddr" 等
         for ip_interface_key, flit_list in channel_data.items():
-            # 尝试从IP接口名称提取节点ID
-            if f"_{node_id}" in ip_interface_key or ip_interface_key.endswith(f"_{node_id}"):
-                # 提取IP类型名称（去掉节点ID后缀）
-                ip_type = ip_interface_key.rsplit('_', 1)[0] if '_' in ip_interface_key else ip_interface_key
-                
+            # 尝试从键中提取通道类型
+            lane_name = None
+
+            # 检查是否直接匹配配置的通道名称
+            for ch_name in ch_names:
+                if ch_name in str(ip_interface_key):
+                    lane_name = ch_name
+                    break
+
+            # 如果没有找到匹配，尝试使用索引映射
+            if lane_name is None:
+                # 提取节点内的IP索引
+                # 键格式可能是 "0", "1" 或 "node0_ip0" 等
+                parts = str(ip_interface_key).split("_")
+                for part in parts:
+                    if part.isdigit():
+                        ip_index = int(part)
+                        # 计算该节点内的本地IP索引
+                        local_index = ip_index % len(ch_names)
+                        if local_index < len(ch_names):
+                            lane_name = ch_names[local_index]
+                            break
+
+            if lane_name:
                 if channel_type == "IQ_Ch":
-                    # IQ通道使用IP类型名称作为lane名称
-                    self._render_fifo_patches(self.iq_patches, self.iq_texts, ip_type, flit_list)
+                    self._render_fifo_patches(self.iq_patches, self.iq_texts, lane_name, flit_list)
                 elif channel_type == "EQ_Ch":
-                    # EQ通道使用IP类型名称作为lane名称
-                    self._render_fifo_patches(self.eq_patches, self.eq_texts, ip_type, flit_list)
+                    self._render_fifo_patches(self.eq_patches, self.eq_texts, lane_name, flit_list)
+
+    def _clear_fifo_patches(self, patches, texts):
+        """清空FIFO patch的显示"""
+        for p in patches:
+            p.set_facecolor("none")
+            p.set_alpha(1.0)
+            p.set_linewidth(0)
+            p.set_edgecolor("none")
+            # 从patch_info_map中移除
+            if hasattr(self, "patch_info_map") and p in self.patch_info_map:
+                del self.patch_info_map[p]
+
+        for t in texts:
+            t.set_visible(False)
 
     def _render_fifo_patches(self, patch_dict, text_dict, lane_name, flit_list):
         """渲染FIFO类型patch的flit数据"""
@@ -1224,12 +1154,15 @@ class CrossRingNodeVisualizer:
         patches = patch_dict[lane_name]
         texts = text_dict[lane_name]
 
-        # 清空所有patch
+        # 清空所有patch并移除映射
         for p in patches:
             p.set_facecolor("none")
             p.set_alpha(1.0)
             p.set_linewidth(0)
             p.set_edgecolor("none")
+            # 从patch_info_map中移除
+            if p in self.patch_info_map:
+                del self.patch_info_map[p]
 
         for t in texts:
             t.set_visible(False)
@@ -1288,19 +1221,28 @@ class CrossRingNodeVisualizer:
 
         arrival_slots = slice_data[0] if slice_data[0] else []
         departure_slots = slice_data[1] if slice_data[1] else []
-        all_slots = arrival_slots + departure_slots
-        
+
+        # TR和TU方向需要颠倒顺序：departure在前，arrival在后
+        if direction in ["TR", "TU"]:
+            all_slots = departure_slots + arrival_slots
+        else:
+            # TL和TD方向保持原顺序：arrival在前，departure在后
+            all_slots = arrival_slots + departure_slots
+
         print(f"🎯 调试: CrossPoint {direction}方向 arrival_slots={len(arrival_slots)} departure_slots={len(departure_slots)} all_slots={len(all_slots)}")
         for i, flit in enumerate(all_slots):
             if flit:
                 print(f"   - slot[{i}]: pid={getattr(flit, 'packet_id', 'N/A')} fid={getattr(flit, 'flit_id', 'N/A')}")
 
-        # 清空所有patch
+        # 清空所有patch并移除映射
         for p in patches:
             p.set_facecolor("none")
             p.set_alpha(1.0)
             p.set_linewidth(0)
             p.set_edgecolor("none")
+            # 从patch_info_map中移除
+            if p in self.patch_info_map:
+                del self.patch_info_map[p]
 
         for t in texts:
             t.set_visible(False)
@@ -1312,6 +1254,74 @@ class CrossRingNodeVisualizer:
 
             p = patches[idx]
             t = texts[idx]
+
+            if flit:
+                packet_id = getattr(flit, "packet_id", None)
+                flit_id = getattr(flit, "flit_id", str(flit))
+
+                face, alpha, lw, edge = self._get_flit_style(
+                    flit,
+                    use_highlight=self.use_highlight,
+                    expected_packet_id=self.highlight_pid,
+                )
+                p.set_facecolor(face)
+                p.set_alpha(alpha)
+                p.set_linewidth(lw)
+                p.set_edgecolor(edge)
+
+                info = f"{packet_id}-{flit_id}"
+                t.set_text(info)
+                t.set_visible(self.use_highlight and packet_id == self.highlight_pid)
+                self.patch_info_map[p] = (t, flit)
+
+                if self.use_highlight and getattr(flit, "packet_id", None) == self.highlight_pid:
+                    self.current_highlight_flit = flit
+            else:
+                if p in self.patch_info_map:
+                    self.patch_info_map.pop(p, None)
+
+    def _render_crosspoint_patches_split(self, patch_dict, text_dict, direction, slice_data):
+        """渲染CrossPoint类型patch的slice数据 - 拆分版本"""
+        # CrossPoint数据结构: [arrival_slots, departure_slots]
+        if not isinstance(slice_data, list) or len(slice_data) < 2:
+            print(f"🚫 调试: CrossPoint {direction}方向 slice_data格式错误: {slice_data}")
+            return
+
+        arrival_slots = slice_data[0] if slice_data[0] else []
+        departure_slots = slice_data[1] if slice_data[1] else []
+
+        # 将arrival和departure分别渲染到对应的lane
+        arr_lane = f"{direction}_arr"
+        dep_lane = f"{direction}_dep"
+
+        # 渲染arrival slot
+        if arr_lane in patch_dict and arr_lane in text_dict:
+            self._render_single_slot(patch_dict[arr_lane], text_dict[arr_lane], arrival_slots)
+
+        # 渲染departure slot
+        if dep_lane in patch_dict and dep_lane in text_dict:
+            self._render_single_slot(patch_dict[dep_lane], text_dict[dep_lane], departure_slots)
+
+    def _render_single_slot(self, patches, texts, slot_data):
+        """渲染单个slot的数据"""
+        # 清空所有patch并移除映射
+        for p in patches:
+            p.set_facecolor("none")
+            p.set_alpha(1.0)
+            p.set_linewidth(0)
+            p.set_edgecolor("none")
+            # 从patch_info_map中移除
+            if p in self.patch_info_map:
+                del self.patch_info_map[p]
+
+        for t in texts:
+            t.set_visible(False)
+
+        # 只渲染第一个slot（因为每个lane现在只有1个深度）
+        if slot_data and len(patches) > 0:
+            flit = slot_data[0] if slot_data else None
+            p = patches[0]
+            t = texts[0]
 
             if flit:
                 packet_id = getattr(flit, "packet_id", None)

@@ -117,9 +117,9 @@ class LinkStateVisualizer:
     def _setup_gui(self):
         """设置GUI布局"""
         # 创建主窗口 - 增大图形尺寸以容纳更多内容
-        self.fig = plt.figure(figsize=(20, 12), constrained_layout=True)
+        self.fig = plt.figure(figsize=(16, 8), constrained_layout=True)
         gs = self.fig.add_gridspec(1, 2, width_ratios=[1.2, 1], left=0.02, right=0.98, top=0.95, bottom=0.08)
-        model_name = getattr(self._parent_model, 'model_name', 'CrossRing NoC')
+        model_name = getattr(self._parent_model, "model_name", "NoC")
         self.fig.suptitle(f"{model_name} Simulation", fontsize=16, fontweight="bold", family="serif")
 
         # 左侧：网络拓扑视图
@@ -343,7 +343,7 @@ class LinkStateVisualizer:
 
     def _convert_demo_link_id(self, demo_link_id):
         """将demo链路ID转换为标准格式
-        
+
         demo格式: h_0_1, h_2_3, v_0_2, v_1_3
         标准格式: link_0_TR_1, link_2_TR_3, link_0_TD_2, link_1_TD_3
         """
@@ -353,14 +353,14 @@ class LinkStateVisualizer:
                 direction, src_str, dest_str = parts
                 src_id = int(src_str)
                 dest_id = int(dest_str)
-                
+
                 if direction == "h":  # 水平链路
                     return f"link_{src_id}_TR_{dest_id}"
                 elif direction == "v":  # 垂直链路
                     return f"link_{src_id}_TD_{dest_id}"
         except (ValueError, IndexError):
             pass
-        
+
         # 如果转换失败，返回原ID
         return demo_link_id
 
@@ -590,18 +590,6 @@ class LinkStateVisualizer:
         self.fig.canvas.draw_idle()
         # print(f"选中节点: {node_id}")  # 删除debug输出
 
-    def _on_flit_click(self, flit):
-        """处理flit点击"""
-        pid = getattr(flit, "packet_id", None)
-        if pid is not None:
-            self._track_packet(pid)
-            
-        # 显示flit详细信息（添加这个功能）
-        if hasattr(self, 'node_vis') and self.node_vis:
-            # 格式化flit信息并显示在右下角
-            flit_info = self._format_flit_info(flit)
-            self.node_vis.info_text.set_text(flit_info)
-            self.node_vis.current_highlight_flit = flit
 
     def _track_packet(self, packet_id):
         """追踪包"""
@@ -610,25 +598,20 @@ class LinkStateVisualizer:
 
         # 同步CrossRingNodeVisualizer的高亮状态
         self.node_vis.sync_highlight(self.use_highlight, self.tracked_pid)
-        
+
         # 立即重新应用所有flit的样式
         self._reapply_all_flit_styles()
-        
+
         # 触发重绘
         self.fig.canvas.draw_idle()
-        
+
     def _reapply_all_flit_styles(self):
         """重新应用所有flit的样式，用于高亮状态改变后"""
         for rect, (rect_link_ids, flit, rect_slot_idx) in self.rect_info_map.items():
             if flit:
                 # 重新计算flit样式
-                face_color, alpha, line_width, edge_color = self._get_flit_style(
-                    flit, 
-                    use_highlight=self.use_highlight, 
-                    expected_packet_id=self.tracked_pid, 
-                    highlight_color="red"
-                )
-                
+                face_color, alpha, line_width, edge_color = self._get_flit_style(flit, use_highlight=self.use_highlight, expected_packet_id=self.tracked_pid, highlight_color="red")
+
                 # 应用样式
                 rect.set_facecolor(face_color)
                 rect.set_alpha(alpha)
@@ -647,60 +630,157 @@ class LinkStateVisualizer:
         """Format flit information display, consistent with CrossRingNodeVisualizer"""
         if not flit:
             return "No flit info"
-        
+
         info_lines = []
-        
+
         # Basic information
         packet_id = getattr(flit, "packet_id", None)
         flit_id = getattr(flit, "flit_id", None)
-        
+
         if packet_id is not None:
             info_lines.append(f"Packet ID: {packet_id}")
         if flit_id is not None:
             info_lines.append(f"Flit ID: {flit_id}")
-        
+
         # Add flit type information (request/response/data)
         flit_type = getattr(flit, "flit_type", None)
         channel = getattr(flit, "channel", None)
         req_type = getattr(flit, "req_type", None)
-        
+
         if channel:
             channel_name = {"req": "Request", "rsp": "Response", "data": "Data"}.get(channel, channel)
             if flit_type:
                 info_lines.append(f"Type: {channel_name}({flit_type})")
             else:
                 info_lines.append(f"Type: {channel_name}")
-        
+
         if req_type:
             req_name = {"read": "Read", "write": "Write"}.get(req_type, req_type)
             info_lines.append(f"Request: {req_name}")
-        
+
         # Tag information
         etag = getattr(flit, "ETag_priority", None)
         if etag:
             info_lines.append(f"E-Tag: {etag}")
-        
+
         itag_h = getattr(flit, "itag_h", False)
         itag_v = getattr(flit, "itag_v", False)
-        
+
         if itag_h:
             info_lines.append("I-Tag: Horizontal")
         elif itag_v:
             info_lines.append("I-Tag: Vertical")
-        
+
         # Position information
         current_pos = getattr(flit, "current_node_id", None)
         if current_pos is not None:
             info_lines.append(f"Position: {current_pos}")
-        
+
         # Source-destination information
         src = getattr(flit, "source_ip_type", None)
         dst = getattr(flit, "dest_ip_type", None)
-        
+
         if src and dst:
             info_lines.append(f"Path: {src}→{dst}")
-        
+
         return "\n".join(info_lines) if info_lines else "No valid info"
+
+    def _connect_events(self):
+        """连接各种事件处理器"""
+        # 连接键盘事件
+        self.fig.canvas.mpl_connect('key_press_event', self._on_key_press)
+        
+        # 连接鼠标点击事件（用于节点选择等）
+        self.fig.canvas.mpl_connect('button_press_event', self._on_mouse_click)
+        
+        # 连接窗口关闭事件
+        self.fig.canvas.mpl_connect('close_event', self._on_window_close)
+
+    def _on_mouse_click(self, event):
+        """处理鼠标点击事件"""
+        if event.inaxes != self.link_ax:
+            return
+        
+        # 首先检查flit点击（slots有更高优先级）
+        if hasattr(self, 'rect_info_map'):
+            for rect in self.rect_info_map:
+                contains, _ = rect.contains(event)
+                if contains:
+                    link_ids, flit, slot_idx = self.rect_info_map[rect]
+                    if flit:
+                        self._on_flit_click(flit)
+                    return
+        
+        # 然后检查节点点击，使用距离计算
+        if hasattr(self, 'node_positions'):
+            for node_id, pos in self.node_positions.items():
+                dx = event.xdata - pos[0]
+                dy = event.ydata - pos[1]
+                distance = (dx * dx + dy * dy) ** 0.5  # sqrt
+                
+                if distance <= 0.3:  # 节点点击半径
+                    self._select_node(node_id)
+                    break
+
+    def _on_flit_click(self, flit):
+        """处理flit点击事件"""
+        pid = getattr(flit, "packet_id", None)
+        if pid is not None:
+            self._track_packet(pid)
+
+        # 显示flit详细信息（添加这个功能）
+        if hasattr(self, "node_vis") and self.node_vis:
+            # 格式化flit信息并显示在右下角
+            flit_info = self._format_flit_info(flit)
+            self.node_vis.info_text.set_text(flit_info)
+            self.node_vis.current_highlight_flit = flit
+
+    def _select_node(self, node_id):
+        """选择节点并更新右侧详细视图"""
+        if node_id == self._selected_node:
+            return
+        
+        self._selected_node = node_id
+        
+        # 更新选择框（红色虚线矩形）
+        if hasattr(self, "click_box"):
+            self.click_box.remove()
+        self._draw_selection_box()
+        
+        # 使用快照数据更新右侧详细视图
+        if self._play_idx is not None and self._play_idx < len(self.history):
+            # 回放模式：使用当前回放周期数据
+            replay_cycle, _ = self.history[self._play_idx]
+            self.node_vis.render_node_from_snapshot(node_id, replay_cycle)
+        elif self.history:
+            # 实时模式：使用最新快照数据
+            latest_cycle, _ = self.history[-1]
+            self.node_vis.render_node_from_snapshot(node_id, latest_cycle)
+        
+        # 更新节点标题
+        self._update_node_title()
+        self.fig.canvas.draw_idle()
+
+    def _draw_selection_box(self):
+        """绘制选中节点的红色虚线框"""
+        if hasattr(self, 'node_positions') and self._selected_node in self.node_positions:
+            node_pos = self.node_positions[self._selected_node]
+            self.click_box = Rectangle(
+                (node_pos[0] - 0.3, node_pos[1] - 0.3), 
+                0.6, 0.6,  # 比节点稍大(节点是0.4)
+                facecolor="none", 
+                edgecolor="red", 
+                linewidth=1.2, 
+                linestyle="--"
+            )
+            self.link_ax.add_patch(self.click_box)
+
+    def _on_window_close(self, event):
+        """处理窗口关闭事件"""
+        print("🔒 检测到窗口关闭事件，触发可视化清理...")
+        if hasattr(self, "_parent_model") and self._parent_model:
+            if hasattr(self._parent_model, "cleanup_visualization"):
+                self._parent_model.cleanup_visualization()
 
     def _on_key_press(self, event):
         """处理键盘事件"""
@@ -726,6 +806,8 @@ class LinkStateVisualizer:
             self._replay_previous()
         elif event.key == "right":  # 右箭头键：回放下一帧（仅暂停时有效）
             self._replay_next()
+        elif event.key.lower() == "q":  # Q键退出可视化
+            self._quit_visualization()
 
         # 更新状态显示
         self._update_status_display()
@@ -751,7 +833,7 @@ class LinkStateVisualizer:
             cycle, snapshot_data = self.history[self._play_idx]
             self._render_from_snapshot(snapshot_data)
             # 同时更新节点显示
-            if hasattr(self, 'node_vis') and self.node_vis and self._selected_node is not None:
+            if hasattr(self, "node_vis") and self.node_vis and self._selected_node is not None:
                 self.node_vis.render_node_from_snapshot(self._selected_node, cycle)
             self.fig.canvas.draw_idle()
 
@@ -776,7 +858,7 @@ class LinkStateVisualizer:
             cycle, snapshot_data = self.history[self._play_idx]
             self._render_from_snapshot(snapshot_data)
             # 同时更新节点显示
-            if hasattr(self, 'node_vis') and self.node_vis and self._selected_node is not None:
+            if hasattr(self, "node_vis") and self.node_vis and self._selected_node is not None:
                 self.node_vis.render_node_from_snapshot(self._selected_node, cycle)
             self.fig.canvas.draw_idle()
 
@@ -800,6 +882,23 @@ class LinkStateVisualizer:
                 # 退出暂停：回到实时模式
                 self._play_idx = None
                 status = "继续"
+
+    def _quit_visualization(self):
+        """退出可视化，触发模型的清理方法"""
+        if hasattr(self, "_parent_model") and self._parent_model:
+            # 调用模型的cleanup_visualization方法
+            if hasattr(self._parent_model, "cleanup_visualization"):
+                print("🔑 用户按下Q键，正在退出可视化...")
+                self._parent_model.cleanup_visualization()
+            else:
+                print("⚠️  模型不支持cleanup_visualization方法")
+        
+        # 关闭matplotlib窗口
+        try:
+            import matplotlib.pyplot as plt
+            plt.close("all")
+        except Exception as e:
+            print(f"⚠️  关闭matplotlib窗口失败: {e}")
 
     def _reset_view(self):
         """重置视图"""
@@ -889,7 +988,7 @@ CrossRing可视化控制键:
     def _update_node_title(self):
         """更新节点标题"""
         node_title = f"节点 {self._selected_node}"
-        self.node_ax.set_title(node_title, fontsize=14, family="sans-serif", pad=-20)
+        self.node_ax.set_title(node_title, fontsize=14, family="sans-serif", pad=-50)
 
     def _on_clear_highlight(self, event):
         """清除高亮回调"""
@@ -898,11 +997,11 @@ CrossRing可视化控制键:
 
         # 同步CrossRingNodeVisualizer
         self.node_vis.sync_highlight(self.use_highlight, self.tracked_pid)
-        
+
         # 清除右下角信息显示
-        if hasattr(self, 'node_vis') and self.node_vis and hasattr(self.node_vis, 'info_text'):
+        if hasattr(self, "node_vis") and self.node_vis and hasattr(self.node_vis, "info_text"):
             self.node_vis.info_text.set_text("")
-            if hasattr(self.node_vis, 'current_highlight_flit'):
+            if hasattr(self.node_vis, "current_highlight_flit"):
                 self.node_vis.current_highlight_flit = None
 
         # 立即重新应用所有flit的样式
@@ -997,10 +1096,10 @@ CrossRing可视化控制键:
 
                                     # 检查所有pipeline阶段：current_slots, input_buffer, output_buffer
                                     pipeline_stages = ["current_slots", "input_buffer", "output_buffer"]
-                                    
+
                                     for slot_channel in ["req", "rsp", "data"]:
                                         slot_info = None
-                                        
+
                                         # 按优先级检查pipeline阶段
                                         for stage in pipeline_stages:
                                             if hasattr(slice_obj, stage):
@@ -1009,7 +1108,7 @@ CrossRing可视化控制键:
                                                     slot_info = extract_flit_from_slot(stage_slots[slot_channel], slot_channel)
                                                     if slot_info:  # 找到有效flit就停止搜索
                                                         break
-                                        
+
                                         slice_data["slots"][slot_channel] = slot_info
 
                                     # 保存slice元数据
@@ -1024,20 +1123,20 @@ CrossRing可视化控制键:
                             link_data[channel] = channel_data
 
                         links_snapshot[link_id] = link_data
-                    
+
                     elif hasattr(link, "slices"):
                         # Demo链路格式：简单的slice列表
                         # 将demo链路ID转换为标准格式
                         standard_link_id = self._convert_demo_link_id(link_id)
-                        
+
                         link_data = {}
-                        
+
                         # demo链路只有一个通道，我们用"req"表示
                         channel_data = {}
-                        
+
                         for slice_idx, slice_obj in enumerate(link.slices):
                             slice_data = {"slots": {}, "metadata": {}}
-                            
+
                             # 从demo slice格式提取数据
                             if hasattr(slice_obj, "slot") and slice_obj.slot:
                                 slot = slice_obj.slot
@@ -1056,16 +1155,16 @@ CrossRing可视化控制键:
                                 }
                             else:
                                 slot_info = None
-                            
+
                             slice_data["slots"]["req"] = slot_info
                             slice_data["metadata"] = {"slice_idx": slice_idx, "channel": "req", "timestamp": cycle}
                             channel_data[slice_idx] = slice_data
-                        
+
                         link_data["req"] = channel_data
                         # 为了保持格式一致，添加空的rsp和data通道
                         link_data["rsp"] = {}
                         link_data["data"] = {}
-                        
+
                         links_snapshot[standard_link_id] = link_data
 
             # 第二步：让节点可视化器保存自己的历史状态
@@ -1136,7 +1235,7 @@ CrossRing可视化控制键:
                             flit_data = slot_info.get("flit", {})
                             if flit_data:
                                 flit_count += 1
-                                
+
                                 # 创建临时flit对象
                                 temp_flit = _FlitProxy(
                                     pid=flit_data.get("packet_id"),
@@ -1213,7 +1312,7 @@ CrossRing可视化控制键:
         """
         返回 (facecolor, alpha, linewidth, edgecolor)
         - facecolor 沿用调色板逻辑（高亮 / 调色板）
-        - alpha / linewidth 由 flit.ETag_priority 决定
+        - alpha / linewidth 由 flit.ETag_priority 和 flit_id 决定
         """
         # E-Tag样式映射
         _ETAG_ALPHA = {"T0": 1.0, "T1": 0.9, "T2": 0.75}
@@ -1225,9 +1324,19 @@ CrossRing可视化控制键:
 
         # 获取E-Tag优先级
         etag = getattr(flit, "ETag_priority", "T2")  # 缺省视为 T2
-        alpha = _ETAG_ALPHA.get(etag, 0.8)
+        base_alpha = _ETAG_ALPHA.get(etag, 0.8)
         line_width = _ETAG_LW.get(etag, 1.0)
         edge_color = _ETAG_EDGE.get(etag, "black")
+
+        # 根据flit_id调整透明度（同一packet的不同flit使用不同透明度）
+        flit_id = getattr(flit, "flit_id", 0)
+        if flit_id is not None:
+            # 为同一packet内的不同flit分配不同透明度
+            # flit_id=0 -> 1.0倍透明度, flit_id=1 -> 0.8倍, flit_id=2 -> 0.6倍, 等等
+            flit_alpha_modifier = max(0.4, 1.0 - (int(flit_id) * 0.2))
+            alpha = base_alpha * flit_alpha_modifier
+        else:
+            alpha = base_alpha
 
         return face_color, alpha, line_width, edge_color
 

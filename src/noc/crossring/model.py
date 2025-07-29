@@ -99,10 +99,10 @@ class CrossRingModel(BaseNoCModel):
         # 实时可视化组件
         self._realtime_visualizer = None
         self._visualization_enabled = False
-        self._visualization_update_interval = 10  # 每多少个周期更新一次可视化（保留用于setup_visualization）
+        self._visualization_initialized = False
         self._visualization_frame_interval = 0.5  # 每帧间隔时间（秒）
+        self._visualization_update_interval = 10  # 每多少个周期更新一次可视化
         self._visualization_start_cycle = 0  # 从哪个周期开始可视化
-        self._visualization_initialized = False  # 可视化是否已初始化
         self._paused = False  # 可视化暂停状态
 
         # 初始化模型（不包括IP接口创建，IP接口将在setup_traffic_scheduler中创建）
@@ -1096,6 +1096,47 @@ class CrossRingModel(BaseNoCModel):
             {"flow_distribution": flow_distribution, "bandwidth_analysis": bandwidth_analysis, "latency_analysis": latency_analysis, "save_figures": actual_save_figures, "save_dir": save_dir}
         )
 
+    def setup_visualization(self, enable: bool = True, update_interval: int = 1, start_cycle: int = 0) -> None:
+        """
+        配置实时可视化
+        
+        Args:
+            enable: 是否启用可视化
+            update_interval: 更新间隔（秒），用作plt.pause的参数
+            start_cycle: 开始可视化的周期
+        """
+        self._visualization_enabled = enable
+        self._visualization_frame_interval = update_interval
+        self._visualization_start_cycle = start_cycle
+        
+        if enable:
+            print(f"✅ 可视化已启用: 更新间隔={update_interval}s, 开始周期={start_cycle}")
+        else:
+            print("❌ 可视化已禁用")
+    
+    def cleanup_visualization(self) -> None:
+        """
+        清理可视化资源，禁用时间间隔
+        
+        用于用户按'q'退出可视化后，让仿真无延迟运行
+        """
+        if self._visualization_enabled:
+            self._visualization_enabled = False
+            self._visualization_frame_interval = 0.0  # 禁用时间间隔
+            self.debug_config["sleep_time"] = 0.0  # 同时禁用debug模式的延迟
+            self.user_interrupted = False  # 重置中断标志，让仿真继续运行
+            print("🚀 可视化已退出，仿真将无延迟运行")
+        
+        if self._realtime_visualizer:
+            try:
+                import matplotlib.pyplot as plt
+                plt.close("all")
+                self._realtime_visualizer = None
+                self._visualization_initialized = False
+                print("📊 可视化窗口已关闭")
+            except Exception as e:
+                print(f"⚠️  关闭可视化失败: {e}")
+
     def print_debug_status(self) -> None:
         """打印调试状态"""
         # 调用base类的调试状态打印
@@ -1699,7 +1740,7 @@ class CrossRingModel(BaseNoCModel):
 
     def _update_visualization(self):
         """更新可视化显示"""
-        if not self._realtime_visualizer:
+        if not self._realtime_visualizer or not self._visualization_enabled:
             return
 
         try:
@@ -1708,20 +1749,36 @@ class CrossRingModel(BaseNoCModel):
 
             # 强制刷新显示
             import matplotlib.pyplot as plt
+            
+            # 检查matplotlib窗口是否关闭（用户点击X或按q）
+            if not plt.get_fignums():  # 如果没有打开的图形窗口
+                print("🔒 检测到可视化窗口已关闭，触发清理...")
+                self.cleanup_visualization()
+                return
 
             # 检查暂停状态
             paused = getattr(self, "_paused", False)
             if paused:
                 # 进入暂停等待循环，保持GUI响应
-                while getattr(self, "_paused", False):
+                while getattr(self, "_paused", False) and plt.get_fignums():
                     plt.pause(0.1)
+                    # 在暂停期间也检查窗口关闭
+                    if not plt.get_fignums():
+                        self.cleanup_visualization()
+                        return
             else:
-                # 正常帧率控制
-                frame_interval = getattr(self, "_visualization_frame_interval", 0.5)
-                plt.pause(frame_interval)
+                # 正常帧率控制 - 只有在可视化启用时才暂停
+                if self._visualization_enabled and self._visualization_frame_interval > 0:
+                    plt.pause(self._visualization_frame_interval)
 
+        except KeyboardInterrupt:
+            # 捕获Ctrl+C或其他键盘中断
+            print("🔑 检测到键盘中断，触发可视化清理...")
+            self.cleanup_visualization()
         except Exception as e:
             print(f"⚠️  可视化更新失败 (周期 {self.cycle}): {e}")
+            # 出错时也触发清理，避免卡住
+            self.cleanup_visualization()
 
     def close_visualization(self):
         """关闭可视化窗口"""
@@ -1954,6 +2011,119 @@ class CrossRingModel(BaseNoCModel):
                 print(f"   - {ch['channel']}: {ch['bandwidth']:.2f}GB/s ({ch['utilization']:.1%})")
 
         print("=" * 55)
+
+    # ========== 重写run_simulation以集成可视化控制 ==========
+    
+    def run_simulation(
+        self, max_time_ns: float = 5000.0, stats_start_time_ns: float = 0.0, progress_interval_ns: float = 1000.0, results_analysis: bool = False, verbose: bool = True
+    ) -> Dict[str, Any]:
+        """
+        运行完整仿真（CrossRing版本，集成可视化控制）
+
+        Args:
+            max_time_ns: 最大仿真时间（纳秒）
+            stats_start_time_ns: 统计开始时间（纳秒）
+            progress_interval_ns: 进度显示间隔（纳秒）
+            results_analysis: 是否在仿真结束后执行结果分析
+            verbose: 是否打印详细的模型信息和中间结果
+
+        Returns:
+            仿真结果字典
+        """
+        # 获取网络频率进行ns到cycle的转换
+        network_freq = 1.0  # 默认1GHz
+        if hasattr(self.config, "basic_config") and hasattr(self.config.basic_config, "NETWORK_FREQUENCY"):
+            network_freq = self.config.basic_config.NETWORK_FREQUENCY
+        elif hasattr(self.config, "NETWORK_FREQUENCY"):
+            network_freq = self.config.NETWORK_FREQUENCY
+        elif hasattr(self.config, "clock_frequency"):
+            network_freq = self.config.clock_frequency
+
+        # ns转换为cycle：cycle = time_ns * frequency_GHz
+        max_cycles = int(max_time_ns * network_freq)
+        stats_start_cycle = int(stats_start_time_ns * network_freq)
+        progress_interval = int(progress_interval_ns * network_freq)
+
+        cycle_time_ns = 1.0 / network_freq  # 1个周期的纳秒数
+
+        # 如果启用详细模式，打印traffic统计信息
+        if verbose and hasattr(self, "traffic_scheduler") and self.traffic_scheduler:
+            self._print_traffic_statistics()
+
+        # 初始化可视化（如果已配置）
+        if self._visualization_enabled and self.cycle >= self._visualization_start_cycle:
+            self._initialize_visualization()
+
+        self.is_running = True
+        self.start_time = time.time()
+
+        try:
+            for cycle in range(1, max_cycles + 1):
+                self.step()
+
+                # 启用统计收集
+                if cycle == stats_start_cycle:
+                    self._reset_statistics()
+
+                # 可视化更新（在指定周期后开始）
+                if self._visualization_enabled and cycle >= self._visualization_start_cycle:
+                    if cycle % self._visualization_update_interval == 0:  # 每N个周期更新一次
+                        self._update_visualization()
+                    
+                    # 如果可视化被用户退出，_visualization_enabled会被设为False
+                    # 这时仿真继续但不再有延迟
+
+                # 检查仿真结束条件（总是检查）
+                if self._should_stop_simulation():
+                    break
+
+                # 定期输出进度
+                if cycle % progress_interval == 0 and cycle > 0:
+                    if verbose:
+                        self._print_simulation_progress(cycle, max_cycles, progress_interval)
+                    else:
+                        active_requests = self.get_total_active_requests()
+                        completed_requests = 0
+                        if hasattr(self, "request_tracker") and self.request_tracker:
+                            completed_requests = len(self.request_tracker.completed_requests)
+
+                        # 计算时间（ns）
+                        current_time_ns = cycle * cycle_time_ns
+
+        except KeyboardInterrupt:
+            print("🛑 用户中断仿真，触发可视化清理...")
+            self.cleanup_visualization()  # 清理可视化资源
+            self.user_interrupted = True
+            # 不重新抛出异常，继续执行结果分析
+        except Exception as e:
+            self.cleanup_visualization()  # 出错时也清理可视化
+            raise
+
+        finally:
+            self.is_running = False
+            self.is_finished = True
+            self.end_time = time.time()
+            
+            # 确保可视化资源被清理
+            if self._visualization_enabled:
+                self.cleanup_visualization()
+
+        # 生成仿真结果
+        results = self._generate_simulation_results(stats_start_cycle)
+
+        # 如果启用详细模式，打印最终统计信息
+        if verbose:
+            self._print_final_statistics()
+
+        # 结果分析（如果启用）
+        if results_analysis and hasattr(self, "analyze_simulation_results"):
+            try:
+                analysis_results = self.analyze_simulation_results(results, enable_visualization=True, save_results=True, verbose=verbose)
+                results["analysis"] = analysis_results
+            except Exception as e:
+                print(f"Error during results analysis: {e}")
+
+        return results
 
     # ========== 实现BaseNoCModel抽象方法 ==========
 
