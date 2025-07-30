@@ -1,14 +1,5 @@
 """
-CrossRing CrossPoint 重构实现 - 统一简化版本
-
-本文件包含完整的CrossPoint功能实现，遵循以下设计原则：
-1. 减少类和函数的使用，在单一类中实现所有功能
-2. 详细的中文注释和清晰的逻辑
-3. 完整实现E-Tag和I-Tag机制，不做简化
-4. 统一处理水平和垂直CrossPoint的功能
-5. 高效的两阶段执行模型
-
-CrossPoint是CrossRing NoC的核心组件，负责：
+CrossPoint 是 CrossRing NoC 的核心组件，负责：
 - Flit的上环和下环控制
 - E-Tag防饿死机制（分层entry管理 + T0全局队列轮询）
 - I-Tag预约机制（slot预约 + 回收管理）
@@ -19,6 +10,8 @@ CrossPoint是CrossRing NoC的核心组件，负责：
 from typing import Dict, List, Any, Optional, Tuple, Set
 from enum import Enum
 from dataclasses import dataclass, field
+
+from src.noc.crossring.components.ring_bridge import RingBridge
 
 from ..link import PriorityLevel, CrossRingSlot, RingSlice
 from ..flit import CrossRingFlit
@@ -129,12 +122,6 @@ class CrossPoint:
     3. 实现完整的I-Tag预约机制（slot预约 + 回收管理）
     4. 处理上环和下环决策（基于路由策略和坐标）
     5. 两阶段执行模型（compute阶段计算，update阶段执行）
-
-    设计原则：
-    - 所有功能集中在一个类中，减少方法调用开销
-    - 详细的中文注释说明每个逻辑块
-    - 不使用小函数，核心逻辑直接写在主方法内
-    - 完整实现所有Tag机制，不做简化
     """
 
     def __init__(self, crosspoint_id: str, node_id: int, direction: CrossPointDirection, config: CrossRingConfig, coordinates: Tuple[int, int] = (0, 0), parent_node=None):
@@ -199,6 +186,19 @@ class CrossPoint:
             "RB": {"req": [], "rsp": [], "data": []},  # 下环到Ring Bridge的flit
             "EQ": {"req": [], "rsp": [], "data": []},  # 下环到EjectQueue的flit
         }
+        self.injected_flits_buffer: Dict[str, Dict[str, List[CrossRingFlit]]] = {
+            "RB": {"req": [], "rsp": [], "data": []},  # 从Ring Bridge上环的flit
+            "IQ": {"req": [], "rsp": [], "data": []},  # 从InjectQueue上环的flit
+        }
+
+        # I-Tag预约统计数据结构
+        self.itag_reservation_counts: Dict[str, Dict[str, int]] = {direction: {"req": 0, "rsp": 0, "data": 0} for direction in self.managed_directions}
+
+        # 待预约的I-Tag数量（超时但还未成功预约）
+        self.itag_pending_counts: Dict[str, Dict[str, int]] = {direction: {"req": 0, "rsp": 0, "data": 0} for direction in self.managed_directions}
+
+        # 待释放的I-Tag数量
+        self.itag_to_release_counts: Dict[str, Dict[str, int]] = {direction: {"req": 0, "rsp": 0, "data": 0} for direction in self.managed_directions}
 
         # 统计信息 - 用于性能分析和调试
         self.stats = {
@@ -218,7 +218,10 @@ class CrossPoint:
             # I-Tag机制统计
             "itag_triggers": {"req": 0, "rsp": 0, "data": 0},
             "itag_reservations": {"req": 0, "rsp": 0, "data": 0},
+            "itag_reservation_failures": {"req": 0, "rsp": 0, "data": 0},
+            "itag_releases": {"req": 0, "rsp": 0, "data": 0},
             "slot_recycling_events": {"req": 0, "rsp": 0, "data": 0},
+            "itag_timeouts": {"req": 0, "rsp": 0, "data": 0},
         }
 
     def _initialize_etag_entry_managers(self) -> None:
@@ -272,7 +275,10 @@ class CrossPoint:
 
             # 创建entry管理器
             self.etag_entry_managers[sub_direction] = EntryAllocationTracker(
-                total_depth=total_depth, t2_max_entries=t2_max, t1_max_entries=t1_max, has_dedicated_entries=has_dedicated
+                total_depth=total_depth,
+                t2_max_entries=t2_max,
+                t1_max_entries=t1_max,
+                has_dedicated_entries=has_dedicated,
             )
 
     def connect_slice(self, direction: str, slice_type: str, ring_slice: RingSlice, channel: str) -> None:
@@ -290,7 +296,7 @@ class CrossPoint:
                 if slice_type in self.slice_connections[direction][channel]:
                     self.slice_connections[direction][channel][slice_type] = ring_slice
 
-    def step_compute_phase(self, cycle: int, node_inject_fifos: Dict[str, Dict[str, Any]], node_eject_fifos: Dict[str, Dict[str, Any]]) -> None:
+    def step_compute_phase(self, cycle: int, node_inject_fifos: Dict[str, Dict[str, Any]], node_eject_fifos: Dict[str, Dict[str, Any]], ring_bridge: RingBridge = None) -> None:
         """
         计算阶段：分析传输可能性并制定传输计划，但不执行实际传输
 
@@ -304,15 +310,20 @@ class CrossPoint:
             cycle: 当前周期
             node_inject_fifos: 节点的inject_input_fifos
             node_eject_fifos: 节点的eject_input_fifos
+            ring_bridge: Ring Bridge实例（可选）
         """
         # 清空上一周期的传输计划和缓冲区
         self.injection_transfer_plans.clear()
         self.ejection_transfer_plans.clear()
 
-        # 清空上一周期的下环缓冲区
+        # 清空上一周期的上下环缓冲区
         for eject_target in self.ejected_flits_buffer:
             for channel in self.ejected_flits_buffer[eject_target]:
                 self.ejected_flits_buffer[eject_target][channel].clear()
+
+        for inject_source in self.injected_flits_buffer:
+            for channel in self.injected_flits_buffer[inject_source]:
+                self.injected_flits_buffer[inject_source][channel].clear()
 
         # ========== 第一部分：下环分析和计划 ==========
         # 遍历所有管理方向的arrival slice，分析下环可能性
@@ -321,7 +332,7 @@ class CrossPoint:
             for channel in ["req", "rsp", "data"]:
                 arrival_slice = self.slice_connections[direction][channel]["arrival"]
                 if not arrival_slice:
-                    continue
+                    raise ValueError("非法的slice")
                 current_slot = arrival_slice.peek_current_slot(channel)
                 if not current_slot or not current_slot.is_occupied:
                     continue
@@ -334,12 +345,10 @@ class CrossPoint:
                 should_eject, eject_target = self._should_eject_flit(flit, direction)
 
                 if should_eject:
+                    # 下环到Ring Bridge
                     if eject_target == "RB":
-                        # 下环到Ring Bridge - 同样需要E-Tag机制判断
-                        # Ring Bridge的输入FIFO深度配置
-
                         # 检查Ring Bridge输入FIFO状态
-                        if self.parent_node and hasattr(self.parent_node, "ring_bridge"):
+                        if ring_bridge:
                             # 获取对应方向的Ring Bridge输入FIFO占用情况
 
                             # 使用E-Tag机制判断是否可以下环到RB
@@ -401,22 +410,26 @@ class CrossPoint:
                                 self._handle_ejection_failure_in_compute(current_slot, channel, direction, cycle)
 
         # ========== 第二部分：上环分析和计划 ==========
-        # 按照自然优先级顺序分析上环可能性：ring_bridge输出 > 普通FIFO
         for direction in self.managed_directions:
             for channel in ["req", "rsp", "data"]:
                 departure_slice = self.slice_connections[direction][channel]["departure"]
                 if not departure_slice:
-                    continue
+                    raise ValueError("非法的slice")
                 # 1. 优先检查ring_bridge输出（维度转换后的flit重新注入）
-                if self.parent_node and hasattr(self.parent_node, "ring_bridge"):
-                    ring_bridge_flit = self.parent_node.ring_bridge.peek_output_flit(direction, channel)
+                if ring_bridge:
+                    ring_bridge_flit = ring_bridge.peek_output_flit(direction, channel)
                     if ring_bridge_flit:
                         # 检查departure slice是否可以接受flit
                         if self._can_inject_to_departure_slice(departure_slice, channel, direction):
-                            self.injection_transfer_plans.append(
-                                {"type": "ring_bridge_reinject", "direction": direction, "channel": channel, "flit": ring_bridge_flit, "priority": 1}
-                            )  # 最高优先级
-                            continue  # ring_bridge优先级高，如果有就不检查FIFO
+                            # 从ring_bridge获取flit并存储到内部缓冲区
+                            actual_flit = ring_bridge.get_output_flit(direction, channel)
+                            if actual_flit:
+                                self.injected_flits_buffer["RB"][channel].append(actual_flit)
+                                self.injection_transfer_plans.append({"type": "RB_injection", "direction": direction, "channel": channel, "priority": 1})  # 最高优先级
+                            continue
+                        else:
+                            # 无法上环，检查是否需要触发I-Tag预约
+                            self._check_and_trigger_itag_reservation(ring_bridge_flit, direction, channel, cycle)
 
                 # 2. 检查普通inject_input_fifos
                 if direction in node_inject_fifos[channel]:
@@ -427,33 +440,61 @@ class CrossPoint:
                         if flit:
                             # 检查departure slice是否可以接受
                             if self._can_inject_to_departure_slice(departure_slice, channel, direction):
-                                self.injection_transfer_plans.append(
-                                    {"type": "fifo_injection", "direction": direction, "channel": channel, "source_fifo": direction_fifo, "flit": flit, "priority": 2}  # 普通优先级
-                                )
+                                # 从FIFO读取flit并存储到内部缓冲区
+                                actual_flit = direction_fifo.read_output()
+                                if actual_flit:
+                                    self.injected_flits_buffer["IQ"][channel].append(actual_flit)
+                                    self.injection_transfer_plans.append({"type": "IQ_injection", "direction": direction, "channel": channel, "priority": 2})  # 普通优先级
                             else:
                                 # 无法上环，检查是否需要触发I-Tag预约
                                 self._check_and_trigger_itag_reservation(flit, direction, channel, cycle)
 
-        # ========== 第三部分：等待状态更新 ==========
-        # 更新注入等待队列中flit的等待周期数
-        for channel in ["req", "rsp", "data"]:
-            updated_queue = []
-            for flit, wait_cycles in self.injection_wait_queues[channel]:
-                updated_queue.append((flit, wait_cycles + 1))
-            self.injection_wait_queues[channel] = updated_queue
+        # ========== 第三部分：I-Tag检查（重要：在最后检查所有等待的flit） ==========
+        # 重置待预约计数
+        for direction in self.managed_directions:
+            for channel in ["req", "rsp", "data"]:
+                self.itag_pending_counts[direction][channel] = 0
 
-        # 更新I-Tag预约的等待周期
-        for channel in ["req", "rsp", "data"]:
-            for ring_type in ["horizontal", "vertical"]:
-                reservation = self.itag_reservations[channel][ring_type]
-                if reservation.active:
-                    reservation.wait_cycles += 1
-                    # 预约超时处理（简化版本，实际应该基于配置）
-                    if reservation.wait_cycles > 20:
-                        reservation.active = False
-                        reservation.wait_cycles = 0
+        # 遍历所有inject_fifos中的flit进行I-Tag检查
+        for direction in self.managed_directions:
+            for channel in ["req", "rsp", "data"]:
+                if direction in node_inject_fifos[channel]:
+                    direction_fifo = node_inject_fifos[channel][direction]
+                    # 获取FIFO中的所有flit
+                    all_flits = direction_fifo.get_all_flits()
+                    for flit in all_flits:
+                        self._check_itag_for_flit(flit, direction, channel, cycle)
 
-    def step_update_phase(self, cycle: int, node_inject_fifos: Dict[str, Dict[str, Any]], node_eject_fifos: Dict[str, Dict[str, Any]]) -> None:
+        # 如果有ring_bridge，也检查其中等待的flit
+        if ring_bridge:
+            for direction in self.managed_directions:
+                for channel in ["req", "rsp", "data"]:
+                    # 检查ring_bridge输入FIFO中的flit
+                    if direction in ring_bridge.ring_bridge_input_fifos[channel]:
+                        rb_input_fifo = ring_bridge.ring_bridge_input_fifos[channel][direction]
+                        rb_flits = rb_input_fifo.get_all_flits()
+                        for flit in rb_flits:
+                            self._check_itag_for_flit(flit, direction, channel, cycle)
+
+        # ========== 第四部分：空预约回收（在departure slice） ==========
+        for direction in self.managed_directions:
+            for channel in ["req", "rsp", "data"]:
+                departure_slice = self.slice_connections[direction][channel]["departure"]
+                if not departure_slice:
+                    continue
+
+                # 检查当前departure slot
+                current_slot = departure_slice.peek_current_slot(channel)
+
+                # 如果有待释放的预约，且当前slot是本节点预约的空slot
+                if self.itag_to_release_counts[direction][channel] > 0 and current_slot and current_slot.is_reserved and not current_slot.is_occupied and current_slot.itag_reserver_id == self.node_id:
+
+                    # 释放这个空预约
+                    current_slot.clear_itag()
+                    self.itag_to_release_counts[direction][channel] -= 1
+                    self.stats["itag_releases"][channel] += 1
+
+    def step_update_phase(self, cycle: int, node_inject_fifos: Dict[str, Dict[str, Any]], node_eject_fifos: Dict[str, Dict[str, Any]], ring_bridge=None) -> None:
         """
         更新阶段：执行compute阶段确定的传输计划
 
@@ -464,18 +505,19 @@ class CrossPoint:
             cycle: 当前周期
             node_inject_fifos: 节点的inject_input_fifos
             node_eject_fifos: 节点的eject_input_fifos
+            ring_bridge: Ring Bridge实例（可选）
         """
         # ========== 执行下环传输计划 ==========
         for plan in self.ejection_transfer_plans:
             if plan["type"] == "eject_to_ring_bridge":
                 # 下环到Ring Bridge
-                success = self._execute_eject_to_ring_bridge(plan)
+                success = self._execute_RB_ejection(plan, ring_bridge)
                 if success:
                     self.stats["flits_ejected"][plan["channel"]] += 1
 
             elif plan["type"] == "eject_to_eq_fifo":
                 # 下环到EjectQueue FIFO
-                success = self._execute_eject_to_eq_fifo(plan)
+                success = self._execute_EQ_ejection(plan)
                 if success:
                     self.stats["flits_ejected"][plan["channel"]] += 1
 
@@ -484,24 +526,17 @@ class CrossPoint:
         sorted_plans = sorted(self.injection_transfer_plans, key=lambda x: x.get("priority", 999))
 
         for plan in sorted_plans:
-            if plan["type"] == "ring_bridge_reinject":
+            if plan["type"] == "RB_injection":
                 # Ring Bridge重新注入
-                success = self._execute_ring_bridge_reinject(plan)
+                success = self._execute_RB_injection(plan, ring_bridge)
                 if success:
                     self.stats["flits_injected"][plan["channel"]] += 1
 
-            elif plan["type"] == "fifo_injection":
+            elif plan["type"] == "IQ_injection":
                 # 普通FIFO注入
-                success = self._execute_fifo_injection(plan)
+                success = self._execute_IQ_injection(plan)
                 if success:
                     self.stats["flits_injected"][plan["channel"]] += 1
-                else:
-                    if hasattr(plan["flit"], "packet_id"):
-                        raise RuntimeError(f"CrossPoint {self.crosspoint_id} 注入失败 packet {plan['flit'].packet_id}")
-                        # 尝试将flit放回FIFO头部
-                        if hasattr(plan["source_fifo"], "priority_write"):
-                            if not plan["source_fifo"].priority_write(plan["flit"]):
-                                raise RuntimeError(f"CrossPoint {self.crosspoint_id} 无法将packet {plan['flit'].packet_id} 放回FIFO，数据可能丢失！")
 
     def _should_eject_flit(self, flit: CrossRingFlit, arrival_direction: str) -> Tuple[bool, str]:
         """
@@ -875,8 +910,8 @@ class CrossPoint:
         检查是否可以向departure slice注入flit
 
         注入条件：
-        1. departure slice的当前slot为空或可用
-        2. 如果有I-Tag预约的slot，预约者有优先权
+        1. departure slice能接受新的slot输入
+        2. 或者当前slot被本节点预约（可以直接修改）
 
         Args:
             departure_slice: 目标departure slice
@@ -889,23 +924,71 @@ class CrossPoint:
         if not departure_slice:
             return False
 
-        # 检查当前slot状态
-        current_slot = departure_slice.peek_current_slot(channel)
+        # 使用RingSlice的特殊接口，同时处理预约slot和标准流控
+        return departure_slice.can_accept_slot_or_has_reserved_slot(channel, self.node_id)
 
-        # 如果没有slot或slot为空，可以注入
-        if current_slot is None or not current_slot.is_occupied:
-            return True
+    def _check_itag_for_flit(self, flit: CrossRingFlit, direction: str, channel: str, cycle: int) -> None:
+        """
+        检查单个flit是否需要I-Tag预约
 
-        # 如果slot被本节点预约，可以注入
-        if current_slot.is_reserved and current_slot.itag_reserver_id == self.node_id:
-            return True
+        Args:
+            flit: 要检查的flit
+            direction: 注入方向
+            channel: 通道类型
+            cycle: 当前周期
+        """
+        # 初始化等待周期
+        if not hasattr(flit, "injection_wait_start_cycle") or flit.injection_wait_start_cycle < 0:
+            flit.injection_wait_start_cycle = cycle
+            flit.itag_reserved = False
+            flit.itag_timeout = False
+            return
 
-        # 其他情况不能注入
-        return False
+        # 计算等待时间
+        wait_cycles = cycle - flit.injection_wait_start_cycle
+
+        # 检查是否超时
+        ring_type = "horizontal" if direction in ["TL", "TR"] else "vertical"
+        threshold = self.config.tag_config.ITAG_TRIGGER_TH_H if ring_type == "horizontal" else self.config.tag_config.ITAG_TRIGGER_TH_V
+
+        if wait_cycles < threshold:
+            return  # 未超时
+
+        # 标记为超时
+        if not flit.itag_timeout:
+            flit.itag_timeout = True
+            self.stats["itag_timeouts"][channel] += 1
+
+        # 如果已经预约，不需要再处理
+        if flit.itag_reserved:
+            return
+
+        # 检查是否可以预约（不超过最大数量）
+        max_num = self.config.tag_config.ITAG_MAX_NUM_H if ring_type == "horizontal" else self.config.tag_config.ITAG_MAX_NUM_V
+        current_reservations = self.itag_reservation_counts[direction][channel]
+
+        if current_reservations >= max_num:
+            # 已达到最大预约数，但记录为待预约
+            self.itag_pending_counts[direction][channel] += 1
+            return
+
+        # 尝试预约当前slot
+        departure_slice = self.slice_connections[direction][channel]["departure"]
+        if departure_slice:
+            success = self._trigger_itag_reservation_for_flit(flit, channel, ring_type, direction, departure_slice, cycle)
+            if success:
+                flit.itag_reserved = True
+                self.itag_reservation_counts[direction][channel] += 1
+                self.stats["itag_triggers"][channel] += 1
+                self.stats["itag_reservations"][channel] += 1
+            else:
+                # 当前slot已被预约，记录为待预约，下个cycle再试
+                self.itag_pending_counts[direction][channel] += 1
+                self.stats["itag_reservation_failures"][channel] += 1
 
     def _check_and_trigger_itag_reservation(self, flit: CrossRingFlit, direction: str, channel: str, cycle: int) -> None:
         """
-        检查是否需要触发I-Tag预约
+        检查是否需要触发I-Tag预约（兼容旧接口）
 
         I-Tag预约触发条件：
         1. flit等待时间超过配置的阈值
@@ -918,77 +1001,45 @@ class CrossPoint:
             channel: 通道类型
             cycle: 当前周期
         """
-        # 确定环路类型
-        ring_type = "horizontal" if direction in ["TL", "TR"] else "vertical"
+        # 现在这个方法只是调用新的检查方法
+        self._check_itag_for_flit(flit, direction, channel, cycle)
 
-        # 检查flit等待时间
-        if not hasattr(flit, "injection_wait_start_cycle"):
-            flit.injection_wait_start_cycle = cycle
-            return
-
-        wait_cycles = cycle - flit.injection_wait_start_cycle
-
-        # 获取I-Tag触发阈值
-        if ring_type == "horizontal":
-            trigger_threshold = self.config.tag_config.ITAG_TRIGGER_TH_H
-            max_reservations = self.config.tag_config.ITAG_MAX_NUM_H
-        else:
-            trigger_threshold = self.config.tag_config.ITAG_TRIGGER_TH_V
-            max_reservations = self.config.tag_config.ITAG_MAX_NUM_V
-
-        # 检查触发条件
-        if wait_cycles < trigger_threshold:
-            return
-
-        # 检查是否已有活跃预约
-        current_reservation = self.itag_reservations[channel][ring_type]
-        if current_reservation.active:
-            return
-
-        # 触发I-Tag预约
-        departure_slice = self.slice_connections[direction][channel]["departure"]
-        if departure_slice:
-            # 查找可预约的slot（简化实现）
-            success = self._trigger_itag_reservation_internal(channel, ring_type, departure_slice, cycle)
-            if success:
-                self.stats["itag_triggers"][channel] += 1
-                self.stats["itag_reservations"][channel] += 1
-
-    def _trigger_itag_reservation_internal(self, channel: str, ring_type: str, departure_slice: RingSlice, cycle: int) -> bool:
+    def _trigger_itag_reservation_for_flit(self, flit: CrossRingFlit, channel: str, ring_type: str, direction: str, departure_slice: RingSlice, cycle: int) -> bool:
         """
-        内部I-Tag预约触发逻辑
+        为特定flit触发I-Tag预约
 
         Args:
+            flit: 要预约的flit
             channel: 通道类型
             ring_type: 环路类型
+            direction: 方向
             departure_slice: departure slice
             cycle: 当前周期
 
         Returns:
-            是否成功触发预约
+            是否成功预约
         """
-        # 简化实现：查找departure slice的当前slot
+        # 只检查当前slot
         current_slot = departure_slice.peek_current_slot(channel)
 
-        # 如果slot可用且未被预约，进行预约
-        if current_slot and current_slot.is_available and not current_slot.is_reserved:
+        # 只要没被预约就可以预约（不管是否occupied）
+        if current_slot and not current_slot.is_reserved:
             # 预约slot
             success = current_slot.reserve_itag(self.node_id, ring_type)
             if success:
-                # 更新预约状态
-                self.itag_reservations[channel][ring_type] = ITagReservationState(
-                    active=True, reserved_slot_id=current_slot.slot_id, reserver_node_id=self.node_id, trigger_cycle=cycle, wait_cycles=0, direction=ring_type
-                )
+                # 预约成功，不再维护itag_reservations状态（因为每个flit独立管理）
                 return True
 
+        # 无法预约
         return False
 
-    def _execute_eject_to_ring_bridge(self, plan: Dict[str, Any]) -> bool:
+    def _execute_RB_ejection(self, plan: Dict[str, Any], ring_bridge=None) -> bool:
         """
         执行下环到Ring Bridge的传输
 
         Args:
             plan: 下环计划
+            ring_bridge: Ring Bridge实例
 
         Returns:
             是否执行成功
@@ -1004,7 +1055,21 @@ class CrossPoint:
         flit.rb_fifo_name = f"RB_{source_direction}"
 
         # 添加到ring_bridge输入
-        if self.parent_node and hasattr(self.parent_node, "add_to_ring_bridge_input"):
+        if ring_bridge:
+            # 直接访问ring_bridge的输入FIFO
+            input_fifo = ring_bridge.ring_bridge_input_fifos[channel][source_direction]
+            if input_fifo.ready_signal():
+                success = input_fifo.write_input(flit)
+                if success:
+                    # 处理成功下环的清理工作
+                    self._handle_successful_ejection(original_slot, channel, source_direction)
+                    return True
+                else:
+                    # 添加失败，将flit放回slot
+                    original_slot.assign_flit(flit)
+                    return False
+        elif self.parent_node and hasattr(self.parent_node, "add_to_ring_bridge_input"):
+            # 兼容旧的方式
             success = self.parent_node.add_to_ring_bridge_input(flit, source_direction, channel)
             if success:
                 # 处理成功下环的清理工作
@@ -1017,7 +1082,7 @@ class CrossPoint:
 
         return False
 
-    def _execute_eject_to_eq_fifo(self, plan: Dict[str, Any]) -> bool:
+    def _execute_EQ_ejection(self, plan: Dict[str, Any]) -> bool:
         """
         执行下环到EjectQueue FIFO的传输
 
@@ -1048,12 +1113,13 @@ class CrossPoint:
             original_slot.assign_flit(flit)
             return False
 
-    def _execute_ring_bridge_reinject(self, plan: Dict[str, Any]) -> bool:
+    def _execute_RB_injection(self, plan: Dict[str, Any], ring_bridge=None) -> bool:
         """
         执行Ring Bridge重新注入
 
         Args:
             plan: 注入计划
+            ring_bridge: Ring Bridge实例
 
         Returns:
             是否执行成功
@@ -1061,17 +1127,14 @@ class CrossPoint:
         direction = plan["direction"]
         channel = plan["channel"]
 
-        # 从ring_bridge获取实际flit
-        if self.parent_node and hasattr(self.parent_node, "get_ring_bridge_output_flit"):
-            actual_flit = self.parent_node.get_ring_bridge_output_flit(direction, channel)
-            if actual_flit.packet_id == 6 and actual_flit.flit_id == 0:
-                print(actual_flit)
-            if actual_flit:
-                return self._inject_flit_to_departure_slice(actual_flit, direction, channel)
+        # 从内部缓冲区获取flit
+        if self.injected_flits_buffer["RB"][channel]:
+            actual_flit = self.injected_flits_buffer["RB"][channel].pop(0)
+            return self._inject_flit_to_departure_slice(actual_flit, direction, channel)
 
         return False
 
-    def _execute_fifo_injection(self, plan: Dict[str, Any]) -> bool:
+    def _execute_IQ_injection(self, plan: Dict[str, Any]) -> bool:
         """
         执行普通FIFO注入
 
@@ -1081,20 +1144,19 @@ class CrossPoint:
         Returns:
             是否执行成功
         """
-        source_fifo = plan["source_fifo"]
         direction = plan["direction"]
         channel = plan["channel"]
 
-        # 从FIFO读取flit
-        flit = source_fifo.read_output()
-        if flit:
+        # 从内部缓冲区获取flit
+        if self.injected_flits_buffer["IQ"][channel]:
+            flit = self.injected_flits_buffer["IQ"][channel].pop(0)
             return self._inject_flit_to_departure_slice(flit, direction, channel)
 
         return False
 
     def _inject_flit_to_departure_slice(self, flit: CrossRingFlit, direction: str, channel: str) -> bool:
         """
-        将flit注入到departure slice
+        将flit注入到departure slice（适配新的PipelinedFIFO架构，简化版本）
 
         Args:
             flit: 要注入的flit
@@ -1108,26 +1170,48 @@ class CrossPoint:
         if not departure_slice:
             return False
 
-        current_slot = departure_slice.peek_current_slot(channel)
+        # 创建承载flit的slot
+        new_slot = CrossRingSlot(
+            slot_id=f"{departure_slice.slice_id}_{channel}_injected_{flit.packet_id}",
+            cycle=getattr(self, 'current_cycle', 0),
+            direction=BasicDirection.LOCAL,
+            channel=channel
+        )
+        new_slot.assign_flit(flit)
 
-        # 使用预约的slot或空闲slot
-        if current_slot.is_reserved and current_slot.itag_reserver_id == self.node_id:
-            # 使用预约的slot
-            current_slot.assign_flit(flit)
-            current_slot.clear_itag()  # 清除预约标记
+        # 处理I-Tag释放（在注入前处理）
+        if flit.itag_reserved:
+            flit.itag_reserved = False
+            self.itag_reservation_counts[direction][channel] -= 1
+            
+            # 检查是否使用了预约slot
+            current_slot = departure_slice.peek_current_slot(channel)
+            if current_slot and current_slot.is_reserved and current_slot.itag_reserver_id == self.node_id:
+                # 使用预约slot，立即释放
+                self.stats["itag_releases"][channel] += 1
+            else:
+                # 使用非预约slot，延迟释放
+                self.itag_to_release_counts[direction][channel] += 1
 
-            # 清除本地预约状态
-            ring_type = "horizontal" if direction in ["TL", "TR"] else "vertical"
-            self.itag_reservations[channel][ring_type].active = False
-
-        elif not current_slot.is_occupied:
-            # 使用空闲slot
-            current_slot.assign_flit(flit)
-
+        # 使用RingSlice的特殊接口注入slot（自动处理预约slot和标准流控）
+        success = departure_slice.write_slot_or_modify_reserved(new_slot, channel, self.node_id)
+        
+        if success:
+            # 更新flit状态信息
+            self._update_flit_injection_status(flit, direction, new_slot)
+            return True
         else:
-            # slot被占用，注入失败
             return False
 
+    def _update_flit_injection_status(self, flit: CrossRingFlit, direction: str, slot: CrossRingSlot) -> None:
+        """
+        更新注入后的flit状态信息（提取的公共逻辑）
+        
+        Args:
+            flit: 注入的flit
+            direction: 注入方向
+            slot: 承载flit的slot
+        """
         # 更新flit状态信息
         flit.current_node_id = self.node_id
 
@@ -1149,13 +1233,11 @@ class CrossPoint:
         flit.link_dest_node = target_node
 
         # 设置flit位置为标准格式
-        flit.flit_position = f"{self.node_id}->{target_node}:0"
+        flit.flit_position = "Ring_slice"
 
         # 设置slot索引（如果有的话）
-        if current_slot:
-            flit.current_slot_index = current_slot.slot_id
-
-        return True
+        if slot:
+            flit.current_slot_index = slot.slot_id
 
     def _calculate_target_node_for_direction(self, direction: str) -> int:
         """
@@ -1259,9 +1341,7 @@ class CrossPoint:
             "direction": self.direction.value,
             "managed_directions": self.managed_directions,
             # Slice连接状态
-            "slice_connections": {
-                direction: {slice_type: slice_ref is not None for slice_type, slice_ref in slices.items()} for direction, slices in self.slice_connections.items()
-            },
+            "slice_connections": {direction: {slice_type: slice_ref is not None for slice_type, slice_ref in slices.items()} for direction, slices in self.slice_connections.items()},
             # E-Tag状态
             "etag_entry_managers": {
                 direction: {
@@ -1278,14 +1358,15 @@ class CrossPoint:
             "t0_global_queues": {channel: {"length": len(queue), "first_slot_id": queue[0].slot_id if queue else None} for channel, queue in self.t0_global_queues.items()},
             # I-Tag预约状态
             "itag_reservations": {
-                channel: {
-                    ring_type: {"active": reservation.active, "slot_id": reservation.reserved_slot_id, "wait_cycles": reservation.wait_cycles}
-                    for ring_type, reservation in reservations.items()
-                }
+                channel: {ring_type: {"active": reservation.active, "slot_id": reservation.reserved_slot_id, "wait_cycles": reservation.wait_cycles} for ring_type, reservation in reservations.items()}
                 for channel, reservations in self.itag_reservations.items()
             },
             # 等待队列状态
             "injection_wait_queues": {channel: len(queue) for channel, queue in self.injection_wait_queues.items()},
+            # I-Tag预约统计
+            "itag_reservation_counts": {direction: counts.copy() for direction, counts in self.itag_reservation_counts.items()},
+            "itag_pending_counts": {direction: counts.copy() for direction, counts in self.itag_pending_counts.items()},
+            "itag_to_release_counts": {direction: counts.copy() for direction, counts in self.itag_to_release_counts.items()},
             # 统计信息
             "stats": self.stats.copy(),
         }

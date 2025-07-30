@@ -502,33 +502,33 @@ class LinkStateVisualizer:
                 # TR (右) 和 TD (下): 使用side1
                 return "side1"
             elif "_TL_" in link_id or "_TU_" in link_id:
-                # TL (左) 和 TU (上): 使用side2  
+                # TL (左) 和 TU (上): 使用side2
                 return "side2"
             else:
                 # 默认情况
                 return "side1"
-        
+
         target_side = get_link_direction_side(link_id, src_id, dest_id)
-        
+
         # 检查是否已经为这对节点创建了slice（保证对齐）
         if node_pair and node_pair in self.node_pair_slots:
             # 使用已有的slot位置，但为当前链路创建独立的rectangle
             existing_slots = self.node_pair_slots[node_pair]
             # 为TL/TU方向的链路重新排序slot位置
             target_side_slots = [s for s in existing_slots if s[1].startswith(target_side + "_")]
-            
+
             if "_TL_" in link_id or "_TU_" in link_id:
                 # TL/TU方向需要反转slice的物理位置顺序
                 target_side_slots = list(reversed(target_side_slots))
-            
+
             for slot_positions, slot_id in target_side_slots:
                 slot_x, slot_y = slot_positions
                 slot_size = 0.08  # 保持与原来相同的大小
-                
+
                 # 创建当前链路专用的rectangle
                 slot = Rectangle((slot_x, slot_y), slot_size, slot_size, facecolor="none", edgecolor="gray", linewidth=0.8, linestyle="--", alpha=0.7)
                 self.link_ax.add_patch(slot)
-                
+
                 # 为当前链路创建独立的映射（不共享rect）
                 self.rect_info_map[slot] = ([link_id], None, slot_id)
         else:
@@ -806,7 +806,6 @@ class LinkStateVisualizer:
 
     def _on_window_close(self, event):
         """处理窗口关闭事件"""
-        print("🔒 检测到窗口关闭事件，触发可视化清理...")
         if hasattr(self, "_parent_model") and self._parent_model:
             if hasattr(self._parent_model, "cleanup_visualization"):
                 self._parent_model.cleanup_visualization()
@@ -917,17 +916,7 @@ class LinkStateVisualizer:
         if hasattr(self, "_parent_model") and self._parent_model:
             # 调用模型的cleanup_visualization方法
             if hasattr(self._parent_model, "cleanup_visualization"):
-                print("🔑 用户按下Q键，正在退出可视化...")
                 self._parent_model.cleanup_visualization()
-            else:
-                print("⚠️  模型不支持cleanup_visualization方法")
-
-        # 关闭matplotlib窗口
-        # try:
-        #     import matplotlib.pyplot as plt
-        #     plt.close("all")
-        # except Exception as e:
-        #     print(f"⚠️  关闭matplotlib窗口失败: {e}")
 
     def _reset_view(self):
         """重置视图"""
@@ -1123,20 +1112,27 @@ CrossRing可视化控制键:
                                             }
                                         return None
 
-                                    # 检查所有pipeline阶段：current_slots, input_buffer, output_buffer
-                                    pipeline_stages = ["current_slots", "input_buffer", "output_buffer"]
-
-                                    # 修复：只从当前链路通道获取对应的slot数据
+                                    # RingSlice重构后，使用新的接口获取slot数据
                                     slot_info = None
 
-                                    # 按优先级检查pipeline阶段
-                                    for stage in pipeline_stages:
-                                        if hasattr(slice_obj, stage):
-                                            stage_slots = getattr(slice_obj, stage)
-                                            if isinstance(stage_slots, dict) and channel in stage_slots:
-                                                slot_info = extract_flit_from_slot(stage_slots[channel], channel)
-                                                if slot_info:  # 找到有效flit就停止搜索
-                                                    break
+                                    # 方法1：尝试获取当前slot（输出位置）
+                                    current_slot = slice_obj.peek_current_slot(channel) if hasattr(slice_obj, 'peek_current_slot') else None
+                                    if current_slot:
+                                        slot_info = extract_flit_from_slot(current_slot, channel)
+                                    
+                                    # 方法2：如果没有找到，尝试从内部pipeline获取
+                                    if not slot_info and hasattr(slice_obj, 'internal_pipelines'):
+                                        pipeline = slice_obj.internal_pipelines.get(channel)
+                                        if pipeline:
+                                            # 检查output register
+                                            if hasattr(pipeline, 'output_valid') and pipeline.output_valid and hasattr(pipeline, 'output_register'):
+                                                slot_info = extract_flit_from_slot(pipeline.output_register, channel)
+                                            
+                                            # 检查internal queue
+                                            if not slot_info and hasattr(pipeline, 'internal_queue') and len(pipeline.internal_queue) > 0:
+                                                # 获取队列中的第一个slot
+                                                first_slot = list(pipeline.internal_queue)[0]
+                                                slot_info = extract_flit_from_slot(first_slot, channel)
 
                                     # 只保存当前通道的slot数据
                                     slice_data["slots"][channel] = slot_info
@@ -1329,15 +1325,15 @@ CrossRing可视化控制键:
                     # 提取slot中的slice索引
                     rect_slice_idx = int(rect_slot_idx.split("_")[1])
                     rect_side_name = rect_slot_idx.split("_")[0]
-                    
+
                     # 根据链路方向和side进行索引转换
                     target_slice_idx = slice_idx
-                    if (("_TL_" in link_id or "_TU_" in link_id) and rect_side_name == "side2"):
+                    if ("_TL_" in link_id or "_TU_" in link_id) and rect_side_name == "side2":
                         # TL/TU方向使用side2时，需要反转索引：1↔6, 2↔5, 3↔4
                         slice_per_link = getattr(self.config.basic_config, "SLICE_PER_LINK", 8)
                         max_visible_idx = slice_per_link - 2  # 6 (跳过0和7)
                         target_slice_idx = max_visible_idx + 1 - slice_idx  # 1→6, 2→5, 3→4, 4→3, 5→2, 6→1
-                    
+
                     # 匹配转换后的索引
                     if rect_slice_idx == target_slice_idx:
                         # Debug: 显示最终匹配成功的情况

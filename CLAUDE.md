@@ -283,12 +283,20 @@ ip_eject_channel_buffers → h2l_fifos → IP.get_eject_flit()
    - 垂直CrossPoint：处理Ring Bridge输出的RB_TU/RB_TD
 
 2. **Tag Mechanisms**:
-   - I-Tag: Triggered when injection waits exceed threshold (80-100 cycles)
-   - E-Tag: **下环entry分配机制**，基于优先级和entry可用性判断是否可以下环
+   - **I-Tag机制**: CrossPoint注入防饥饿机制
+     - **触发条件**: flit注入等待时间超过配置阈值(80-100周期)
+     - **预约机制**: 只预约当前slot，不搜索其他slot
+     - **flit状态**: 每个flit独立管理itag_reserved状态和injection_wait_start_cycle
+     - **释放逻辑**: 三个释放点协调工作
+       - 立即释放: 使用预约slot时立即清除预约和flit状态
+       - 延迟释放: flit用非预约slot时，flit状态清除但slot预约延迟释放
+       - 回收释放: 每周期检查并回收本节点的空预约slot
+     - **统计跟踪**: itag_reservation_counts、itag_pending_counts、itag_to_release_counts
+     - **两阶段执行**: compute阶段检查所有FIFO中的flit超时，update阶段执行预约释放
+   - **E-Tag机制**: **下环entry分配机制**，基于优先级和entry可用性判断是否可以下环
      - **Entry分配**: T2只用T2 entry，T1优先用T1后用T2，T0依次降级使用
      - **防饥饿**: 下环失败时触发优先级升级T2→T1→T0，有方向限制
      - **T0特殊**: 使用T0专用entry时需要全局队列轮询仲裁
-   - T0 requires round-robin arbitration via global queue
 
 3. **Non-Wrap-Around Topology**:
    - Edge nodes connect to themselves, not wrapping around

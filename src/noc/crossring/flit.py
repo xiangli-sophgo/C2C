@@ -35,6 +35,11 @@ class CrossRingFlit(BaseFlit):
     itag_h: bool = False  # 水平ITag
     itag_v: bool = False  # 垂直ITag
     itag_reservation: int = 0  # I-Tag预留信息
+    
+    # I-Tag机制新增字段
+    injection_wait_start_cycle: int = -1  # 开始等待注入的周期
+    itag_reserved: bool = False  # 是否已预约I-Tag
+    itag_timeout: bool = False  # 是否已超时
 
     # 环路移动状态
     moving_direction: int = 1  # 1 (顺时针) | -1 (逆时针)
@@ -360,6 +365,9 @@ class CrossRingFlit(BaseFlit):
         self.itag_h = False
         self.itag_v = False
         self.itag_reservation = 0
+        self.injection_wait_start_cycle = -1
+        self.itag_reserved = False
+        self.itag_timeout = False
         self.moving_direction = 1
         self.moving_direction_v = 1
         self.circuits_completed_h = 0

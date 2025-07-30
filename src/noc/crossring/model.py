@@ -918,11 +918,11 @@ class CrossRingModel(BaseNoCModel):
                 ip_interface.step_compute_phase(self.cycle)
                 ip_interface.step_update_phase(self.cycle)
 
-        self._step_link_compute_phase()
-        self._step_link_update_phase()
-
         self._step_node_compute_phase()
         self._step_node_update_phase()
+
+        self._step_link_compute_phase()
+        self._step_link_update_phase()
 
         # 更新全局统计
         self._update_global_statistics()
@@ -1058,9 +1058,7 @@ class CrossRingModel(BaseNoCModel):
         # 调用base类的enable_debug，传递level=1作为兼容参数
         super().setup_debug(1, trace_packets, sleep_time)
 
-    def setup_result_analysis(
-        self, flow_distribution: bool = False, bandwidth_analysis: bool = False, latency_analysis: bool = False, save_figures: bool = True, save_dir: str = ""
-    ) -> None:
+    def setup_result_analysis(self, flow_distribution: bool = False, bandwidth_analysis: bool = False, latency_analysis: bool = False, save_figures: bool = True, save_dir: str = "") -> None:
         """
         配置结果分析
 
@@ -1119,21 +1117,11 @@ class CrossRingModel(BaseNoCModel):
             self._visualization_frame_interval = 0.0  # 禁用时间间隔
             self.debug_config["sleep_time"] = 0.0  # 同时禁用debug模式的延迟
             self.user_interrupted = False  # 重置中断标志，让仿真继续运行
-            print("🚀 可视化已退出，仿真将无延迟运行")
 
         if self._realtime_visualizer:
             try:
-                import matplotlib.pyplot as plt
-
-                # 只关闭可视化相关的图形，不关闭所有窗口
-                # if hasattr(self._realtime_visualizer, 'fig') and self._realtime_visualizer.fig:
-                #     plt.close(self._realtime_visualizer.fig)
-                # else:
-                #     # 如果无法获取特定图形，只关闭当前活跃图形
-                #     plt.close()
                 self._realtime_visualizer = None
                 self._visualization_initialized = False
-                print("📊 可视化窗口已关闭")
             except Exception as e:
                 print(f"⚠️  关闭可视化失败: {e}")
 
@@ -1282,9 +1270,7 @@ class CrossRingModel(BaseNoCModel):
             "cycle_accurate": cycle_accurate,
         }
 
-    def analyze_simulation_results(
-        self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output", verbose: bool = True
-    ) -> Dict[str, Any]:
+    def analyze_simulation_results(self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output", verbose: bool = True) -> Dict[str, Any]:
         """
         分析仿真结果 - 调用CrossRing专用分析器
 
@@ -1327,9 +1313,7 @@ class CrossRingModel(BaseNoCModel):
         analyzer = ResultAnalyzer()
         # 传递可视化配置到ResultAnalyzer
         viz_config = getattr(self, "_viz_config", {})
-        analysis_results = analyzer.analyze_noc_results(
-            self.request_tracker, self.config, self, results, enable_visualization, save_results, timestamped_dir, save_figures, verbose, viz_config
-        )
+        analysis_results = analyzer.analyze_noc_results(self.request_tracker, self.config, self, results, enable_visualization, save_results, timestamped_dir, save_figures, verbose, viz_config)
 
         # ResultAnalyzer现在会根据save_figures参数直接处理显示或保存
 
@@ -1756,7 +1740,6 @@ class CrossRingModel(BaseNoCModel):
 
             # 检查matplotlib窗口是否关闭（用户点击X或按q）
             if not plt.get_fignums():  # 如果没有打开的图形窗口
-                print("🔒 检测到可视化窗口已关闭，触发清理...")
                 self.cleanup_visualization()
                 return
 
@@ -1784,24 +1767,6 @@ class CrossRingModel(BaseNoCModel):
             # 出错时也触发清理，避免卡住
             self.cleanup_visualization()
 
-    # def close_visualization(self):
-    #     """关闭可视化窗口"""
-    #     if self._realtime_visualizer:
-    #         try:
-    #             import matplotlib.pyplot as plt
-
-    #             # # 只关闭可视化相关的图形，不关闭所有窗口
-    #             # if hasattr(self._realtime_visualizer, 'fig') and self._realtime_visualizer.fig:
-    #             #     plt.close(self._realtime_visualizer.fig)
-    #             # else:
-    #             #     # 如果无法获取特定图形，只关闭当前活跃图形
-    #             #     plt.close()
-    #             self._realtime_visualizer = None
-    #             self._visualization_initialized = False
-    #             print("📊 可视化窗口已关闭")
-    #         except Exception as e:
-    #             print(f"⚠️  关闭可视化失败: {e}")
-
     def __del__(self):
         """析构函数"""
 
@@ -1809,12 +1774,7 @@ class CrossRingModel(BaseNoCModel):
 
     def __repr__(self) -> str:
         """字符串表示"""
-        return (
-            f"CrossRingModel({self.config.config_name}, "
-            f"{self.config.NUM_ROW}x{self.config.NUM_COL}, "
-            f"cycle={self.cycle}, "
-            f"active_requests={self.get_total_active_requests()})"
-        )
+        return f"CrossRingModel({self.config.config_name}, " f"{self.config.NUM_ROW}x{self.config.NUM_COL}, " f"cycle={self.cycle}, " f"active_requests={self.get_total_active_requests()})"
 
     # ========== 统一接口方法（用于兼容性） ==========
 
@@ -2105,7 +2065,7 @@ class CrossRingModel(BaseNoCModel):
                         current_time_ns = cycle * cycle_time_ns
 
         except KeyboardInterrupt:
-            print("🛑 用户中断仿真，触发可视化清理...")
+            print("🛑 仿真中断...")
             self.cleanup_visualization()  # 清理可视化资源
             self.user_interrupted = True
             # 不重新抛出异常，继续执行结果分析

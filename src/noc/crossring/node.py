@@ -128,8 +128,8 @@ class CrossRingNode:
         # 2. CrossPoint计算阶段（先计算弹出决策）
         eject_fifos = self.eject_queue.eject_input_fifos
         inject_fifos = self.inject_queue.inject_input_fifos
-        self.horizontal_crosspoint.step_compute_phase(cycle, inject_fifos, eject_fifos)
-        self.vertical_crosspoint.step_compute_phase(cycle, inject_fifos, eject_fifos)
+        self.horizontal_crosspoint.step_compute_phase(cycle, inject_fifos, eject_fifos, self.ring_bridge)
+        self.vertical_crosspoint.step_compute_phase(cycle, inject_fifos, eject_fifos, self.ring_bridge)
 
         # 3. 计算仲裁决策（基于CrossPoint的弹出计划）
         self.inject_queue.compute_arbitration(cycle)
@@ -141,8 +141,8 @@ class CrossRingNode:
         更新阶段：基于计算阶段的决策执行状态修改。
         """
         # 1. CrossPoint更新阶段（先写入数据到FIFO）
-        self.horizontal_crosspoint.step_update_phase(cycle, self.inject_queue.inject_input_fifos, self.eject_queue.eject_input_fifos)
-        self.vertical_crosspoint.step_update_phase(cycle, self.inject_queue.inject_input_fifos, self.eject_queue.eject_input_fifos)
+        self.horizontal_crosspoint.step_update_phase(cycle, self.inject_queue.inject_input_fifos, self.eject_queue.eject_input_fifos, self.ring_bridge)
+        self.vertical_crosspoint.step_update_phase(cycle, self.inject_queue.inject_input_fifos, self.eject_queue.eject_input_fifos, self.ring_bridge)
 
         # 2. 执行所有仲裁决策（基于CrossPoint写入的数据）
         self.inject_queue.execute_arbitration(cycle)

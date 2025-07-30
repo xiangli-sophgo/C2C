@@ -217,8 +217,15 @@ class PipelinedFIFO:
             # 记录flit退出时间
             if hasattr(self.output_register, 'packet_id'):
                 self.stats.record_flit_exit(str(self.output_register.packet_id), self.current_cycle)
-            elif hasattr(self.output_register, '__hash__'):
-                self.stats.record_flit_exit(str(hash(self.output_register)), self.current_cycle)
+            elif hasattr(self.output_register, 'slot_id'):
+                # 处理CrossRingSlot对象
+                self.stats.record_flit_exit(str(self.output_register.slot_id), self.current_cycle)
+            else:
+                try:
+                    self.stats.record_flit_exit(str(hash(self.output_register)), self.current_cycle)
+                except TypeError:
+                    # 对象不可哈希，使用id代替
+                    self.stats.record_flit_exit(f"obj_{id(self.output_register)}", self.current_cycle)
                 
             return self.output_register
         else:
@@ -241,8 +248,15 @@ class PipelinedFIFO:
             # 记录flit进入时间
             if hasattr(data, 'packet_id'):
                 self.stats.record_flit_enter(str(data.packet_id), self.current_cycle)
+            elif hasattr(data, 'slot_id'):
+                # 处理CrossRingSlot对象
+                self.stats.record_flit_enter(str(data.slot_id), self.current_cycle)
             elif hasattr(data, '__hash__'):
-                self.stats.record_flit_enter(str(hash(data)), self.current_cycle)
+                try:
+                    self.stats.record_flit_enter(str(hash(data)), self.current_cycle)
+                except TypeError:
+                    # 对象不可哈希，使用id代替
+                    self.stats.record_flit_enter(f"obj_{id(data)}", self.current_cycle)
                 
             return True
         else:
@@ -284,14 +298,41 @@ class PipelinedFIFO:
             # 记录flit进入时间
             if hasattr(data, 'packet_id'):
                 self.stats.record_flit_enter(str(data.packet_id), self.current_cycle)
+            elif hasattr(data, 'slot_id'):
+                # 处理CrossRingSlot对象
+                self.stats.record_flit_enter(str(data.slot_id), self.current_cycle)
             elif hasattr(data, '__hash__'):
-                self.stats.record_flit_enter(str(hash(data)), self.current_cycle)
+                try:
+                    self.stats.record_flit_enter(str(hash(data)), self.current_cycle)
+                except TypeError:
+                    # 对象不可哈希，使用id代替
+                    self.stats.record_flit_enter(f"obj_{id(data)}", self.current_cycle)
                 
             return True
         else:
             self.stats.record_write_attempt(successful=False, is_priority=True)
             self.stats.record_overflow_attempt()
             return False
+    
+    def get_all_flits(self) -> List[Any]:
+        """
+        获取FIFO中所有flit的列表（用于I-Tag检查等场景）
+        
+        注意：此方法仅返回数据的副本，不会修改FIFO状态
+        
+        Returns:
+            包含所有flit的列表，按照FIFO顺序排列
+        """
+        all_flits = []
+        
+        # 首先添加internal_queue中的所有元素
+        all_flits.extend(list(self.internal_queue))
+        
+        # 然后添加output_register中的元素（如果有效）
+        if self.output_valid and self.output_register:
+            all_flits.append(self.output_register)
+            
+        return all_flits
             
     def get_statistics(self) -> dict:
         """获取FIFO统计信息"""

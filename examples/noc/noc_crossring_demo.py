@@ -74,12 +74,12 @@ def main():
     model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)  # Traffic文件设置，节点的IP会根据数据流连接。
     model.setup_debug(trace_packets=[1], sleep_time=0.0)
     # 配置实时可视化
-    model.setup_visualization(enable=True, update_interval=0.3, start_cycle=225)
+    model.setup_visualization(enable=True, update_interval=0.3, start_cycle=0)
     model.setup_result_analysis(flow_distribution=0, bandwidth_analysis=0, latency_analysis=0, save_figures=0, save_dir=save_dir)  # 可视化设置
 
     # 4. 运行仿真 - 延长时间以观察flit流动
     print("▶️  开始仿真")
-    model.run_simulation(max_time_ns=4000.0, progress_interval_ns=1000.0, results_analysis=1, verbose=1)
+    model.run_simulation(max_time_ns=200.0, progress_interval_ns=1000.0, results_analysis=1, verbose=1)
 
 
 if __name__ == "__main__":

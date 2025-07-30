@@ -895,9 +895,9 @@ class CrossRingNodeVisualizer:
                                         arrival_slice = slices.get("arrival")
                                         departure_slice = slices.get("departure")
 
-                                        # 从RingSlice对象的current_slots中提取slot，再从slot中提取flit数据
-                                        arrival_slot = arrival_slice.current_slots.get(current_channel) if (arrival_slice and hasattr(arrival_slice, "current_slots")) else None
-                                        departure_slot = departure_slice.current_slots.get(current_channel) if (departure_slice and hasattr(departure_slice, "current_slots")) else None
+                                        # 从RingSlice对象中提取slot，使用新的接口
+                                        arrival_slot = arrival_slice.peek_current_slot(current_channel) if (arrival_slice and hasattr(arrival_slice, "peek_current_slot")) else None
+                                        departure_slot = departure_slice.peek_current_slot(current_channel) if (departure_slice and hasattr(departure_slice, "peek_current_slot")) else None
 
                                         # 从slot中提取实际的flit数据
                                         arrival_flit = getattr(arrival_slot, "flit", None) if (arrival_slot and getattr(arrival_slot, "valid", False)) else None

@@ -147,57 +147,23 @@ class BaseLink(ABC):
                 slot = LinkSlot(slot_id=i, cycle=0, direction=BasicDirection.LOCAL, channel=channel)
                 self.slots[channel].append(slot)
 
-
-    def get_available_slot(self, channel: str, priority: BasicPriority = BasicPriority.LOW) -> Optional[LinkSlot]:
+    def step_compute_phase(self, cycle: int) -> None:
         """
-        获取可用的slot
+        计算阶段：
 
         Args:
-            channel: 通道类型
-            priority: 基础优先级
-
-        Returns:
-            可用的slot，如果没有则返回None
-        """
-        channel_slots = self.slots[channel]
-
-        # 查找可用slots
-        available_slots = [slot for slot in channel_slots if not slot.is_occupied]
-
-        if not available_slots:
-            return None
-
-        # 简单选择第一个可用的，子类可以重写实现复杂逻辑
-        return available_slots[0]
-
-    def transmit_flit(self, flit: BaseFlit, channel: str, cycle: int) -> bool:
-        """
-        传输flit（基础实现）
-
-        Args:
-            flit: 要传输的flit
-            channel: 通道类型
             cycle: 当前周期
-
-        Returns:
-            是否成功传输
         """
-        # 获取可用slot
-        slot = self.get_available_slot(channel)
-        if slot is None:
-            return False
+        pass
 
-        # 分配flit到slot
-        if slot.assign_flit(flit):
-            slot.cycle = cycle
+    def step_update_phase(self, cycle: int) -> None:
+        """
+        更新阶段：
 
-            # 更新统计
-            self.stats["flits_transmitted"][channel] += 1
-            self.stats["slots_utilized"][channel] += 1
-
-            return True
-
-        return False
+        Args:
+            cycle: 当前周期
+        """
+        pass
 
     def update_congestion_state(self, cycle: int) -> None:
         """
@@ -233,7 +199,6 @@ class BaseLink(ABC):
         if utilization > 0.8:  # 高拥塞阈值
             self.congestion_state[channel]["blocked_cycles"] += 1
 
-
     def get_slot_status(self, channel: str) -> Dict[str, Any]:
         """
         获取指定通道的slot状态
@@ -253,7 +218,6 @@ class BaseLink(ABC):
             "avg_wait_cycles": sum(slot.wait_cycles for slot in channel_slots) / len(channel_slots),
             "max_wait_cycles": max((slot.wait_cycles for slot in channel_slots), default=0),
         }
-
 
     def get_link_stats(self) -> Dict[str, Any]:
         """
@@ -281,26 +245,3 @@ class BaseLink(ABC):
             "total_wait_cycles": 0,
             "blocked_transmissions": 0,
         }
-
-    def step(self, cycle: int) -> None:
-        """
-        执行一个时钟周期的处理
-
-        Args:
-            cycle: 当前周期
-        """
-        # 更新拥塞状态
-        self.update_congestion_state(cycle)
-
-        # 处理slot传输（子类实现具体逻辑）
-        self._process_slot_transmission(cycle)
-
-    @abstractmethod
-    def _process_slot_transmission(self, cycle: int) -> None:
-        """
-        处理slot传输逻辑
-
-        Args:
-            cycle: 当前周期
-        """
-        pass
