@@ -336,12 +336,18 @@ class RingSlice:
         self.position = position
         self.num_channels = num_channels
 
-        # 当前存储的Slots - 每个通道一个
-        self.current_slots: Dict[str, Optional[CrossRingSlot]] = {"req": None, "rsp": None, "data": None}
+        # 当前存储的Slots - 每个通道一个，预创建空slot
+        self.current_slots: Dict[str, Optional[CrossRingSlot]] = {}
+        for channel in ["req", "rsp", "data"]:
+            # 预创建空slot，而不是None
+            self.current_slots[channel] = CrossRingSlot(slot_id=f"{slice_id}_{channel}_slot", cycle=0, direction=BasicDirection.LOCAL, channel=channel)
 
-        # 输入/输出缓存 - 用于流水线传输
-        self.input_buffer: Dict[str, Optional[CrossRingSlot]] = {"req": None, "rsp": None, "data": None}
-        self.output_buffer: Dict[str, Optional[CrossRingSlot]] = {"req": None, "rsp": None, "data": None}
+        # 输入/输出缓存 - 用于流水线传输，也预创建空slot
+        self.input_buffer: Dict[str, Optional[CrossRingSlot]] = {}
+        self.output_buffer: Dict[str, Optional[CrossRingSlot]] = {}
+        for channel in ["req", "rsp", "data"]:
+            self.input_buffer[channel] = CrossRingSlot(slot_id=f"{slice_id}_{channel}_input", cycle=0, direction=BasicDirection.LOCAL, channel=channel)
+            self.output_buffer[channel] = CrossRingSlot(slot_id=f"{slice_id}_{channel}_output", cycle=0, direction=BasicDirection.LOCAL, channel=channel)
 
         # 上下游连接
         self.upstream_slice: Optional["RingSlice"] = None
@@ -355,12 +361,12 @@ class RingSlice:
             "total_cycles": 0,
         }
 
-    def receive_slot(self, slot: Optional[CrossRingSlot], channel: str) -> bool:
+    def receive_slot(self, source_slot: Optional[CrossRingSlot], channel: str) -> bool:
         """
-        从上游接收Slot
+        从上游接收Flit内容（更新现有slot中的flit）
 
         Args:
-            slot: 接收的Slot，可以为None(空槽)
+            source_slot: 源Slot，可以为None(表示传输空slot)
             channel: 通道类型
 
         Returns:
@@ -369,28 +375,36 @@ class RingSlice:
         if channel not in self.input_buffer:
             return False
 
-        # 检查输入缓存是否已满
-        # 修复：允许有效slot覆盖空slot（无flit的slot）
-        if self.input_buffer[channel] is not None:
-            existing_slot = self.input_buffer[channel]
-            # 如果是空slot且新slot有效，允许覆盖
-            if (not existing_slot.is_occupied and not hasattr(existing_slot, "flit") or existing_slot.flit is None) and (
-                slot is not None and slot.is_occupied and slot.flit is not None
-            ):
-                # 允许覆盖空slot
-                pass
-            else:
-                return False  # 输入缓存已满，无法接收
+        # 获取现有的input_buffer slot
+        existing_slot = self.input_buffer[channel]
+        if existing_slot is None:
+            print(f"⚠️ 警告：slice {self.slice_id} 的 {channel} 通道input_buffer没有预创建的slot")
+            return False
 
-        self.input_buffer[channel] = slot
+        # 检查是否可以接收：现有slot必须为空（不占用）
+        if existing_slot.is_occupied:
+            return False  # 输入缓存已满，无法接收
 
-        if slot is not None:
-            # 更新slot中flit的位置信息
-            if slot.flit is not None:
-                slot.flit.current_link_id = self.slice_id
-                slot.flit.current_slice_index = self.position
-                slot.flit.current_slot_index = slot.slot_id
-                slot.flit.current_position = self.position
+        # 如果传入的是有效slot，复制其内容到现有slot
+        if source_slot is not None and source_slot.is_occupied:
+            # 复制slot内容而不是替换整个对象
+            existing_slot.flit = source_slot.flit
+            existing_slot.valid = source_slot.valid
+            existing_slot.itag_reserved = source_slot.itag_reserved
+            existing_slot.itag_direction = source_slot.itag_direction
+            existing_slot.itag_reserver_id = source_slot.itag_reserver_id
+            existing_slot.etag_marked = source_slot.etag_marked
+            existing_slot.etag_priority = source_slot.etag_priority
+            existing_slot.etag_direction = source_slot.etag_direction
+            existing_slot.wait_cycles = source_slot.wait_cycles
+            existing_slot.starvation_counter = source_slot.starvation_counter
+
+            # 更新flit的位置信息
+            if existing_slot.flit is not None:
+                existing_slot.flit.current_link_id = self.slice_id
+                existing_slot.flit.current_slice_index = self.position
+                existing_slot.flit.current_slot_index = existing_slot.slot_id
+                existing_slot.flit.current_position = self.position
 
                 # 设置链路源和目标节点信息并格式化位置（从slice_id解析）
                 # slice_id格式：
@@ -411,19 +425,26 @@ class RingSlice:
                             link_parts = parts[:4]  # 取link_id部分
                             dest = int(link_parts[-1])  # 最后一个数字部分作为目标
 
-                        slot.flit.link_source_node = source
-                        slot.flit.link_dest_node = dest
+                        existing_slot.flit.link_source_node = source
+                        existing_slot.flit.link_dest_node = dest
                         # 使用位置特定格式：source->dest:slice_index
-                        slot.flit.flit_position = f"{source}->{dest}:{self.position}"
+                        existing_slot.flit.flit_position = f"{source}->{dest}:{self.position}"
                     else:
                         # 如果解析失败，尝试从slice_id中提取节点信息
-                        slot.flit.flit_position = f"UNKNOWN_LINK:{self.position}"
+                        existing_slot.flit.flit_position = f"UNKNOWN_LINK:{self.position}"
                 except (ValueError, IndexError) as e:
                     # 解析失败时也尝试提供有意义的位置信息
-                    slot.flit.flit_position = f"PARSE_ERROR:{self.position}"
+                    existing_slot.flit.flit_position = f"PARSE_ERROR:{self.position}"
 
             self.stats["slots_received"][channel] += 1
         else:
+            # 接收空slot或None，确保现有slot为空状态
+            existing_slot.flit = None
+            existing_slot.valid = False
+            existing_slot.itag_reserved = False
+            existing_slot.etag_marked = False
+            existing_slot.wait_cycles = 0
+            existing_slot.starvation_counter = 0
             self.stats["empty_cycles"][channel] += 1
 
         return True
@@ -451,35 +472,46 @@ class RingSlice:
 
     def step_compute_phase(self, cycle: int) -> None:
         """
-        计算阶段：确定传输决策，不修改状态
-
-        计算哪些slot需要移动，但不执行实际的移动操作
-
+        计算阶段：把current_slot放到下一级slice的输入位置
+        
+        这是两阶段执行模型的第一阶段，负责将当前slot传输到下游slice的输入缓冲区
+        
         Args:
             cycle: 当前周期
         """
-        # 计算传输决策，存储在临时变量中
-        # 这里只需要确定传输的可行性，不修改状态
-        self._next_cycle = cycle
-
-        # 预计算传输决策，但不执行
-        self._transfer_plan = {}
+        # 对每个通道执行current_slot到下游的传输
         for channel in ["req", "rsp", "data"]:
-            self._transfer_plan[channel] = {
-                "can_move_to_output": True,  # 当前槽总是可以移动到输出缓存
-                "can_move_to_current": True,  # 输入缓存总是可以移动到当前槽
-                "can_transmit_downstream": False,  # 默认不能传输
-            }
-
-            # 检查是否可以向下游传输
-            # 应该基于current_slots（将要移动到output_buffer的内容）来判断
-            if self.downstream_slice and self.current_slots[channel] is not None and self.downstream_slice.input_buffer.get(channel) is None:
-                self._transfer_plan[channel]["can_transmit_downstream"] = True
+            current_slot = self.current_slots[channel]
+            
+            # 如果有下游slice，将current_slot直接赋值给下游的input_buffer
+            if self.downstream_slice:
+                downstream_input_slot = self.downstream_slice.input_buffer.get(channel)
+                
+                # 检查下游input_buffer是否可以接收（必须为空）
+                if downstream_input_slot and not downstream_input_slot.is_occupied:
+                    # 直接将current_slot赋值给下游input_buffer
+                    self.downstream_slice.input_buffer[channel] = current_slot
+                    
+                    # 为当前slice创建新的空slot
+                    self.current_slots[channel] = CrossRingSlot(
+                        slot_id=f"{self.slice_id}_{channel}_slot", 
+                        cycle=cycle, 
+                        direction=BasicDirection.LOCAL, 
+                        channel=channel
+                    )
+                    
+                    # 更新flit位置信息
+                    if current_slot and current_slot.flit:
+                        current_slot.flit.current_slice_index = self.downstream_slice.position
+                        current_slot.flit.current_position = self.downstream_slice.position
+                        
+                    if current_slot and current_slot.is_occupied:
+                        self.stats["slots_transmitted"][channel] += 1
 
     def step_compute_phase_backup(self, cycle: int) -> None:
         """
         备份：原始的计算阶段实现
-        
+
         问题：在compute阶段检查下游可用性，但在update阶段执行传输时，
         下游状态可能已经改变，导致传输条件检查不准确，
         这是导致flit卡在自环slice的根本原因。
@@ -504,93 +536,36 @@ class RingSlice:
 
     def step_update_phase(self, cycle: int) -> None:
         """
-        更新阶段：修复版本 - 实时检查下游可用性并执行传输
-
-        修复方案：在update阶段实时检查下游可用性，而不是依赖compute阶段的预判，
-        这样可以解决flit卡在自环slice的问题。
-
+        更新阶段：把输入位置的slot放到current_slot位置上
+        
+        这是两阶段执行模型的第二阶段，负责将input_buffer的内容移动到current_slot
+        
         Args:
             cycle: 当前周期
         """
         self.stats["total_cycles"] += 1
 
-        # 修复版本：实时检查并执行传输
         for channel in ["req", "rsp", "data"]:
-            current_slot = self.current_slots[channel]
             input_slot = self.input_buffer[channel]
 
-
-            # 第一步：实时检查并尝试向下游传输当前slot
-            downstream_transmitted = False
-            if self.downstream_slice and current_slot is not None:
-                # 实时检查下游可用性，而不是依赖compute阶段的预判
-                downstream_available = self.downstream_slice.input_buffer.get(channel) is None
+            # 简单的内部移动：input_buffer -> current_slot
+            if input_slot:
+                # 直接将input_buffer的slot赋值给current_slot
+                self.current_slots[channel] = input_slot
                 
-                if downstream_available:
-                    transmission_success = self.downstream_slice.receive_slot(current_slot, channel)
-                    if transmission_success:
-                        downstream_transmitted = True
-                        self.stats["slots_transmitted"][channel] += 1
-
-            # 第二步：同时进行内部移动
-            if downstream_transmitted:
-                # 当前slot已传输，输入slot移动到当前位置
-                self.current_slots[channel] = input_slot
-                self.input_buffer[channel] = None
-            else:
-                # 当前slot未传输，移动到输出缓存，输入slot移动到当前位置
-                if current_slot is not None:
-                    self.output_buffer[channel] = current_slot
-
-                if input_slot is not None:
-                    self.current_slots[channel] = input_slot
-                    self.input_buffer[channel] = None
-
-            # 更新slot的等待时间
-            if self.current_slots[channel] is not None:
-                self.current_slots[channel].increment_wait()
-                self.current_slots[channel].cycle = cycle
-
-    def step_update_phase_backup(self, cycle: int) -> None:
-        """
-        备份：原始的更新阶段实现
-        
-        问题：依赖compute阶段的传输决策，但在多slice并行传输时，
-        compute阶段的判断可能不准确，导致flit无法正常传输。
-        """
-        self.stats["total_cycles"] += 1
-
-        # 两阶段模型：同时执行传输和更新操作
-        for channel in ["req", "rsp", "data"]:
-            current_slot = self.current_slots[channel]
-            input_slot = self.input_buffer[channel]
-
-            # 第一步：向下游传输当前slot（如果可以）
-            downstream_transmitted = False
-            if self._transfer_plan[channel]["can_transmit_downstream"] and self.downstream_slice and current_slot is not None:
-
-                if self.downstream_slice.receive_slot(current_slot, channel):
-                    downstream_transmitted = True
-                    self.stats["slots_transmitted"][channel] += 1
-
-            # 第二步：同时进行内部移动
-            if downstream_transmitted:
-                # 当前slot已传输，输入slot移动到当前位置
-                self.current_slots[channel] = input_slot
-                self.input_buffer[channel] = None
-            else:
-                # 当前slot未传输，移动到输出缓存，输入slot移动到当前位置
-                if current_slot is not None and self._transfer_plan[channel]["can_move_to_output"]:
-                    self.output_buffer[channel] = current_slot
-
-                if self._transfer_plan[channel]["can_move_to_current"]:
-                    self.current_slots[channel] = input_slot
-                    self.input_buffer[channel] = None
-
-            # 更新slot的等待时间
-            if self.current_slots[channel] is not None:
-                self.current_slots[channel].increment_wait()
-                self.current_slots[channel].cycle = cycle
+                # 为input_buffer创建新的空slot（为下个周期的compute阶段准备）
+                self.input_buffer[channel] = CrossRingSlot(
+                    slot_id=f"{self.slice_id}_{channel}_input", 
+                    cycle=cycle, 
+                    direction=BasicDirection.LOCAL, 
+                    channel=channel
+                )
+                
+                # 更新统计和等待时间
+                if input_slot.is_occupied:
+                    input_slot.increment_wait()
+                    input_slot.cycle = cycle
+                    self.stats["slots_received"][channel] += 1
 
     def step_downstream_transmission(self, cycle: int) -> None:
         """
@@ -605,8 +580,8 @@ class RingSlice:
             # Step 4: 向下游传输slot（实时检查下游可用性）
             if self.downstream_slice and self.output_buffer[channel] is not None:
                 # 实时检查下游是否可以接收
-                downstream_can_receive = self.downstream_slice.input_buffer.get(channel) is None
-                
+                downstream_can_receive = not self.downstream_slice.input_buffer.get(channel).is_occupied
+
                 if downstream_can_receive:
                     transmitted_slot = self.output_buffer[channel]
                     if self.downstream_slice.receive_slot(transmitted_slot, channel):
@@ -728,11 +703,7 @@ class CrossRingLink(BaseLink):
         # 初始化Ring Slice链
         self._initialize_ring_slices()
 
-        # Slot池 - 管理所有的CrossRingSlot
-        self.slot_pools: Dict[str, List[CrossRingSlot]] = {"req": [], "rsp": [], "data": []}
-
-        # 初始化Slot池
-        self._initialize_slot_pools()
+        # 不再需要Slot池，因为所有slot都已预创建
 
         # 初始化带宽统计跟踪器
         self.bandwidth_tracker = LinkBandwidthTracker()
@@ -740,13 +711,10 @@ class CrossRingLink(BaseLink):
         # 扩展父类统计信息，添加CrossRing特有的统计
         self.stats.update(
             {
-                "slots_created": {"req": 0, "rsp": 0, "data": 0},
-                "slots_destroyed": {"req": 0, "rsp": 0, "data": 0},
                 "utilization": {"req": 0.0, "rsp": 0.0, "data": 0.0},
                 "total_cycles": 0,
             }
         )
-
 
     def _initialize_ring_slices(self) -> None:
         """初始化Ring Slice链"""
@@ -758,17 +726,6 @@ class CrossRingLink(BaseLink):
                 slice_id = f"{self.link_id}_{channel}_slice_{i}"
                 ring_slice = RingSlice(slice_id, ring_type, i, 3)
                 self.ring_slices[channel].append(ring_slice)
-
-
-    def _initialize_slot_pools(self) -> None:
-        """初始化Slot池"""
-        for channel in ["req", "rsp", "data"]:
-            self.slot_pools[channel] = []
-            # 预创建一些slot，实际使用时动态分配
-            for i in range(self.num_slices * 2):  # 每个slice预分配2个slot
-                slot = CrossRingSlot(slot_id=i, cycle=0, direction=BasicDirection.LOCAL, channel=channel)
-                self.slot_pools[channel].append(slot)
-
 
     def get_ring_slice(self, channel: str, position: int) -> Optional[RingSlice]:
         """
@@ -789,64 +746,6 @@ class CrossRingLink(BaseLink):
             return slices[position]
 
         return None
-
-    def get_available_slot(self, channel: str) -> Optional[CrossRingSlot]:
-        """
-        获取可用的空闲Slot
-
-        Args:
-            channel: 通道类型
-
-        Returns:
-            可用的slot，如果没有则返回None
-        """
-        if channel not in self.slot_pools:
-            return None
-
-        for slot in self.slot_pools[channel]:
-            if slot.is_available:
-                return slot
-
-        # 如果池中没有可用slot，创建新的
-        return self._create_new_slot(channel)
-
-    def get_reserved_slot(self, channel: str, reserver_id: int) -> Optional[CrossRingSlot]:
-        """
-        获取被指定节点预约的Slot
-
-        Args:
-            channel: 通道类型
-            reserver_id: 预约者ID
-
-        Returns:
-            预约的slot，如果没有则返回None
-        """
-        if channel not in self.slot_pools:
-            return None
-
-        for slot in self.slot_pools[channel]:
-            if slot.is_reserved and slot.itag_reserver_id == reserver_id:
-                return slot
-
-        return None
-
-    def _create_new_slot(self, channel: str) -> CrossRingSlot:
-        """
-        创建新的Slot
-
-        Args:
-            channel: 通道类型
-
-        Returns:
-            新创建的slot
-        """
-        slot_id = len(self.slot_pools[channel])
-        new_slot = CrossRingSlot(slot_id=slot_id, cycle=0, channel=channel)
-
-        self.slot_pools[channel].append(new_slot)
-        self.stats["slots_created"][channel] += 1
-
-        return new_slot
 
     def step_compute_phase(self, cycle: int) -> None:
         """
@@ -1007,15 +906,6 @@ class CrossRingLink(BaseLink):
             "direction": self.direction.value,
             "num_slices": self.num_slices,
             "ring_slice_status": {channel: [slice.get_ring_slice_status() for slice in slices] for channel, slices in self.ring_slices.items()},
-            "slot_pool_status": {
-                channel: {
-                    "total_slots": len(pools),
-                    "available_slots": sum(1 for slot in pools if slot.is_available),
-                    "occupied_slots": sum(1 for slot in pools if slot.is_occupied),
-                    "reserved_slots": sum(1 for slot in pools if slot.is_reserved),
-                }
-                for channel, pools in self.slot_pools.items()
-            },
             "stats": self.stats.copy(),
         }
 
@@ -1089,8 +979,6 @@ class CrossRingLink(BaseLink):
 
         # 重置CrossRing特有的统计
         for channel in ["req", "rsp", "data"]:
-            self.stats["slots_created"][channel] = 0
-            self.stats["slots_destroyed"][channel] = 0
             self.stats["utilization"][channel] = 0.0
 
             # 重置Ring Slice统计
@@ -1104,7 +992,7 @@ class CrossRingLink(BaseLink):
 
     def get_slots(self, channel: str) -> List[CrossRingSlot]:
         """
-        获取指定通道的所有slots（兼容接口）
+        获取指定通道的所有slots（从所有slice中收集）
 
         Args:
             channel: 通道类型
@@ -1112,7 +1000,16 @@ class CrossRingLink(BaseLink):
         Returns:
             CrossRingSlot列表
         """
-        return self.slot_pools.get(channel, [])
+        slots = []
+        if channel in self.ring_slices:
+            for ring_slice in self.ring_slices[channel]:
+                if ring_slice.current_slots.get(channel):
+                    slots.append(ring_slice.current_slots[channel])
+                if ring_slice.input_buffer.get(channel):
+                    slots.append(ring_slice.input_buffer[channel])
+                if ring_slice.output_buffer.get(channel):
+                    slots.append(ring_slice.output_buffer[channel])
+        return slots
 
     # ========== BaseLink抽象方法实现 ==========
 
@@ -1168,7 +1065,7 @@ class CrossRingLink(BaseLink):
         """
         # 检查T2到T1升级
         if utilization > 0.7:
-            slots = self.slot_pools.get(channel, [])
+            slots = self.get_slots(channel)
             for slot in slots:
                 if slot.etag_priority == PriorityLevel.T2:
                     slot.etag_priority = PriorityLevel.T1
@@ -1176,7 +1073,7 @@ class CrossRingLink(BaseLink):
 
         # 检查T1到T0升级
         if utilization > 0.9:
-            slots = self.slot_pools.get(channel, [])
+            slots = self.get_slots(channel)
             for slot in slots:
                 if slot.etag_priority == PriorityLevel.T1:
                     slot.etag_priority = PriorityLevel.T0

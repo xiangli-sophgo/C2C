@@ -194,6 +194,12 @@ class CrossPoint:
         self.injection_transfer_plans: List[Dict[str, Any]] = []  # compute阶段确定的上环计划
         self.ejection_transfer_plans: List[Dict[str, Any]] = []  # compute阶段确定的下环计划
 
+        # CrossPoint内部缓冲区 - 存储compute阶段下环的flit
+        self.ejected_flits_buffer: Dict[str, Dict[str, List[CrossRingFlit]]] = {
+            "RB": {"req": [], "rsp": [], "data": []},  # 下环到Ring Bridge的flit
+            "EQ": {"req": [], "rsp": [], "data": []},  # 下环到EjectQueue的flit
+        }
+
         # 统计信息 - 用于性能分析和调试
         self.stats = {
             # 基础传输统计
@@ -265,7 +271,9 @@ class CrossPoint:
                 raise ValueError(f"错误的方向{sub_direction}")
 
             # 创建entry管理器
-            self.etag_entry_managers[sub_direction] = EntryAllocationTracker(total_depth=total_depth, t2_max_entries=t2_max, t1_max_entries=t1_max, has_dedicated_entries=has_dedicated)
+            self.etag_entry_managers[sub_direction] = EntryAllocationTracker(
+                total_depth=total_depth, t2_max_entries=t2_max, t1_max_entries=t1_max, has_dedicated_entries=has_dedicated
+            )
 
     def connect_slice(self, direction: str, slice_type: str, ring_slice: RingSlice, channel: str) -> None:
         """
@@ -297,9 +305,14 @@ class CrossPoint:
             node_inject_fifos: 节点的inject_input_fifos
             node_eject_fifos: 节点的eject_input_fifos
         """
-        # 清空上一周期的传输计划
+        # 清空上一周期的传输计划和缓冲区
         self.injection_transfer_plans.clear()
         self.ejection_transfer_plans.clear()
+
+        # 清空上一周期的下环缓冲区
+        for eject_target in self.ejected_flits_buffer:
+            for channel in self.ejected_flits_buffer[eject_target]:
+                self.ejected_flits_buffer[eject_target][channel].clear()
 
         # ========== 第一部分：下环分析和计划 ==========
         # 遍历所有管理方向的arrival slice，分析下环可能性
@@ -322,41 +335,67 @@ class CrossPoint:
 
                 if should_eject:
                     if eject_target == "RB":
-                        # 下环到Ring Bridge - 不需要检查FIFO状态
-                        self.ejection_transfer_plans.append(
-                            {
-                                "type": "eject_to_ring_bridge",
-                                "direction": direction,
-                                "channel": channel,
-                                "slot": current_slot,
-                                "flit": flit,
-                                "source_direction": direction,  # 记录来源方向用于Ring Bridge输入端口选择
-                            }
-                        )
+                        # 下环到Ring Bridge - 同样需要E-Tag机制判断
+                        # Ring Bridge的输入FIFO深度配置
+
+                        # 检查Ring Bridge输入FIFO状态
+                        if self.parent_node and hasattr(self.parent_node, "ring_bridge"):
+                            # 获取对应方向的Ring Bridge输入FIFO占用情况
+
+                            # 使用E-Tag机制判断是否可以下环到RB
+                            can_eject = self._can_eject_with_etag_mechanism(current_slot, channel, direction)
+
+                            if can_eject:
+                                # compute阶段立即从slot中取出flit并存储到内部缓冲区
+                                ejected_flit = current_slot.release_flit()
+                                if ejected_flit:
+                                    # 存储到RB缓冲区
+                                    self.ejected_flits_buffer["RB"][channel].append(ejected_flit)
+
+                                    # 添加下环计划供update阶段执行
+                                    self.ejection_transfer_plans.append(
+                                        {
+                                            "type": "eject_to_ring_bridge",
+                                            "direction": direction,
+                                            "channel": channel,
+                                            "flit": ejected_flit,
+                                            "source_direction": direction,  # 记录来源方向用于Ring Bridge输入端口选择
+                                            "original_slot": current_slot,  # 保留原slot引用用于清理
+                                        }
+                                    )
+                            else:
+                                # 下环失败，触发绕环和E-Tag升级处理
+                                self._handle_ejection_failure_in_compute(current_slot, channel, direction, cycle)
+                        else:
+                            # 如果无法获取Ring Bridge状态，跳过下环
+                            self._handle_ejection_failure_in_compute(current_slot, channel, direction, cycle)
 
                     elif eject_target == "EQ":
                         # 下环到EjectQueue - 需要检查目标FIFO状态
                         if direction in node_eject_fifos[channel]:
                             target_fifo = node_eject_fifos[channel][direction]
-                            current_occupancy = len(target_fifo.internal_queue)
-                            fifo_depth = target_fifo.max_depth
 
                             # 使用E-Tag机制判断是否可以下环
-                            can_eject = self._can_eject_with_etag_mechanism(current_slot, channel, direction, current_occupancy, fifo_depth)
+                            can_eject = self._can_eject_with_etag_mechanism(current_slot, channel, direction)
 
                             if can_eject:
-                                self.ejection_transfer_plans.append(
-                                    {
-                                        "type": "eject_to_eq_fifo",
-                                        "direction": direction,
-                                        "channel": channel,
-                                        "slot": current_slot,
-                                        "flit": flit,
-                                        "target_fifo": target_fifo,
-                                        "fifo_occupancy": current_occupancy,
-                                        "fifo_depth": fifo_depth,
-                                    }
-                                )
+                                # compute阶段立即从slot中取出flit并存储到内部缓冲区
+                                ejected_flit = current_slot.release_flit()
+                                if ejected_flit:
+                                    # 存储到EQ缓冲区
+                                    self.ejected_flits_buffer["EQ"][channel].append(ejected_flit)
+
+                                    # 添加下环计划供update阶段执行
+                                    self.ejection_transfer_plans.append(
+                                        {
+                                            "type": "eject_to_eq_fifo",
+                                            "direction": direction,
+                                            "channel": channel,
+                                            "flit": ejected_flit,
+                                            "target_fifo": target_fifo,
+                                            "original_slot": current_slot,  # 保留原slot引用用于清理
+                                        }
+                                    )
                             else:
                                 # 下环失败，触发绕环和E-Tag升级处理
                                 self._handle_ejection_failure_in_compute(current_slot, channel, direction, cycle)
@@ -374,7 +413,9 @@ class CrossPoint:
                     if ring_bridge_flit:
                         # 检查departure slice是否可以接受flit
                         if self._can_inject_to_departure_slice(departure_slice, channel, direction):
-                            self.injection_transfer_plans.append({"type": "ring_bridge_reinject", "direction": direction, "channel": channel, "flit": ring_bridge_flit, "priority": 1})  # 最高优先级
+                            self.injection_transfer_plans.append(
+                                {"type": "ring_bridge_reinject", "direction": direction, "channel": channel, "flit": ring_bridge_flit, "priority": 1}
+                            )  # 最高优先级
                             continue  # ring_bridge优先级高，如果有就不检查FIFO
 
                 # 2. 检查普通inject_input_fifos
@@ -437,9 +478,6 @@ class CrossPoint:
                 success = self._execute_eject_to_eq_fifo(plan)
                 if success:
                     self.stats["flits_ejected"][plan["channel"]] += 1
-                # else:
-                #     if hasattr(plan["flit"], "packet_id"):
-                #         raise RuntimeError(f"CrossPoint {self.crosspoint_id} 无法将packet {plan['flit'].packet_id} 下环到EQ {plan['direction']}")
 
         # ========== 执行上环传输计划 ==========
         # 按优先级排序执行（ring_bridge优先于FIFO）
@@ -552,7 +590,7 @@ class CrossPoint:
         next_col = next_node % num_col
         return curr_col != next_col
 
-    def _can_eject_with_etag_mechanism(self, slot: CrossRingSlot, channel: str, direction: str, fifo_occupancy: int, fifo_depth: int, is_compute_phase: bool = True) -> bool:
+    def _can_eject_with_etag_mechanism(self, slot: CrossRingSlot, channel: str, direction: str, is_compute_phase: bool = True) -> bool:
         """
         完整的E-Tag机制下环判断逻辑
 
@@ -955,28 +993,27 @@ class CrossPoint:
         Returns:
             是否执行成功
         """
-        slot = plan["slot"]
-        flit = plan["flit"]
+        flit = plan["flit"]  # compute阶段已从slot中取出的flit
         source_direction = plan["source_direction"]
         channel = plan["channel"]
-
-        # 从slot中取出flit
-        ejected_flit = slot.release_flit()
-        if not ejected_flit:
-            return False
+        original_slot = plan["original_slot"]
 
         # 更新flit状态
-        ejected_flit.flit_position = f"RB_{source_direction}"
-        ejected_flit.current_node_id = self.node_id
-        ejected_flit.rb_fifo_name = f"RB_{source_direction}"
+        flit.flit_position = f"RB_{source_direction}"
+        flit.current_node_id = self.node_id
+        flit.rb_fifo_name = f"RB_{source_direction}"
 
         # 添加到ring_bridge输入
         if self.parent_node and hasattr(self.parent_node, "add_to_ring_bridge_input"):
-            success = self.parent_node.add_to_ring_bridge_input(ejected_flit, source_direction, channel)
+            success = self.parent_node.add_to_ring_bridge_input(flit, source_direction, channel)
             if success:
                 # 处理成功下环的清理工作
-                self._handle_successful_ejection(slot, channel, source_direction)
+                self._handle_successful_ejection(original_slot, channel, source_direction)
                 return True
+            else:
+                # 添加失败，将flit放回slot
+                original_slot.assign_flit(flit)
+                return False
 
         return False
 
@@ -990,39 +1027,25 @@ class CrossPoint:
         Returns:
             是否执行成功
         """
-        slot = plan["slot"]
-        flit = plan["flit"]
+        flit = plan["flit"]  # compute阶段已从slot中取出的flit
         target_fifo = plan["target_fifo"]
         direction = plan["direction"]
         channel = plan["channel"]
+        original_slot = plan["original_slot"]
 
-        # 使用E-Tag机制再次确认（防止状态变化）- update阶段只检查不分配
-        can_eject = self._can_eject_with_etag_mechanism(slot, channel, direction, plan["fifo_occupancy"], plan["fifo_depth"], is_compute_phase=False)
+        # 更新flit状态
+        flit.flit_position = f"EQ_{direction}"
+        flit.current_node_id = self.node_id
 
-        if not can_eject:
-            return False
-
-        # 从slot中取出flit
-        ejected_flit = slot.release_flit()
-        if not ejected_flit:
-            return False
-
-        # 尝试写入目标FIFO
-        write_success = target_fifo.write_input(ejected_flit)
+        # 直接写入目标FIFO（compute阶段已经检查过E-Tag机制）
+        write_success = target_fifo.write_input(flit)
         if write_success:
-            # 更新flit状态
-            ejected_flit.flit_position = f"EQ_{direction}"
-            ejected_flit.current_node_id = self.node_id
-
             # 处理成功下环的清理工作
-            self._handle_successful_ejection(slot, channel, direction)
-
-            # 注意：entry释放应该在EjectQueue中当flit转移到下一级时进行，不在这里释放
-
+            self._handle_successful_ejection(original_slot, channel, direction)
             return True
         else:
             # 写入失败，将flit放回slot
-            slot.assign_flit(ejected_flit)
+            original_slot.assign_flit(flit)
             return False
 
     def _execute_ring_bridge_reinject(self, plan: Dict[str, Any]) -> bool:
@@ -1041,7 +1064,7 @@ class CrossPoint:
         # 从ring_bridge获取实际flit
         if self.parent_node and hasattr(self.parent_node, "get_ring_bridge_output_flit"):
             actual_flit = self.parent_node.get_ring_bridge_output_flit(direction, channel)
-            if actual_flit.packet_id == 6 and actual_flit.flit_id == 1:
+            if actual_flit.packet_id == 6 and actual_flit.flit_id == 0:
                 print(actual_flit)
             if actual_flit:
                 return self._inject_flit_to_departure_slice(actual_flit, direction, channel)
@@ -1087,14 +1110,8 @@ class CrossPoint:
 
         current_slot = departure_slice.peek_current_slot(channel)
 
-        # 创建新slot或使用预约的slot
-        if current_slot is None:
-            # 创建新slot
-            new_slot = CrossRingSlot(slot_id=f"slot_{self.node_id}_{channel}_{direction}", cycle=0, direction=BasicDirection.LOCAL, channel=channel)
-            new_slot.assign_flit(flit)
-            departure_slice.receive_slot(new_slot, channel)
-
-        elif current_slot.is_reserved and current_slot.itag_reserver_id == self.node_id:
+        # 使用预约的slot或空闲slot
+        if current_slot.is_reserved and current_slot.itag_reserver_id == self.node_id:
             # 使用预约的slot
             current_slot.assign_flit(flit)
             current_slot.clear_itag()  # 清除预约标记
@@ -1114,24 +1131,29 @@ class CrossPoint:
         # 更新flit状态信息
         flit.current_node_id = self.node_id
 
-        # 构建正确的链路ID - 需要确定目标节点
-        if hasattr(departure_slice, "link") and departure_slice.link:
-            # 如果slice有链路引用，使用链路的ID
-            flit.current_link_id = departure_slice.link.link_id
+        target_node = self._calculate_target_node_for_direction(direction)
+        if target_node == self.node_id:
+            # 自环链路
+            reverse_direction = {"TR": "TL", "TL": "TR", "TU": "TD", "TD": "TU"}.get(direction, direction)
+            flit.current_link_id = f"link_{self.node_id}_{direction}_{reverse_direction}_{target_node}"
         else:
-            # 回退方案：基于方向和坐标计算目标节点
-            target_node = self._calculate_target_node_for_direction(direction)
-            if target_node == self.node_id:
-                # 自环链路
-                reverse_direction = {"TR": "TL", "TL": "TR", "TU": "TD", "TD": "TU"}.get(direction, direction)
-                flit.current_link_id = f"link_{self.node_id}_{direction}_{reverse_direction}_{target_node}"
-            else:
-                # 普通链路
-                flit.current_link_id = f"link_{self.node_id}_{direction}_{target_node}"
+            # 普通链路
+            flit.current_link_id = f"link_{self.node_id}_{direction}_{target_node}"
 
         flit.current_slice_index = 0
         flit.crosspoint_direction = "departure"
         flit.current_position = self.node_id
+
+        # 设置链路源和目标节点信息
+        flit.link_source_node = self.node_id
+        flit.link_dest_node = target_node
+
+        # 设置flit位置为标准格式
+        flit.flit_position = f"{self.node_id}->{target_node}:0"
+
+        # 设置slot索引（如果有的话）
+        if current_slot:
+            flit.current_slot_index = current_slot.slot_id
 
         return True
 
@@ -1237,7 +1259,9 @@ class CrossPoint:
             "direction": self.direction.value,
             "managed_directions": self.managed_directions,
             # Slice连接状态
-            "slice_connections": {direction: {slice_type: slice_ref is not None for slice_type, slice_ref in slices.items()} for direction, slices in self.slice_connections.items()},
+            "slice_connections": {
+                direction: {slice_type: slice_ref is not None for slice_type, slice_ref in slices.items()} for direction, slices in self.slice_connections.items()
+            },
             # E-Tag状态
             "etag_entry_managers": {
                 direction: {
@@ -1254,7 +1278,10 @@ class CrossPoint:
             "t0_global_queues": {channel: {"length": len(queue), "first_slot_id": queue[0].slot_id if queue else None} for channel, queue in self.t0_global_queues.items()},
             # I-Tag预约状态
             "itag_reservations": {
-                channel: {ring_type: {"active": reservation.active, "slot_id": reservation.reserved_slot_id, "wait_cycles": reservation.wait_cycles} for ring_type, reservation in reservations.items()}
+                channel: {
+                    ring_type: {"active": reservation.active, "slot_id": reservation.reserved_slot_id, "wait_cycles": reservation.wait_cycles}
+                    for ring_type, reservation in reservations.items()
+                }
                 for channel, reservations in self.itag_reservations.items()
             },
             # 等待队列状态

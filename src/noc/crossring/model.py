@@ -911,33 +911,19 @@ class CrossRingModel(BaseNoCModel):
         # 阶段0.1：TrafficScheduler处理请求注入（如果有配置）
         if hasattr(self, "traffic_scheduler") and self.traffic_scheduler:
             ready_requests = self.traffic_scheduler.get_ready_requests(self.cycle)
-            if ready_requests:
-                req = ready_requests[0]
-                cycle, src, src_type, dst, dst_type, op, burst, traffic_id = req
+            self._inject_traffic_requests(ready_requests)
 
-                # 检查源节点的IP接口
-                source_ip = self._find_ip_interface_for_request(src, "read" if op.upper() == "R" else "write", src_type)
-
-                injected = self._inject_traffic_requests(ready_requests)
-
-        # 步骤1：IP接口处理（请求生成和处理）
         for node_interfaces in self.ip_interfaces.values():
             for ip_interface in node_interfaces.values():
                 ip_interface.step_compute_phase(self.cycle)
-
-        for node_interfaces in self.ip_interfaces.values():
-            for ip_interface in node_interfaces.values():
                 ip_interface.step_update_phase(self.cycle)
 
-        # 步骤2：Node层处理（节点内注入和仲裁）
-        self._step_node_compute_phase()
+        self._step_link_compute_phase()
+        self._step_link_update_phase()
 
+        self._step_node_compute_phase()
         self._step_node_update_phase()
 
-        # 步骤3：Link层传输（环路slice移动）
-        self._step_link_compute_phase()
-
-        self._step_link_update_phase()
         # 更新全局统计
         self._update_global_statistics()
 
@@ -1072,7 +1058,9 @@ class CrossRingModel(BaseNoCModel):
         # 调用base类的enable_debug，传递level=1作为兼容参数
         super().setup_debug(1, trace_packets, sleep_time)
 
-    def setup_result_analysis(self, flow_distribution: bool = False, bandwidth_analysis: bool = False, latency_analysis: bool = False, save_figures: bool = True, save_dir: str = "") -> None:
+    def setup_result_analysis(
+        self, flow_distribution: bool = False, bandwidth_analysis: bool = False, latency_analysis: bool = False, save_figures: bool = True, save_dir: str = ""
+    ) -> None:
         """
         配置结果分析
 
@@ -1093,7 +1081,13 @@ class CrossRingModel(BaseNoCModel):
         actual_save_figures = bool(save_dir) and save_figures
 
         self._viz_config.update(
-            {"flow_distribution": flow_distribution, "bandwidth_analysis": bandwidth_analysis, "latency_analysis": latency_analysis, "save_figures": actual_save_figures, "save_dir": save_dir}
+            {
+                "flow_distribution": flow_distribution,
+                "bandwidth_analysis": bandwidth_analysis,
+                "latency_analysis": latency_analysis,
+                "save_figures": actual_save_figures,
+                "save_dir": save_dir,
+            }
         )
 
     def setup_visualization(self, enable: bool = True, update_interval: int = 1, start_cycle: int = 0) -> None:
@@ -1288,7 +1282,9 @@ class CrossRingModel(BaseNoCModel):
             "cycle_accurate": cycle_accurate,
         }
 
-    def analyze_simulation_results(self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output", verbose: bool = True) -> Dict[str, Any]:
+    def analyze_simulation_results(
+        self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output", verbose: bool = True
+    ) -> Dict[str, Any]:
         """
         分析仿真结果 - 调用CrossRing专用分析器
 
@@ -1331,7 +1327,9 @@ class CrossRingModel(BaseNoCModel):
         analyzer = ResultAnalyzer()
         # 传递可视化配置到ResultAnalyzer
         viz_config = getattr(self, "_viz_config", {})
-        analysis_results = analyzer.analyze_noc_results(self.request_tracker, self.config, self, results, enable_visualization, save_results, timestamped_dir, save_figures, verbose, viz_config)
+        analysis_results = analyzer.analyze_noc_results(
+            self.request_tracker, self.config, self, results, enable_visualization, save_results, timestamped_dir, save_figures, verbose, viz_config
+        )
 
         # ResultAnalyzer现在会根据save_figures参数直接处理显示或保存
 
@@ -1811,7 +1809,12 @@ class CrossRingModel(BaseNoCModel):
 
     def __repr__(self) -> str:
         """字符串表示"""
-        return f"CrossRingModel({self.config.config_name}, " f"{self.config.NUM_ROW}x{self.config.NUM_COL}, " f"cycle={self.cycle}, " f"active_requests={self.get_total_active_requests()})"
+        return (
+            f"CrossRingModel({self.config.config_name}, "
+            f"{self.config.NUM_ROW}x{self.config.NUM_COL}, "
+            f"cycle={self.cycle}, "
+            f"active_requests={self.get_total_active_requests()})"
+        )
 
     # ========== 统一接口方法（用于兼容性） ==========
 
