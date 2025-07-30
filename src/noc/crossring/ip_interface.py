@@ -726,7 +726,6 @@ class CrossRingIPInterface(BaseIPInterface):
 
         # 计算完整路径（SN到RN）
         path = self.model.topology.calculate_shortest_path(req.destination, req.source)
-        
 
         rsp = create_crossring_flit(
             source=req.destination,
@@ -1032,9 +1031,7 @@ class CrossRingIPInterface(BaseIPInterface):
         except Exception as e:
             return False
 
-    def inject_request(
-        self, source: NodeId, destination: NodeId, req_type: str, burst_length: int = 4, packet_id: str = None, source_type: str = None, destination_type: str = None, **kwargs
-    ) -> bool:
+    def inject_request(self, source: NodeId, destination: NodeId, req_type: str, burst_length: int = 4, packet_id: str = None, source_type: str = None, destination_type: str = None, **kwargs) -> bool:
         """
         注入请求到IP接口，保证请求永不丢失
 
@@ -1144,8 +1141,8 @@ class CrossRingIPInterface(BaseIPInterface):
 
         # 2. 初始化传输决策存储
         self._transfer_decisions = {
-            "pending_to_l2h": {"channel": None, "flit": None},
-            "l2h_to_node": {"channel": None, "flit": None},
+            "pending_to_l2h": {"req": None, "rsp": None, "data": None},  # 每个通道独立决策
+            "l2h_to_node": {"req": None, "rsp": None, "data": None},    # 每个通道独立决策
             "network_to_h2l_h": {"channel": None, "flit": None},
             "h2l_h_to_h2l_l": {"channel": None, "flit": None},
             "h2l_l_to_completion": {"channel": None, "flit": None},
@@ -1170,43 +1167,45 @@ class CrossRingIPInterface(BaseIPInterface):
 
     def _compute_pending_to_l2h_decision(self, current_cycle: int) -> None:
         """计算pending到l2h的传输决策"""
-        # 按优先级顺序检查：req > rsp > data
+        # IP内部处理频率是1GHz，只有在偶数周期才能处理
+        if current_cycle % self.clock_ratio != 0:
+            return
+        # 每个通道独立处理：req, rsp, data
         for channel in ["req", "rsp", "data"]:
-            if self.pending_by_channel[channel] and self.l2h_fifos[channel].ready_signal():
+            if self.pending_by_channel[channel]:
+                l2h_ready = self.l2h_fifos[channel].ready_signal()
                 flit = self.pending_by_channel[channel][0]
-                if flit.departure_cycle <= current_cycle:
-                    # 检查带宽限制（仅针对data通道）
-                    if self.token_bucket and channel == "data":
-                        # 数据传输每个flit消耗1个令牌
-                        tokens_needed = 1
+                
+                if l2h_ready:
+                    if flit.departure_cycle <= current_cycle:
+                        # 检查带宽限制（仅针对data通道）
+                        if self.token_bucket and channel == "data":
+                            # 数据传输每个flit消耗1个令牌
+                            tokens_needed = 1
 
-                        # 尝试消耗令牌
-                        if not self.token_bucket.consume(tokens_needed):
-                            continue  # 令牌不足时跳过此flit
+                            # 尝试消耗令牌
+                            if not self.token_bucket.consume(tokens_needed):
+                                continue  # 令牌不足时跳过此flit
 
-                    # 对于req通道，检查RN端资源是否足够处理响应
-                    if channel == "req":
-                        if not self._check_and_reserve_resources(flit):
-                            continue  # 资源不足时跳过此请求，检查下一个
+                        # 对于req通道，检查RN端资源是否足够处理响应
+                        if channel == "req":
+                            if not self._check_and_reserve_resources(flit):
+                                continue  # 资源不足时跳过此请求，检查下一个
 
-                    self._transfer_decisions["pending_to_l2h"]["channel"] = channel
-                    self._transfer_decisions["pending_to_l2h"]["flit"] = flit
-                    return
+                        self._transfer_decisions["pending_to_l2h"][channel] = flit
+                        # 不要return，继续检查其他通道
 
     def _compute_l2h_to_node_decision(self, current_cycle: int) -> None:
         """计算l2h到node的传输决策"""
-        # # 只有当pending到l2h没有传输时才考虑l2h到node
-        # if self._transfer_decisions["pending_to_l2h"]["channel"] is not None:
-        #     return
-
-        # 按优先级顺序检查：req > rsp > data
+        # 每个通道独立处理：req, rsp, data
         for channel in ["req", "rsp", "data"]:
             if self.l2h_fifos[channel].valid_signal():
                 flit = self.l2h_fifos[channel].peek_output()
-                if flit and self._can_inject_to_node(flit, channel):
-                    self._transfer_decisions["l2h_to_node"]["channel"] = channel
-                    self._transfer_decisions["l2h_to_node"]["flit"] = flit
-                    return
+                if flit:
+                    can_inject = self._can_inject_to_node(flit, channel)
+                    if can_inject:
+                        self._transfer_decisions["l2h_to_node"][channel] = flit
+                        # 不要return，继续检查其他通道
 
     def _compute_network_to_h2l_h_decision(self, current_cycle: int) -> None:
         """计算network到h2l_h的传输决策"""
@@ -1291,23 +1290,23 @@ class CrossRingIPInterface(BaseIPInterface):
         """执行compute阶段计算的传输决策"""
         self.current_cycle = current_cycle
 
-        # 1. 执行pending到l2h的传输（保持不变）
-        if self._transfer_decisions["pending_to_l2h"]["channel"]:
-            channel = self._transfer_decisions["pending_to_l2h"]["channel"]
-            flit = self._transfer_decisions["pending_to_l2h"]["flit"]
-            self.pending_by_channel[channel].popleft()
-            flit.flit_position = "L2H"
-            self.l2h_fifos[channel].write_input(flit)
-            # 更新请求状态
-            if channel == "req" and hasattr(flit, "packet_id") and flit.packet_id in self.active_requests:
-                self.active_requests[flit.packet_id]["stage"] = "l2h_fifo"
+        # 1. 执行pending到l2h的传输（每个通道独立）
+        for channel in ["req", "rsp", "data"]:
+            if self._transfer_decisions["pending_to_l2h"][channel]:
+                flit = self._transfer_decisions["pending_to_l2h"][channel]
+                self.pending_by_channel[channel].popleft()
+                flit.flit_position = "L2H"
+                self.l2h_fifos[channel].write_input(flit)
+                # 更新请求状态
+                if channel == "req" and hasattr(flit, "packet_id") and flit.packet_id in self.active_requests:
+                    self.active_requests[flit.packet_id]["stage"] = "l2h_fifo"
 
-        # 2. 执行l2h到node的传输（保持不变）
-        if self._transfer_decisions["l2h_to_node"]["channel"]:
-            channel = self._transfer_decisions["l2h_to_node"]["channel"]
-            flit = self._transfer_decisions["l2h_to_node"]["flit"]
-            self.l2h_fifos[channel].read_output()
-            self._inject_to_topology_network(flit, channel)
+        # 2. 执行l2h到node的传输（每个通道独立）
+        for channel in ["req", "rsp", "data"]:
+            if self._transfer_decisions["l2h_to_node"][channel]:
+                flit = self._transfer_decisions["l2h_to_node"][channel]
+                self.l2h_fifos[channel].read_output()
+                self._inject_to_topology_network(flit, channel)
 
         # 3. 执行network到h2l_h的传输
         if self._transfer_decisions["network_to_h2l_h"]["channel"]:

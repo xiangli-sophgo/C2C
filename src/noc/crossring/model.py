@@ -369,7 +369,7 @@ class CrossRingModel(BaseNoCModel):
         # 调用父类方法设置TrafficScheduler
         super().setup_traffic_scheduler(traffic_chains, traffic_file_path)
 
-    def setup_visualization(self, enable=True, update_interval=10, start_cycle=0):
+    def setup_visualization(self, enable=True, update_interval=1, start_cycle=0):
         """
         设置实时可视化
 
@@ -378,6 +378,7 @@ class CrossRingModel(BaseNoCModel):
             update_interval: 可视化更新间隔（周期数）
             start_cycle: 从哪个周期开始可视化（0表示立即开始）
         """
+        update_interval = max(update_interval, 0.05)
         self._visualization_enabled = enable
         self._visualization_update_interval = update_interval
         self._visualization_start_cycle = start_cycle
@@ -2100,6 +2101,72 @@ class CrossRingModel(BaseNoCModel):
         return results
 
     # ========== 实现BaseNoCModel抽象方法 ==========
+
+
+    def check_all_slots_in_network(self) -> Dict[str, Any]:
+        """
+        检查整个网络中所有链路的slot状态
+        
+        Returns:
+            网络级别的slot检查报告
+        """
+        network_report = {
+            "total_links": len(self.links),
+            "links_with_all_slots": 0,
+            "links_with_missing_slots": 0,
+            "total_slices": 0,
+            "total_slots": 0,
+            "link_reports": {},
+            "summary": "",
+            "missing_slots_summary": []
+        }
+        
+        for link_id, link in self.links.items():
+            link_report = link.check_all_slices_have_slots()
+            network_report["link_reports"][link_id] = link_report
+            
+            # 累计统计
+            network_report["total_slices"] += link_report["total_slices"]
+            network_report["total_slots"] += sum(link_report["slot_distribution"].values())
+            
+            if link_report["slices_without_slots"] == 0:
+                network_report["links_with_all_slots"] += 1
+            else:
+                network_report["links_with_missing_slots"] += 1
+                network_report["missing_slots_summary"].extend(link_report["missing_slots"])
+        
+        # 生成网络级别汇总
+        if network_report["links_with_missing_slots"] == 0:
+            network_report["summary"] = f"✅ 所有{network_report['total_links']}个链路的slot都完整"
+        else:
+            network_report["summary"] = f"❌ {network_report['links_with_missing_slots']}/{network_report['total_links']}个链路有slot缺失"
+        
+        return network_report
+
+    def print_network_slot_report(self) -> None:
+        """打印网络级别的slot检查报告"""
+        report = self.check_all_slots_in_network()
+        
+        print("🌐 CrossRing网络Slot完整性检查报告:")
+        print(f"   {report['summary']}")
+        print(f"   总链路数: {report['total_links']}")
+        print(f"   总Slice数: {report['total_slices']}")
+        print(f"   总Slot数: {report['total_slots']}")
+        print(f"   完整链路: {report['links_with_all_slots']}, 缺失链路: {report['links_with_missing_slots']}")
+        
+        # 如果有缺失，按链路详细报告
+        if report["links_with_missing_slots"] > 0:
+            print("\n   问题链路详情:")
+            for link_id, link_report in report["link_reports"].items():
+                if link_report["slices_without_slots"] > 0:
+                    print(f"   📍 {link_id}: {link_report['summary']}")
+                    for missing in link_report["missing_slots"]:
+                        print(f"      - {missing['channel']}通道 {missing['slice_id']} (位置{missing['position']})")
+        
+        print(f"\n   Slot分布统计:")
+        for link_id, link_report in report["link_reports"].items():
+            total_link_slots = sum(link_report["slot_distribution"].values())
+            print(f"   {link_id}: {total_link_slots}个slot {link_report['slot_distribution']}")
 
 
 def create_crossring_model(config_name: str = "default", num_row: int = 5, num_col: int = 4, **config_kwargs) -> CrossRingModel:

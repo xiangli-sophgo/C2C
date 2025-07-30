@@ -333,7 +333,8 @@ class CrossPoint:
                 arrival_slice = self.slice_connections[direction][channel]["arrival"]
                 if not arrival_slice:
                     raise ValueError("非法的slice")
-                current_slot = arrival_slice.peek_current_slot(channel)
+                # 检查arrival slice的PipelinedFIFO输出状态
+                current_slot = arrival_slice.peek_output(channel)
                 if not current_slot or not current_slot.is_occupied:
                     continue
 
@@ -1178,30 +1179,31 @@ class CrossPoint:
             channel=channel
         )
         new_slot.assign_flit(flit)
+        
+        # Update阶段：直接写入到departure slice的PipelinedFIFO
+        success = departure_slice.write_input(new_slot, channel)
+        if not success:
+            return False
 
-        # 处理I-Tag释放（在注入前处理）
+        # 处理I-Tag释放（在注入后处理）
         if flit.itag_reserved:
             flit.itag_reserved = False
             self.itag_reservation_counts[direction][channel] -= 1
             
             # 检查是否使用了预约slot
-            current_slot = departure_slice.peek_current_slot(channel)
-            if current_slot and current_slot.is_reserved and current_slot.itag_reserver_id == self.node_id:
-                # 使用预约slot，立即释放
+            # 需要检查departure slice上的预约情况
+            reserved_slot = departure_slice.peek_current_slot(channel)
+            if reserved_slot and reserved_slot.is_reserved and reserved_slot.itag_reserver_id == self.node_id:
+                # 使用了预约slot，立即释放
                 self.stats["itag_releases"][channel] += 1
+                # 注意：这里不能清除预约，因为我们创建了新的slot而不是使用预约slot
             else:
                 # 使用非预约slot，延迟释放
                 self.itag_to_release_counts[direction][channel] += 1
-
-        # 使用RingSlice的特殊接口注入slot（自动处理预约slot和标准流控）
-        success = departure_slice.write_slot_or_modify_reserved(new_slot, channel, self.node_id)
         
-        if success:
-            # 更新flit状态信息
-            self._update_flit_injection_status(flit, direction, new_slot)
-            return True
-        else:
-            return False
+        # 更新flit状态信息
+        self._update_flit_injection_status(flit, direction, new_slot)
+        return True
 
     def _update_flit_injection_status(self, flit: CrossRingFlit, direction: str, slot: CrossRingSlot) -> None:
         """

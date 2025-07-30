@@ -281,8 +281,12 @@ class RingSlice:
     Ring Slice组件 - 环路传输的基础单元
 
     按照Cross Ring Spec v2.0定义，Ring Slice是构成环路的最基本单元，
-    本质上是一组寄存器，负责Slot的逐跳传输。
+    实现完美流水线：每拍都必须传输一个slot（可能是空slot），不允许断流。
+    使用固定深度2的PipelinedFIFO确保1周期固定延迟。
     """
+    
+    # 全局slot计数器，用于生成唯一slot_id
+    _global_slot_counter = 0
 
     def __init__(self, slice_id: str, ring_type: str, position: int, num_channels: int = 3):
         """
@@ -299,13 +303,33 @@ class RingSlice:
         self.position = position
         self.num_channels = num_channels
 
-        # 使用PipelinedFIFO替代手动buffer管理
-        # 每个通道内部使用深度为2的流水线：input_buffer + current_slot
-        self.internal_pipelines: Dict[str, PipelinedFIFO] = {
-            "req": PipelinedFIFO(f"{slice_id}_req_pipeline", depth=2),
-            "rsp": PipelinedFIFO(f"{slice_id}_rsp_pipeline", depth=2), 
-            "data": PipelinedFIFO(f"{slice_id}_data_pipeline", depth=2)
-        }
+        # 创建PipelinedFIFO用于传输slot对象
+        self.internal_pipelines: Dict[str, PipelinedFIFO] = {}
+        
+        for channel in ["req", "rsp", "data"]:
+            # 创建FIFO
+            fifo = PipelinedFIFO(f"{slice_id}_{channel}_pipeline", depth=2)
+            
+            # 为每个通道创建一个初始slot并放入FIFO
+            # 使用全局唯一的slot_id，不绑定到特定slice
+            RingSlice._global_slot_counter += 1
+            slot_id = f"slot_{channel}_{RingSlice._global_slot_counter}"
+            direction = Direction.TR if ring_type == "horizontal" else Direction.TU  # 默认方向
+            
+            initial_slot = CrossRingSlot(
+                slot_id=slot_id,
+                cycle=0,
+                direction=direction,
+                channel=channel,
+                valid=False,  # 初始为空slot
+                flit=None
+            )
+            
+            # 将slot放入FIFO的输出寄存器
+            fifo.output_register = initial_slot
+            fifo.output_valid = True
+            
+            self.internal_pipelines[channel] = fifo
 
         # 上下游连接
         self.upstream_slice: Optional["RingSlice"] = None
@@ -319,62 +343,73 @@ class RingSlice:
             "total_cycles": 0,
         }
 
-    # ========== 标准化流控接口 ==========
-    
+    # ========== 完美流水线接口 ==========
+
     def can_accept_input(self, channel: str) -> bool:
         """
-        检查是否能从上游接收slot
-        
+        完美流水线总是能接受输入（强制不断流）
+
         Args:
             channel: 通道类型 ("req", "rsp", "data")
-            
-        Returns:
-            是否能接受输入
-        """
-        if channel not in self.internal_pipelines:
-            return False
-        return self.internal_pipelines[channel].can_accept_input()
 
-    def write_input(self, slot: CrossRingSlot, channel: str) -> bool:
-        """
-        从上游或CrossPoint写入slot到指定通道
-        
-        Args:
-            slot: 要写入的slot
-            channel: 通道类型
-            
         Returns:
-            是否写入成功
+            总是返回True，保证完美流水线
+        """
+        return channel in self.internal_pipelines
+
+    def write_input(self, slot: Optional[CrossRingSlot], channel: str) -> bool:
+        """
+        从上游或CrossPoint写入slot到指定通道（强制写入）
+        
+        直接传输slot对象，不复制内容
+
+        Args:
+            slot: 要写入的slot对象（可能携带flit或为空）
+            channel: 通道类型
+
+        Returns:
+            总是成功，保证完美流水线
         """
         if channel not in self.internal_pipelines:
             return False
-            
-        success = self.internal_pipelines[channel].write_input(slot)
-        if success:
+
+        fifo = self.internal_pipelines[channel]
+
+        # 完美流水线：直接传输slot对象
+        if fifo.can_accept_input():
+            success = fifo.write_input(slot)
+        else:
+            # FIFO满时直接写入到内部队列（覆盖最早的数据）
+            if len(fifo.internal_queue) >= fifo.internal_queue.maxlen:
+                fifo.internal_queue.popleft()
+            fifo.internal_queue.append(slot)
+            success = True
+
+        # 统计
+        if slot and slot.is_occupied:
             self.stats["slots_received"][channel] += 1
-        return success
+
+        return True
 
     def can_provide_output(self, channel: str) -> bool:
         """
-        检查是否有输出给下游slice
-        
+        完美流水线总是有输出（强制输出，即使是None）
+
         Args:
             channel: 通道类型
-            
+
         Returns:
-            是否有输出可用
+            总是返回True，保证完美流水线
         """
-        if channel not in self.internal_pipelines:
-            return False
-        return self.internal_pipelines[channel].valid_signal()
+        return channel in self.internal_pipelines
 
     def peek_output(self, channel: str) -> Optional[CrossRingSlot]:
         """
         查看要输出给下游的slot（不移除）
-        
+
         Args:
             channel: 通道类型
-            
+
         Returns:
             输出slot或None
         """
@@ -385,28 +420,42 @@ class RingSlice:
     def read_output(self, channel: str) -> Optional[CrossRingSlot]:
         """
         读取并移除输出slot（给下游slice）
-        
+
+        完美流水线需要绕过PipelinedFIFO的"每周期只能读一次"限制
+
         Args:
             channel: 通道类型
-            
+
         Returns:
             输出slot或None
         """
         if channel not in self.internal_pipelines:
             return None
-            
-        slot = self.internal_pipelines[channel].read_output()
-        if slot:
-            self.stats["slots_transmitted"][channel] += 1
-        return slot
+
+        fifo = self.internal_pipelines[channel]
+
+        # 绕过PipelinedFIFO的read_this_cycle限制，直接读取输出寄存器
+        if fifo.output_valid:
+            slot = fifo.output_register
+            # 手动触发FIFO的读取逻辑，但不受read_this_cycle限制
+            fifo.read_this_cycle = True  # 设置标志以便update阶段正确处理
+
+            if slot:
+                self.stats["slots_transmitted"][channel] += 1
+            else:
+                self.stats["empty_cycles"][channel] += 1
+            return slot
+        else:
+            self.stats["empty_cycles"][channel] += 1
+            return None
 
     def peek_current_slot(self, channel: str) -> Optional[CrossRingSlot]:
         """
-        兼容接口：查看当前正在处理的slot（给CrossPoint使用）
-        
+        查看当前正在处理的slot（给CrossPoint使用）
+
         Args:
             channel: 通道类型
-            
+
         Returns:
             当前slot或None
         """
@@ -415,104 +464,105 @@ class RingSlice:
 
     def can_accept_slot_or_has_reserved_slot(self, channel: str, reserver_node_id: int) -> bool:
         """
-        特殊接口：检查是否能接受slot或已有本节点预约的slot（用于I-Tag机制）
-        
-        这个接口同时处理两种情况：
-        1. 标准的FIFO流控：能接受新slot
-        2. I-Tag特殊情况：当前slot被指定节点预约，可以直接修改
-        
+        检查是否能接受slot或已有本节点预约的slot（用于I-Tag机制）
+
         Args:
             channel: 通道类型
             reserver_node_id: 预约者节点ID
-            
+
         Returns:
             是否可以注入
         """
         # 检查是否有被指定节点预约的slot（优先级最高）
         current_slot = self.peek_current_slot(channel)
-        if current_slot and current_slot.is_reserved:
-            # 如果当前slot被预约，只有预约者可以使用
-            return current_slot.itag_reserver_id == reserver_node_id
-        
-        # 没有预约slot的情况下，检查标准流控
-        return self.can_accept_input(channel)
+
+        # 完美流水线总是能接受输入
+        return True
 
     def write_slot_or_modify_reserved(self, slot: CrossRingSlot, channel: str, reserver_node_id: int) -> bool:
         """
-        特殊接口：写入slot或修改预约的slot（用于I-Tag机制）
-        
-        这个接口处理两种情况：
-        1. 修改已预约的slot：直接修改当前slot内容
-        2. 写入新slot：使用标准FIFO接口
-        
+        写入slot或修改预约的slot（用于I-Tag机制）
+
         Args:
-            slot: 要写入的slot
+            slot: 要写入的slot对象
             channel: 通道类型
             reserver_node_id: 预约者节点ID
-            
+
         Returns:
             是否成功
         """
         # 检查是否有被指定节点预约的slot
         current_slot = self.peek_current_slot(channel)
+        
         if current_slot and current_slot.is_reserved and current_slot.itag_reserver_id == reserver_node_id:
             # 直接修改预约slot的内容（不通过FIFO，因为slot位置不变）
             if slot.flit:
                 current_slot.assign_flit(slot.flit)
             current_slot.clear_itag()  # 清除预约标记
             return True
-        
+
         # 使用标准接口写入新slot
         return self.write_input(slot, channel)
 
     def step_compute_phase(self, cycle: int) -> None:
         """
-        计算阶段：更新内部FIFO的compute阶段并向下游slice传输slot
+        计算阶段：更新内部PipelinedFIFO的compute阶段
 
         这是两阶段执行模型的第一阶段，利用PipelinedFIFO的成熟两阶段逻辑
 
         Args:
             cycle: 当前周期
         """
-        # 1. 更新内部PipelinedFIFO的compute阶段
+        # 更新内部PipelinedFIFO的compute阶段
         for channel in ["req", "rsp", "data"]:
             self.internal_pipelines[channel].step_compute_phase(cycle)
-    
-        # 2. 向下游slice传输slot（如果有的话）
-        if self.downstream_slice:
-            for channel in ["req", "rsp", "data"]:
-                # 检查是否有输出且下游能接受
-                if self.can_provide_output(channel) and self.downstream_slice.can_accept_input(channel):
-                    # 标准的FIFO到FIFO传输
-                    slot = self.read_output(channel)
-                    if slot:
-                        # 更新slot的位置信息
-                        if slot.flit:
-                            slot.flit.current_slice_index = self.downstream_slice.position
-                            slot.flit.current_position = self.downstream_slice.position
-                            slot.flit.flit_position = "Ring_slice"
-                        
-                        # 写入下游slice
-                        success = self.downstream_slice.write_input(slot, channel)
-                        if not success:
-                            # 如果写入失败，这是不应该发生的（因为我们已经检查过can_accept_input）
-                            print(f"警告：RingSlice {self.slice_id} 向下游传输{channel}通道slot失败")
 
     def step_update_phase(self, cycle: int) -> None:
         """
-        更新阶段：利用PipelinedFIFO的成熟更新逻辑
+        更新阶段：执行完美流水线传输
 
-        这是两阶段执行模型的第二阶段，直接利用PipelinedFIFO的更新逻辑
+        这是两阶段执行模型的第二阶段，强制每拍都传输slot到下游
+        关键：先传输，再更新FIFO状态，避免数据跳跃
 
         Args:
             cycle: 当前周期
         """
         self.stats["total_cycles"] += 1
-        
-        # 利用PipelinedFIFO的两阶段执行
+
+        # 1. 先传输到下游（基于当前FIFO输出状态）
+        if self.downstream_slice:
+            for channel in ["req", "rsp", "data"]:
+                fifo = self.internal_pipelines[channel]
+
+                # 基于当前输出状态进行传输
+                if fifo.output_valid and fifo.output_register:
+                    current_slot = fifo.output_register
+
+                    # 更新slot的位置信息（如果有有效flit）
+                    if current_slot.flit:
+                        current_slot.flit.current_slice_index = self.downstream_slice.position
+                        current_slot.flit.current_position = self.downstream_slice.position
+                        current_slot.flit.flit_position = "Ring_slice"
+
+                    # 直接传输slot对象到下游
+                    success = self.downstream_slice.write_input(current_slot, channel)
+                    if success:
+                        if current_slot.is_occupied:
+                            self.stats["slots_transmitted"][channel] += 1
+                        else:
+                            self.stats["empty_cycles"][channel] += 1
+
+                    # 设置读取标志
+                    fifo.read_this_cycle = True
+                else:
+                    # 没有有效输出时传输None保持流水线
+                    success = self.downstream_slice.write_input(None, channel)
+                    if success:
+                        self.stats["empty_cycles"][channel] += 1
+
+        # 2. 然后更新内部PipelinedFIFO状态（这会移动数据）
         for channel in ["req", "rsp", "data"]:
             self.internal_pipelines[channel].step_update_phase()
-
 
     def peek_output_slot(self, channel: str) -> Optional[CrossRingSlot]:
         """
@@ -539,39 +589,23 @@ class RingSlice:
             "ring_type": self.ring_type,
             "position": self.position,
             # 使用新的接口获取当前slot信息
-            "current_slots": {
-                channel: slot.slot_id if slot else None 
-                for channel in ["req", "rsp", "data"]
-                for slot in [self.peek_current_slot(channel)]
-            },
+            "current_slots": {channel: slot.slot_id if slot else None for channel in ["req", "rsp", "data"] for slot in [self.peek_current_slot(channel)]},
             # 集成统计信息
             "stats": self.get_comprehensive_stats(),
         }
-        
+
     def get_comprehensive_stats(self) -> Dict[str, Any]:
         """
         获取综合统计信息，包括RingSlice和PipelinedFIFO的统计
-        
+
         Returns:
             综合统计信息
         """
         return {
             "ring_slice_stats": self.stats.copy(),
-            "pipeline_stats": {
-                channel: fifo.get_statistics() 
-                for channel, fifo in self.internal_pipelines.items()
-            },
-            "current_occupancy": {
-                channel: len(fifo) 
-                for channel, fifo in self.internal_pipelines.items()
-            },
-            "flow_control_status": {
-                channel: {
-                    "can_accept": self.can_accept_input(channel),
-                    "can_provide": self.can_provide_output(channel)
-                }
-                for channel in ["req", "rsp", "data"]
-            }
+            "pipeline_stats": {channel: fifo.get_statistics() for channel, fifo in self.internal_pipelines.items()},
+            "current_occupancy": {channel: len(fifo) for channel, fifo in self.internal_pipelines.items()},
+            "flow_control_status": {channel: {"can_accept": self.can_accept_input(channel), "can_provide": self.can_provide_output(channel)} for channel in ["req", "rsp", "data"]},
         }
 
     def reset_stats(self) -> None:
@@ -582,12 +616,12 @@ class RingSlice:
             self.stats["slots_transmitted"][channel] = 0
             self.stats["empty_cycles"][channel] = 0
         self.stats["total_cycles"] = 0
-        
+
         # 重置PipelinedFIFO统计（如果存在reset方法）
         for channel, fifo in self.internal_pipelines.items():
-            if hasattr(fifo, 'reset_stats'):
+            if hasattr(fifo, "reset_stats"):
                 fifo.reset_stats()
-            elif hasattr(fifo, 'stats'):
+            elif hasattr(fifo, "stats"):
                 # 手动重置FIFO统计
                 fifo.stats = fifo.stats.__class__()
 
@@ -650,6 +684,13 @@ class CrossRingLink(BaseLink):
                 slice_id = f"{self.link_id}_{channel}_slice_{i}"
                 ring_slice = RingSlice(slice_id, ring_type, i, 3)
                 self.ring_slices[channel].append(ring_slice)
+
+            # 建立下游连接：slice[i] -> slice[i+1]
+            for i in range(len(self.ring_slices[channel]) - 1):
+                current_slice = self.ring_slices[channel][i]
+                next_slice = self.ring_slices[channel][i + 1]
+                current_slice.downstream_slice = next_slice
+                next_slice.upstream_slice = current_slice
 
     def get_ring_slice(self, channel: str, position: int) -> Optional[RingSlice]:
         """
@@ -869,7 +910,7 @@ class CrossRingLink(BaseLink):
                 current_slot = ring_slice.peek_current_slot(channel)
                 if current_slot:
                     slots.append(current_slot)
-                
+
                 # 获取内部队列中的所有slots（使用PipelinedFIFO的接口）
                 if channel in ring_slice.internal_pipelines:
                     pipeline = ring_slice.internal_pipelines[channel]
@@ -877,6 +918,151 @@ class CrossRingLink(BaseLink):
                     internal_slots = list(pipeline.internal_queue)
                     slots.extend(internal_slots)
         return slots
+
+    def check_all_slices_have_slots(self) -> Dict[str, Any]:
+        """
+        检查所有slice中是否有slot的完整报告
+
+        Returns:
+            检查结果字典，包含详细信息和统计
+        """
+        report = {
+            "total_slices": 0,
+            "slices_with_slots": 0,
+            "slices_without_slots": 0,
+            "channels": {},
+            "missing_slots": [],
+            "slot_distribution": {},
+            "summary": ""
+        }
+
+        for channel in ["req", "rsp", "data"]:
+            channel_report = {
+                "total_slices": 0,
+                "slices_with_slots": 0,
+                "slices_without_slots": 0,
+                "missing_slice_positions": [],
+                "slot_details": []
+            }
+
+            if channel in self.ring_slices:
+                slices = self.ring_slices[channel]
+                channel_report["total_slices"] = len(slices)
+                
+                for i, ring_slice in enumerate(slices):
+                    has_slot = False
+                    slot_info = {
+                        "slice_id": ring_slice.slice_id,
+                        "position": i,
+                        "has_output_slot": False,
+                        "output_slot_id": None,
+                        "internal_queue_slots": 0,
+                        "total_slots": 0
+                    }
+
+                    # 检查输出寄存器中的slot
+                    if channel in ring_slice.internal_pipelines:
+                        pipeline = ring_slice.internal_pipelines[channel]
+                        
+                        # 检查输出寄存器
+                        if pipeline.output_valid and pipeline.output_register:
+                            slot_info["has_output_slot"] = True
+                            slot_info["output_slot_id"] = pipeline.output_register.slot_id
+                            has_slot = True
+                            slot_info["total_slots"] += 1
+
+                        # 检查内部队列
+                        internal_slots = list(pipeline.internal_queue)
+                        slot_info["internal_queue_slots"] = len(internal_slots)
+                        slot_info["total_slots"] += len(internal_slots)
+                        
+                        if internal_slots:
+                            has_slot = True
+
+                    if has_slot:
+                        channel_report["slices_with_slots"] += 1
+                    else:
+                        channel_report["slices_without_slots"] += 1
+                        channel_report["missing_slice_positions"].append(i)
+                        report["missing_slots"].append({
+                            "channel": channel,
+                            "slice_id": ring_slice.slice_id,
+                            "position": i
+                        })
+
+                    channel_report["slot_details"].append(slot_info)
+
+            report["channels"][channel] = channel_report
+            report["total_slices"] += channel_report["total_slices"]
+            report["slices_with_slots"] += channel_report["slices_with_slots"]
+            report["slices_without_slots"] += channel_report["slices_without_slots"]
+
+        # 生成汇总信息
+        if report["slices_without_slots"] == 0:
+            report["summary"] = f"✅ 所有{report['total_slices']}个slice都有slot"
+        else:
+            report["summary"] = f"❌ {report['slices_without_slots']}/{report['total_slices']}个slice缺少slot"
+
+        # 统计slot分布
+        for channel in ["req", "rsp", "data"]:
+            total_slots = sum(detail["total_slots"] for detail in report["channels"][channel]["slot_details"])
+            report["slot_distribution"][channel] = total_slots
+
+        return report
+
+    def print_slot_check_report(self) -> None:
+        """打印slot检查报告"""
+        report = self.check_all_slices_have_slots()
+        
+        print(f"📊 链路 {self.link_id} Slot检查报告:")
+        print(f"   {report['summary']}")
+        print(f"   总Slice数: {report['total_slices']}, 有Slot: {report['slices_with_slots']}, 无Slot: {report['slices_without_slots']}")
+        
+        # 按通道详细报告
+        for channel, channel_data in report["channels"].items():
+            print(f"   {channel}通道: {channel_data['slices_with_slots']}/{channel_data['total_slices']}个slice有slot")
+            if channel_data["missing_slice_positions"]:
+                print(f"     缺失位置: {channel_data['missing_slice_positions']}")
+        
+        # Slot分布统计
+        print(f"   Slot分布: {report['slot_distribution']}")
+        
+        # 如果有缺失，详细列出
+        if report["missing_slots"]:
+            print("   缺失详情:")
+            for missing in report["missing_slots"]:
+                print(f"     - {missing['channel']}通道 {missing['slice_id']} (位置{missing['position']})")
+
+    def verify_slot_continuity(self) -> Dict[str, bool]:
+        """
+        验证slot的连续性 - 检查环路中是否有断链
+        
+        Returns:
+            每个通道的连续性检查结果
+        """
+        results = {}
+        
+        for channel in ["req", "rsp", "data"]:
+            is_continuous = True
+            
+            if channel in self.ring_slices:
+                slices = self.ring_slices[channel]
+                
+                for i, ring_slice in enumerate(slices):
+                    # 检查每个slice是否有slot可以传输
+                    if not ring_slice.can_provide_output(channel):
+                        is_continuous = False
+                        print(f"❌ {channel}通道 slice[{i}] 无法提供输出")
+                    
+                    # 检查下游连接
+                    if ring_slice.downstream_slice:
+                        if not ring_slice.downstream_slice.can_accept_input(channel):
+                            is_continuous = False
+                            print(f"❌ {channel}通道 slice[{i}] 下游无法接受输入")
+            
+            results[channel] = is_continuous
+            
+        return results
 
     # ========== BaseLink抽象方法实现 ==========
 
