@@ -21,13 +21,13 @@ def create_config(rows=2, cols=3, config_name="demo"):
     config.tracker_config.RN_R_TRACKER_OSTD = 128
     config.tracker_config.RN_W_TRACKER_OSTD = 32
     config.tracker_config.SN_DDR_R_TRACKER_OSTD = 32
-    config.tracker_config.SN_DDR_W_TRACKER_OSTD = 4
+    config.tracker_config.SN_DDR_W_TRACKER_OSTD = 16
     config.tracker_config.SN_L2M_R_TRACKER_OSTD = 64
     config.tracker_config.SN_L2M_W_TRACKER_OSTD = 64
     config.tracker_config.SN_TRACKER_RELEASE_LATENCY = 40
 
     config.latency_config.DDR_R_LATENCY = 155
-    config.latency_config.DDR_W_LATENCY = 0
+    config.latency_config.DDR_W_LATENCY = 16
     config.latency_config.L2M_R_LATENCY = 12
     config.latency_config.L2M_W_LATENCY = 16
 
@@ -44,6 +44,10 @@ def create_config(rows=2, cols=3, config_name="demo"):
     config.tag_config.TU_ETAG_T2_UE_MAX = 8
     config.tag_config.TU_ETAG_T1_UE_MAX = 12
     config.tag_config.TD_ETAG_T2_UE_MAX = 12
+    config.tag_config.ITAG_TRIGGER_TH_H = 80
+    config.tag_config.ITAG_TRIGGER_TH_V = 80
+    config.tag_config.ITAG_MAX_NUM_H = 1
+    config.tag_config.ITAG_MAX_NUM_V = 1
     config.validate_config()
 
     return config
@@ -68,20 +72,20 @@ def main():
     model = CrossRingModel(config)
 
     save_dir = None
-    # save_dir = f"../../output/noc/CrossRing/{rows}x{cols}/"
+    save_dir = f"../../output/noc/CrossRing/{rows}x{cols}/"
 
     # 3. 配置各种选项
     model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)  # Traffic文件设置，节点的IP会根据数据流连接。
     # Debug设置
-    model.setup_debug(trace_packets=[1], update_interval=0.3)
+    model.setup_debug(trace_packets=[1], update_interval=0.0)
     # 配置实时可视化
-    # model.setup_visualization(enable=True, update_interval=0.5, start_cycle=0)
+    model.setup_visualization(enable=True, update_interval=0.2, start_cycle=80)
     # 结果分析设置
     model.setup_result_analysis(flow_distribution=1, bandwidth_analysis=1, latency_analysis=1, save_figures=0, save_dir=save_dir)
 
     # 4. 运行仿真 - 延长时间以观察flit流动
     print("▶️  开始仿真")
-    model.run_simulation(max_time_ns=200.0, progress_interval_ns=1000.0, results_analysis=1, verbose=1)
+    model.run_simulation(max_time_ns=6000.0, progress_interval_ns=1000.0, results_analysis=1, verbose=1)
 
 
 if __name__ == "__main__":

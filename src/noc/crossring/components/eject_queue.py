@@ -264,16 +264,23 @@ class EjectQueue:
 
         # 首先尝试根据flit的destination_type匹配对应的IP
         if hasattr(flit, "destination_type") and flit.destination_type:
+            # 完全匹配优先级最高
             for ip_id in self.connected_ips:
-                # 直接匹配IP ID（现在IP ID就是简洁的名称如"ddr_1"）
                 if ip_id == flit.destination_type:
                     eject_buffer = self.ip_eject_channel_buffers[ip_id][channel]
                     if eject_buffer.ready_signal():
                         return ip_id
-
-                # 如果不完全匹配，尝试基础类型匹配
+            
+            # 如果完全匹配的IP buffer不ready，等待而不是fallback到其他IP
+            # 这可以避免响应被错误路由到同类型的其他IP
+            for ip_id in self.connected_ips:
+                if ip_id == flit.destination_type:
+                    return None  # 目标IP存在但buffer不ready，等待
+            
+            # 如果完全匹配的IP不存在，才考虑基础类型匹配（用于兼容性）
+            dest_base_type = flit.destination_type.split("_")[0]
+            for ip_id in self.connected_ips:
                 ip_base_type = ip_id.split("_")[0]
-                dest_base_type = flit.destination_type.split("_")[0]
                 if ip_base_type == dest_base_type:
                     eject_buffer = self.ip_eject_channel_buffers[ip_id][channel]
                     if eject_buffer.ready_signal():

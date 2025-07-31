@@ -91,16 +91,16 @@ def create_5x4_config():
     # config.ip_config.DDR_BW_LIMIT = 64
     # config.ip_config.GDMA_BW_LIMIT = 20
 
-    config.tracker_config.RN_R_TRACKER_OSTD = 128
-    config.tracker_config.RN_W_TRACKER_OSTD = 32
-    config.tracker_config.SN_DDR_R_TRACKER_OSTD = 32
-    config.tracker_config.SN_DDR_W_TRACKER_OSTD = 16
+    config.tracker_config.RN_R_TRACKER_OSTD = 64
+    config.tracker_config.RN_W_TRACKER_OSTD = 64
+    config.tracker_config.SN_DDR_R_TRACKER_OSTD = 64
+    config.tracker_config.SN_DDR_W_TRACKER_OSTD = 64
     config.tracker_config.SN_L2M_R_TRACKER_OSTD = 64
     config.tracker_config.SN_L2M_W_TRACKER_OSTD = 64
     config.tracker_config.SN_TRACKER_RELEASE_LATENCY = 40
 
-    config.latency_config.DDR_R_LATENCY = 100
-    config.latency_config.DDR_W_LATENCY = 40
+    config.latency_config.DDR_R_LATENCY = 40
+    config.latency_config.DDR_W_LATENCY = 0
     config.latency_config.L2M_R_LATENCY = 12
     config.latency_config.L2M_W_LATENCY = 16
 
@@ -117,6 +117,10 @@ def create_5x4_config():
     config.tag_config.TU_ETAG_T2_UE_MAX = 8
     config.tag_config.TU_ETAG_T1_UE_MAX = 15
     config.tag_config.TD_ETAG_T2_UE_MAX = 12
+    config.tag_config.ITAG_TRIGGER_TH_H = 80
+    config.tag_config.ITAG_TRIGGER_TH_V = 80
+    config.tag_config.ITAG_MAX_NUM_H = 1
+    config.tag_config.ITAG_MAX_NUM_V = 1
 
     return config
 
@@ -128,29 +132,31 @@ def main():
     traffic_file_path = str(Path(__file__).parent.parent / "traffic_data")
     traffic_chains = [
         [
-            # "LLama2_AllReduce.txt",
-            "test1.txt",
+            "LLama2_AllReduce.txt",
+            # "test1.txt",
             # "R_5x2.txt",
         ]
     ]
 
     # 2. 创建模型
-    config = create_3x3_config()
+    # config = create_3x3_config()
     # config = create_5x2_config()
-    # config = create_5x4_config()
+    config = create_5x4_config()
     model = CrossRingModel(config)
 
     save_dir = None
     # save_dir = f"../output/noc/CrossRing/{config.NUM_COL}x{config.NUM_ROW}/"
 
     # 3. 配置各种选项
-    model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)  # Traffic文件设置，节点的IP会根据数据流连接。
-    # model.setup_debug(logging_level=0, trace_packets=[1], sleep_time=0.1)  # debug设置，DEBUG级别(0)，跟踪请求1和2，显示所有调试信息
-    model.setup_result_analysis(flow_distribution=1, bandwidth_analysis=1, save_figures=0, save_dir=save_dir)  # 可视化设置
+    model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)
+    # model.setup_debug(trace_packets=[89], update_interval=0.0)
+
+    model.setup_visualization(enable=True, update_interval=0.2, start_cycle=500)
+    model.setup_result_analysis(flow_distribution=1, bandwidth_analysis=1, save_figures=0, save_dir=save_dir)
 
     # 4. 运行仿真 - 减小仿真时间进行调试
     print("▶️  开始仿真")
-    model.run_simulation(max_time_ns=4000.0, progress_interval_ns=1000.0, results_analysis=True, verbose=1)
+    model.run_simulation(max_time_ns=1000.0, progress_interval_ns=1000.0, results_analysis=True, verbose=1)
 
 
 if __name__ == "__main__":

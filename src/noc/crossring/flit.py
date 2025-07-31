@@ -36,8 +36,9 @@ class CrossRingFlit(BaseFlit):
     itag_v: bool = False  # 垂直ITag
     itag_reservation: int = 0  # I-Tag预留信息
     
-    # I-Tag机制新增字段
-    injection_wait_start_cycle: int = -1  # 开始等待注入的周期
+    # I-Tag机制新增字段 - 分水平和垂直等待
+    injection_wait_start_cycle_h: int = -1  # 水平环等待注入开始周期
+    injection_wait_start_cycle_v: int = -1  # 垂直环等待注入开始周期
     itag_reserved: bool = False  # 是否已预约I-Tag
     itag_timeout: bool = False  # 是否已超时
 
@@ -214,6 +215,13 @@ class CrossRingFlit(BaseFlit):
         self.circuits_completed_v = 0
         self.wait_cycle_h = 0
         self.wait_cycle_v = 0
+        
+        # 重置I-Tag等待时间计时器
+        self.injection_wait_start_cycle_h = -1
+        self.injection_wait_start_cycle_v = -1
+        self.itag_reserved = False
+        self.itag_timeout = False
+        
         self.clear_itag()
         self.station_position = -1
         self.current_seat_index = -1
@@ -376,7 +384,8 @@ class CrossRingFlit(BaseFlit):
         self.itag_h = False
         self.itag_v = False
         self.itag_reservation = 0
-        self.injection_wait_start_cycle = -1
+        self.injection_wait_start_cycle_h = -1
+        self.injection_wait_start_cycle_v = -1
         self.itag_reserved = False
         self.itag_timeout = False
         self.moving_direction = 1

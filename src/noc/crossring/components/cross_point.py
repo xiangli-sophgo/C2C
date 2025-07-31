@@ -208,7 +208,7 @@ class CrossPoint:
             "injection_success": {"req": 0, "rsp": 0, "data": 0},
             "bypass_events": {"req": 0, "rsp": 0, "data": 0},
             # E-Tag机制统计
-            "etag_upgrades": {"req": {"T2_to_T1": 0, "T1_to_T0": 0}, "rsp": {"T2_to_T1": 0, "T1_to_T0": 0}, "data": {"T2_to_T1": 0, "T1_to_T0": 0}},
+            "etag_upgrades": {"req": {"T1": 0, "T0": 0}, "rsp": {"T1": 0, "T0": 0}, "data": {"T1": 0, "T0": 0}},
             "t0_queue_operations": {
                 "req": {"added": 0, "removed": 0, "arbitrations": 0},
                 "rsp": {"added": 0, "removed": 0, "arbitrations": 0},
@@ -857,9 +857,9 @@ class CrossPoint:
 
             # 更新统计
             if current_priority == PriorityLevel.T2 and new_priority == PriorityLevel.T1:
-                self.stats["etag_upgrades"][channel]["T2_to_T1"] += 1
+                self.stats["etag_upgrades"][channel]["T1"] += 1
             elif current_priority == PriorityLevel.T1 and new_priority == PriorityLevel.T0:
-                self.stats["etag_upgrades"][channel]["T1_to_T0"] += 1
+                self.stats["etag_upgrades"][channel]["T0"] += 1
 
             # 如果升级到T0，加入T0全局队列
             if new_priority == PriorityLevel.T0:
@@ -955,7 +955,7 @@ class CrossPoint:
 
     def _check_itag_for_flit(self, flit: CrossRingFlit, direction: str, channel: str, cycle: int) -> None:
         """
-        检查单个flit是否需要I-Tag预约
+        检查单个flit是否需要I-Tag预约 - 支持水平和垂直分离的等待时间
 
         Args:
             flit: 要检查的flit
@@ -963,18 +963,28 @@ class CrossPoint:
             channel: 通道类型
             cycle: 当前周期
         """
+        # 确定环路类型
+        ring_type = "horizontal" if direction in ["TL", "TR"] else "vertical"
+        
+        # 选择对应的等待时间字段
+        if ring_type == "horizontal":
+            wait_start_cycle_field = "injection_wait_start_cycle_h"
+            wait_start_cycle = flit.injection_wait_start_cycle_h
+        else:
+            wait_start_cycle_field = "injection_wait_start_cycle_v"
+            wait_start_cycle = flit.injection_wait_start_cycle_v
+
         # 初始化等待周期
-        if not hasattr(flit, "injection_wait_start_cycle") or flit.injection_wait_start_cycle < 0:
-            flit.injection_wait_start_cycle = cycle
+        if wait_start_cycle < 0:
+            setattr(flit, wait_start_cycle_field, cycle)
             flit.itag_reserved = False
             flit.itag_timeout = False
             return
 
         # 计算等待时间
-        wait_cycles = cycle - flit.injection_wait_start_cycle
+        wait_cycles = cycle - wait_start_cycle
 
         # 检查是否超时
-        ring_type = "horizontal" if direction in ["TL", "TR"] else "vertical"
         threshold = self.config.tag_config.ITAG_TRIGGER_TH_H if ring_type == "horizontal" else self.config.tag_config.ITAG_TRIGGER_TH_V
 
         if wait_cycles < threshold:
@@ -984,6 +994,7 @@ class CrossPoint:
         if not flit.itag_timeout:
             flit.itag_timeout = True
             self.stats["itag_timeouts"][channel] += 1
+
 
         # 如果已经预约，不需要再处理
         if flit.itag_reserved:
@@ -1007,6 +1018,7 @@ class CrossPoint:
                 self.itag_reservation_counts[direction][channel] += 1
                 self.stats["itag_triggers"][channel] += 1
                 self.stats["itag_reservations"][channel] += 1
+
             else:
                 # 当前slot已被预约，记录为待预约，下个cycle再试
                 self.itag_pending_counts[direction][channel] += 1

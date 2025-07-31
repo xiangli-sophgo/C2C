@@ -176,9 +176,15 @@ class ResultAnalyzer:
             data_latency = np.inf
             transaction_latency = np.inf
 
-            # 命令延迟：cmd_received_by_cake1_cycle - cmd_entry_noc_from_cake0_cycle
-            if cmd_entry_noc_from_cake0_cycle < np.inf and cmd_received_by_cake1_cycle < np.inf:
-                cmd_latency = cmd_received_by_cake1_cycle - cmd_entry_noc_from_cake0_cycle
+            # 命令延迟：根据读写类型不同
+            if lifecycle.op_type == "read":
+                # 读操作：cmd_received_by_cake1_cycle - cmd_entry_noc_from_cake0_cycle
+                if cmd_entry_noc_from_cake0_cycle < np.inf and cmd_received_by_cake1_cycle < np.inf:
+                    cmd_latency = cmd_received_by_cake1_cycle - cmd_entry_noc_from_cake0_cycle
+            elif lifecycle.op_type == "write":
+                # 写操作：cmd_received_by_cake0_cycle - cmd_entry_noc_from_cake0_cycle
+                if cmd_entry_noc_from_cake0_cycle < np.inf and cmd_received_by_cake0_cycle < np.inf:
+                    cmd_latency = cmd_received_by_cake0_cycle - cmd_entry_noc_from_cake0_cycle
 
             # 数据延迟：根据读写类型不同
             if lifecycle.op_type == "read":
@@ -687,8 +693,8 @@ class ResultAnalyzer:
         tag_analysis = {
             "Circuits统计": {"req_h": 0, "req_v": 0, "rsp_h": 0, "rsp_v": 0, "data_h": 0, "data_v": 0},
             "Wait_cycle统计": {"req_h": 0, "req_v": 0, "rsp_h": 0, "rsp_v": 0, "data_h": 0, "data_v": 0},
-            "RB_ETag统计": {"T1": 0, "T0": 0},
-            "EQ_ETag统计": {"T1": 0, "T0": 0},
+            "RB_ETag统计": {"T1": 0, "T0": 0},  # 水平CrossPoint的E-Tag统计
+            "EQ_ETag统计": {"T1": 0, "T0": 0},  # 垂直CrossPoint的E-Tag统计
             "ITag统计": {"h": 0, "v": 0},
             "Retry统计": {"read": 0, "write": 0},
         }
@@ -728,21 +734,20 @@ class ResultAnalyzer:
                         tag_analysis["ITag统计"]["v"] += stats.get("itag_triggers", {}).get("rsp", 0)
                         tag_analysis["ITag统计"]["v"] += stats.get("itag_triggers", {}).get("data", 0)
 
-                # 收集Ring Bridge E-Tag统计
-                if hasattr(node, "ring_bridge") and hasattr(node.ring_bridge, "stats"):
-                    rb_stats = node.ring_bridge.stats
-                    if "etag_upgrades" in rb_stats:
+                # 收集CrossPoint E-Tag统计（真正的E-Tag实现位置）
+                if hasattr(node, "horizontal_crosspoint") and hasattr(node.horizontal_crosspoint, "stats"):
+                    h_stats = node.horizontal_crosspoint.stats
+                    if "etag_upgrades" in h_stats:
                         for channel in ["req", "rsp", "data"]:
-                            tag_analysis["RB_ETag统计"]["T1"] += rb_stats["etag_upgrades"].get(channel, {}).get("T2_to_T1", 0)
-                            tag_analysis["RB_ETag统计"]["T0"] += rb_stats["etag_upgrades"].get(channel, {}).get("T1_to_T0", 0)
+                            tag_analysis["RB_ETag统计"]["T1"] += h_stats["etag_upgrades"].get(channel, {}).get("T1", 0)
+                            tag_analysis["RB_ETag统计"]["T0"] += h_stats["etag_upgrades"].get(channel, {}).get("T0", 0)
 
-                # 收集Eject Queue E-Tag统计
-                if hasattr(node, "eject_queue") and hasattr(node.eject_queue, "stats"):
-                    eq_stats = node.eject_queue.stats
-                    if "etag_upgrades" in eq_stats:
+                if hasattr(node, "vertical_crosspoint") and hasattr(node.vertical_crosspoint, "stats"):
+                    v_stats = node.vertical_crosspoint.stats
+                    if "etag_upgrades" in v_stats:
                         for channel in ["req", "rsp", "data"]:
-                            tag_analysis["EQ_ETag统计"]["T1"] += eq_stats["etag_upgrades"].get(channel, {}).get("T2_to_T1", 0)
-                            tag_analysis["EQ_ETag统计"]["T0"] += eq_stats["etag_upgrades"].get(channel, {}).get("T1_to_T0", 0)
+                            tag_analysis["EQ_ETag统计"]["T1"] += v_stats["etag_upgrades"].get(channel, {}).get("T1", 0)
+                            tag_analysis["EQ_ETag统计"]["T0"] += v_stats["etag_upgrades"].get(channel, {}).get("T0", 0)
 
             # 收集Retry统计和等待周期统计（从模型的IP接口中）
             if hasattr(model, "ip_interfaces"):

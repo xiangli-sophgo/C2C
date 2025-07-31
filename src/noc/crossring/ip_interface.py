@@ -415,11 +415,15 @@ class CrossRingIPInterface(BaseIPInterface):
         # 查找对应的请求
         req = self._find_matching_request(rsp)
         if not req:
-            # 对于datasend类型的响应，即使找不到匹配的请求也要处理，因为这是正常的write流程
+            # 对于datasend类型的响应，即使找不到匹配的请求也要处理
             if hasattr(rsp, "rsp_type") and rsp.rsp_type == "datasend":
                 # 直接处理datasend响应，req可以为None
                 if rsp.req_type == "write":
                     self._handle_write_response(rsp, req)
+                return
+            else:
+                # 对于其他类型的响应，如果找不到匹配请求，直接返回
+                print(f"⚠️ 警告: 找不到响应 {rsp.packet_id} 对应的请求 (rsp_type: {getattr(rsp, 'rsp_type', 'unknown')})")
                 return
 
         # 同步延迟记录

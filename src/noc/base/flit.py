@@ -330,9 +330,15 @@ class BaseFlit(ABC):
         """计算延迟指标"""
         latencies = {}
 
-        # 命令延迟
-        if self.cmd_entry_noc_from_cake0_cycle < np.inf and self.cmd_received_by_cake1_cycle < np.inf:
-            latencies["cmd_latency"] = self.cmd_latency = self.cmd_received_by_cake1_cycle - self.cmd_entry_noc_from_cake0_cycle
+        # 命令延迟：根据读写类型不同
+        if self.req_type == "read":
+            # 读操作：cmd_received_by_cake1_cycle - cmd_entry_noc_from_cake0_cycle
+            if self.cmd_entry_noc_from_cake0_cycle < np.inf and self.cmd_received_by_cake1_cycle < np.inf:
+                latencies["cmd_latency"] = self.cmd_latency = self.cmd_received_by_cake1_cycle - self.cmd_entry_noc_from_cake0_cycle
+        elif self.req_type == "write":
+            # 写操作：cmd_received_by_cake0_cycle - cmd_entry_noc_from_cake0_cycle
+            if self.cmd_entry_noc_from_cake0_cycle < np.inf and self.cmd_received_by_cake0_cycle < np.inf:
+                latencies["cmd_latency"] = self.cmd_latency = self.cmd_received_by_cake0_cycle - self.cmd_entry_noc_from_cake0_cycle
 
         # 数据延迟
         if self.req_type == "read":
