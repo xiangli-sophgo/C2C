@@ -914,16 +914,19 @@ class CrossRingModel(BaseNoCModel):
             ready_requests = self.traffic_scheduler.get_ready_requests(self.cycle)
             self._inject_traffic_requests(ready_requests)
 
+        # ============ 全局Compute阶段 ============
+        # 1. 所有IP接口的compute阶段
         for node_interfaces in self.ip_interfaces.values():
             for ip_interface in node_interfaces.values():
                 ip_interface.step_compute_phase(self.cycle)
                 ip_interface.step_update_phase(self.cycle)
 
-        self._step_node_compute_phase()
-        self._step_node_update_phase()
-
-        self._step_link_compute_phase()
-        self._step_link_update_phase()
+        # 正确的执行顺序：CrossPoint基于当前slice状态做决策，然后执行环形传递
+        self._step_node_compute_phase()   # CrossPoint基于当前current_slots做决策计划
+        self._step_link_compute_phase()   # Link计算：准备从上游传递到next_slots
+        
+        self._step_node_update_phase()    # CrossPoint执行：注入/弹出当前current_slots
+        self._step_link_update_phase()    # Link更新：next_slots -> current_slots (环形前进)
 
         # 更新全局统计
         self._update_global_statistics()
@@ -1037,27 +1040,27 @@ class CrossRingModel(BaseNoCModel):
             }
         return status
 
-    def setup_debug(self, trace_packets: List[str] = None, sleep_time: float = 0.0) -> None:
+    def setup_debug(self, trace_packets: List[str] = None, update_interval: float = 0.0) -> None:
         """
         启用调试模式（CrossRing扩展版本）
 
         Args:
             trace_packets: 要跟踪的请求ID列表，设置后启用请求跟踪功能
-            sleep_time: 每个周期的暂停时间（用于实时观察）
+            update_interval: 每个周期的暂停时间（用于实时观察）
         """
 
         # 设置调试参数
         self.debug_enabled = True
-        self.debug_config["sleep_time"] = sleep_time
+        self.debug_config["sleep_time"] = update_interval
 
         if trace_packets:
             self.debug_packet_ids.update(trace_packets)
 
-        if sleep_time > 0:
-            self.debug_config["sleep_time"] = sleep_time
+        if update_interval > 0:
+            self.debug_config["sleep_time"] = update_interval
 
         # 调用base类的enable_debug，传递level=1作为兼容参数
-        super().setup_debug(1, trace_packets, sleep_time)
+        super().setup_debug(1, trace_packets, update_interval)
 
     def setup_result_analysis(self, flow_distribution: bool = False, bandwidth_analysis: bool = False, latency_analysis: bool = False, save_figures: bool = True, save_dir: str = "") -> None:
         """
@@ -2102,11 +2105,10 @@ class CrossRingModel(BaseNoCModel):
 
     # ========== 实现BaseNoCModel抽象方法 ==========
 
-
     def check_all_slots_in_network(self) -> Dict[str, Any]:
         """
         检查整个网络中所有链路的slot状态
-        
+
         Returns:
             网络级别的slot检查报告
         """
@@ -2118,42 +2120,42 @@ class CrossRingModel(BaseNoCModel):
             "total_slots": 0,
             "link_reports": {},
             "summary": "",
-            "missing_slots_summary": []
+            "missing_slots_summary": [],
         }
-        
+
         for link_id, link in self.links.items():
             link_report = link.check_all_slices_have_slots()
             network_report["link_reports"][link_id] = link_report
-            
+
             # 累计统计
             network_report["total_slices"] += link_report["total_slices"]
             network_report["total_slots"] += sum(link_report["slot_distribution"].values())
-            
+
             if link_report["slices_without_slots"] == 0:
                 network_report["links_with_all_slots"] += 1
             else:
                 network_report["links_with_missing_slots"] += 1
                 network_report["missing_slots_summary"].extend(link_report["missing_slots"])
-        
+
         # 生成网络级别汇总
         if network_report["links_with_missing_slots"] == 0:
             network_report["summary"] = f"✅ 所有{network_report['total_links']}个链路的slot都完整"
         else:
             network_report["summary"] = f"❌ {network_report['links_with_missing_slots']}/{network_report['total_links']}个链路有slot缺失"
-        
+
         return network_report
 
     def print_network_slot_report(self) -> None:
         """打印网络级别的slot检查报告"""
         report = self.check_all_slots_in_network()
-        
+
         print("🌐 CrossRing网络Slot完整性检查报告:")
         print(f"   {report['summary']}")
         print(f"   总链路数: {report['total_links']}")
         print(f"   总Slice数: {report['total_slices']}")
         print(f"   总Slot数: {report['total_slots']}")
         print(f"   完整链路: {report['links_with_all_slots']}, 缺失链路: {report['links_with_missing_slots']}")
-        
+
         # 如果有缺失，按链路详细报告
         if report["links_with_missing_slots"] > 0:
             print("\n   问题链路详情:")
@@ -2162,7 +2164,7 @@ class CrossRingModel(BaseNoCModel):
                     print(f"   📍 {link_id}: {link_report['summary']}")
                     for missing in link_report["missing_slots"]:
                         print(f"      - {missing['channel']}通道 {missing['slice_id']} (位置{missing['position']})")
-        
+
         print(f"\n   Slot分布统计:")
         for link_id, link_report in report["link_reports"].items():
             total_link_slots = sum(link_report["slot_distribution"].values())

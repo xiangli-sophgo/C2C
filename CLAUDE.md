@@ -282,7 +282,24 @@ ip_eject_channel_buffers → h2l_fifos → IP.get_eject_flit()
    - 水平CrossPoint：处理IQ_TR/IQ_TL的直接上环
    - 垂直CrossPoint：处理Ring Bridge输出的RB_TU/RB_TD
 
-2. **Tag Mechanisms**:
+2. **CrossPoint两阶段执行模型（2025-07-31更新）**:
+   - **Compute阶段**：CrossPoint检查arrival slice状态，计划注入和弹出操作
+     - 下环分析：检查arrival slice上的flit是否需要下环，基于E-Tag机制和目标判断
+     - 上环分析：检查arrival slice是否为空或即将为空（考虑compute阶段的下环计划）
+     - **关键**：所有判断都基于arrival slice，不再检查departure slice
+   - **Update阶段**：执行计划的操作
+     - 先执行下环：将flit从arrival slice弹出到EjectQueue或RingBridge
+     - 后执行上环：将新flit注入到arrival slice的当前slot中
+     - **关键**：注入和弹出都操作arrival slice，因为arrival和departure是同一物理slice在不同时间的状态
+
+3. **Arrival vs Departure Slice语义澄清**:
+   - **物理实现**：arrival和departure是同一个RingSlice对象的引用
+   - **逻辑含义**：
+     - arrival slice：CrossPoint在当前周期看到的slice状态（用于判断和操作）
+     - departure slice：同一slice在下周期的状态预期（概念上的，不直接操作）
+   - **操作原则**：CrossPoint只操作arrival slice，让环形传递机制处理slot移动
+
+4. **Tag Mechanisms**:
    - **I-Tag机制**: CrossPoint注入防饥饿机制
      - **触发条件**: flit注入等待时间超过配置阈值(80-100周期)
      - **预约机制**: 只预约当前slot，不搜索其他slot
@@ -298,11 +315,11 @@ ip_eject_channel_buffers → h2l_fifos → IP.get_eject_flit()
      - **防饥饿**: 下环失败时触发优先级升级T2→T1→T0，有方向限制
      - **T0特殊**: 使用T0专用entry时需要全局队列轮询仲裁
 
-3. **Non-Wrap-Around Topology**:
+5. **Non-Wrap-Around Topology**:
    - Edge nodes connect to themselves, not wrapping around
    - Optimized for chip-to-chip communication patterns
 
-4. **Model Responsibilities**:
+6. **Model Responsibilities**:
    - Model coordinates simulation, does NOT handle inject/eject directly
    - All inject/eject logic is in nodes and CrossPoints
    - Model manages link transmission and node step coordination

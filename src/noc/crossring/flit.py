@@ -262,13 +262,16 @@ class CrossRingFlit(BaseFlit):
         status_str = "".join(status) if status else ""
 
         # IP类型显示 - 简化格式：节点ID:IP类型首字母+索引
-        src_type = self._get_simplified_ip_type(getattr(self, "source_type", None), self.source) if hasattr(self, "source_type") and self.source_type else "??"
-        dst_type = self._get_simplified_ip_type(getattr(self, "destination_type", None), self.destination) if hasattr(self, "destination_type") and self.destination_type else "??"
+        source_type = getattr(self, "source_type", None)
+        destination_type = getattr(self, "destination_type", None)
+        src_type = self._get_simplified_ip_type(source_type, self.source) if source_type else "??"
+        dst_type = self._get_simplified_ip_type(destination_type, self.destination) if destination_type else "??"
 
         # Tag信息
         tag_info = ""
-        if self.current_tag_info:
-            tag_info = f"[{self.current_tag_info}]"
+        current_tag_info = getattr(self, "current_tag_info", "")
+        if current_tag_info:
+            tag_info = f"[{current_tag_info}]"
 
         return f"{self.flit_type.upper()},{self.packet_id}.{self.flit_id},{src_type}->{dst_type}:{position_str}{tag_info},{req_attr},{type_display},{status_str},{self.etag_priority}"
 
@@ -312,44 +315,52 @@ class CrossRingFlit(BaseFlit):
         if self.flit_position == "Ring_slice":
             # 在环路slice中：显示source->dest:slice格式
             slice_pos = getattr(self, "current_slice_index", -1)
-            source_node = getattr(self, "link_source_node", -1)
-            dest_node = getattr(self, "link_dest_node", -1)
+            source_node = getattr(self, "link_source_node", None)
+            dest_node = getattr(self, "link_dest_node", None)
 
-            if source_node >= 0 and dest_node >= 0 and slice_pos >= 0:
+            if source_node is not None and dest_node is not None and slice_pos >= 0:
                 return f"{source_node}->{dest_node}:{slice_pos}"
             elif slice_pos >= 0:
                 return f"S{slice_pos}"
             return "Link"
         elif self.flit_position in ["CP_arrival", "CP_departure"]:
             # 在CrossPoint中：显示节点ID.CP
-            return f"N{self.current_node_id}.CP"
+            node_id = getattr(self, "current_node_id", -1)
+            return f"N{node_id}.CP"
         elif self.flit_position in ["TR_FIFO", "TL_FIFO", "TU_FIFO", "TD_FIFO"]:
             # 在注入方向FIFO中，简化为IQ_方向
             direction = self.flit_position.replace("_FIFO", "")
-            return f"N{self.current_node_id}.IQ_{direction}"
+            node_id = getattr(self, "current_node_id", -1)
+            return f"N{node_id}.IQ_{direction}"
         elif "eject_" in self.flit_position and "_FIFO" in self.flit_position:
             # 在eject FIFO中，简化显示为EQ_方向
             direction = self.flit_position.replace("eject_", "").replace("_FIFO", "")
-            return f"N{self.current_node_id}.EQ_{direction}"
+            node_id = getattr(self, "current_node_id", -1)
+            return f"N{node_id}.EQ_{direction}"
         elif self.flit_position == "channel":
             # 在节点channel_buffer中
-            return f"N{self.current_node_id}.channel"
+            node_id = getattr(self, "current_node_id", -1)
+            return f"N{node_id}.channel"
         elif self.flit_position in ["l2h_fifo", "h2l_fifo"]:
             # 在IP接口FIFO中
-            return f"N{self.current_node_id}.{self.flit_position}"
+            node_id = getattr(self, "current_node_id", -1)
+            return f"N{node_id}.{self.flit_position}"
         elif self.flit_position == "pending":
             # 在IP接口pending队列中
-            return f"N{self.current_node_id}.pending"
+            node_id = getattr(self, "current_node_id", -1)
+            return f"N{node_id}.pending"
         elif self.flit_position == "RB":
             # 在Ring Buffer中 - 使用具体的FIFO名称
             rb_fifo = getattr(self, "rb_fifo_name", None)
+            node_id = getattr(self, "current_node_id", -1)
             if rb_fifo:
-                return f"N{self.current_node_id}.{rb_fifo}"
+                return f"N{node_id}.{rb_fifo}"
             else:
-                return f"N{self.current_node_id}.RB"
-        elif self.current_node_id >= 0:
+                return f"N{node_id}.RB"
+        elif getattr(self, "current_node_id", -1) >= 0:
             # 有节点信息但位置类型不在预期范围内
-            return f"N{self.current_node_id}.{self.flit_position}"
+            node_id = getattr(self, "current_node_id", -1)
+            return f"N{node_id}.{self.flit_position}"
         else:
             # 简化显示
             return self.flit_position

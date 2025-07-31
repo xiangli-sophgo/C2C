@@ -73,9 +73,9 @@ def main():
     # 3. 配置各种选项
     model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)  # Traffic文件设置，节点的IP会根据数据流连接。
     # Debug设置
-    model.setup_debug(trace_packets=[1], sleep_time=0.3)
+    model.setup_debug(trace_packets=[1], update_interval=0.3)
     # 配置实时可视化
-    # model.setup_visualization(enable=True, update_interval=0.1, start_cycle=50)
+    # model.setup_visualization(enable=True, update_interval=0.5, start_cycle=0)
     # 结果分析设置
     model.setup_result_analysis(flow_distribution=1, bandwidth_analysis=1, latency_analysis=1, save_figures=0, save_dir=save_dir)
 

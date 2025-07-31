@@ -205,6 +205,7 @@ class CrossPoint:
             # 基础传输统计
             "flits_injected": {"req": 0, "rsp": 0, "data": 0},
             "flits_ejected": {"req": 0, "rsp": 0, "data": 0},
+            "injection_success": {"req": 0, "rsp": 0, "data": 0},
             "bypass_events": {"req": 0, "rsp": 0, "data": 0},
             # E-Tag机制统计
             "etag_upgrades": {"req": {"T2_to_T1": 0, "T1_to_T0": 0}, "rsp": {"T2_to_T1": 0, "T1_to_T0": 0}, "data": {"T2_to_T1": 0, "T1_to_T0": 0}},
@@ -333,8 +334,8 @@ class CrossPoint:
                 arrival_slice = self.slice_connections[direction][channel]["arrival"]
                 if not arrival_slice:
                     raise ValueError("非法的slice")
-                # 检查arrival slice的PipelinedFIFO输出状态
-                current_slot = arrival_slice.peek_output(channel)
+                # 检查arrival slice的当前slot状态
+                current_slot = arrival_slice.peek_current_slot(channel)
                 if not current_slot or not current_slot.is_occupied:
                     continue
 
@@ -356,9 +357,12 @@ class CrossPoint:
                             can_eject = self._can_eject_with_etag_mechanism(current_slot, channel, direction)
 
                             if can_eject:
-                                # compute阶段立即从slot中取出flit并存储到内部缓冲区
-                                ejected_flit = current_slot.release_flit()
+                                # compute阶段：计划下环操作，但先记录到缓冲区，在update阶段协调执行
+                                ejected_flit = current_slot.flit
                                 if ejected_flit:
+                                    # 标记该slot在update阶段需要被清空，防止环形传递覆盖
+                                    current_slot.crosspoint_ejection_planned = True
+                                    
                                     # 存储到RB缓冲区
                                     self.ejected_flits_buffer["RB"][channel].append(ejected_flit)
 
@@ -389,9 +393,12 @@ class CrossPoint:
                             can_eject = self._can_eject_with_etag_mechanism(current_slot, channel, direction)
 
                             if can_eject:
-                                # compute阶段立即从slot中取出flit并存储到内部缓冲区
-                                ejected_flit = current_slot.release_flit()
+                                # compute阶段：计划下环操作，但先记录到缓冲区，在update阶段协调执行
+                                ejected_flit = current_slot.flit
                                 if ejected_flit:
+                                    # 标记该slot在update阶段需要被清空，防止环形传递覆盖
+                                    current_slot.crosspoint_ejection_planned = True
+                                    
                                     # 存储到EQ缓冲区
                                     self.ejected_flits_buffer["EQ"][channel].append(ejected_flit)
 
@@ -413,15 +420,15 @@ class CrossPoint:
         # ========== 第二部分：上环分析和计划 ==========
         for direction in self.managed_directions:
             for channel in ["req", "rsp", "data"]:
-                departure_slice = self.slice_connections[direction][channel]["departure"]
-                if not departure_slice:
+                arrival_slice = self.slice_connections[direction][channel]["arrival"]
+                if not arrival_slice:
                     raise ValueError("非法的slice")
                 # 1. 优先检查ring_bridge输出（维度转换后的flit重新注入）
                 if ring_bridge:
                     ring_bridge_flit = ring_bridge.peek_output_flit(direction, channel)
                     if ring_bridge_flit:
-                        # 检查departure slice是否可以接受flit
-                        if self._can_inject_to_departure_slice(departure_slice, channel, direction):
+                        # 检查arrival slice状态是否允许注入（考虑下环计划）
+                        if self._can_inject_to_arrival_slice(arrival_slice, channel, direction):
                             # 从ring_bridge获取flit并存储到内部缓冲区
                             actual_flit = ring_bridge.get_output_flit(direction, channel)
                             if actual_flit:
@@ -439,8 +446,8 @@ class CrossPoint:
                     if direction_fifo.valid_signal():  # FIFO有有效输出
                         flit = direction_fifo.peek_output()
                         if flit:
-                            # 检查departure slice是否可以接受
-                            if self._can_inject_to_departure_slice(departure_slice, channel, direction):
+                            # 检查arrival slice状态是否允许注入（考虑下环计划）
+                            if self._can_inject_to_arrival_slice(arrival_slice, channel, direction):
                                 # 从FIFO读取flit并存储到内部缓冲区
                                 actual_flit = direction_fifo.read_output()
                                 if actual_flit:
@@ -906,27 +913,45 @@ class CrossPoint:
 
         return False, current_priority
 
-    def _can_inject_to_departure_slice(self, departure_slice: RingSlice, channel: str, direction: str) -> bool:
+    def _can_inject_to_arrival_slice(self, arrival_slice: RingSlice, channel: str, direction: str) -> bool:
         """
-        检查是否可以向departure slice注入flit
+        检查是否可以向arrival slice注入flit（基于正确的逻辑）
 
         注入条件：
-        1. departure slice能接受新的slot输入
-        2. 或者当前slot被本节点预约（可以直接修改）
+        1. arrival slice的slot为空
+        2. 或者arrival slice的slot有flit但在compute阶段已计划下环（即将为空）
+        3. 或者arrival slice的slot被本节点预约（I-Tag机制）
 
         Args:
-            departure_slice: 目标departure slice
+            arrival_slice: arrival slice
             channel: 通道类型
             direction: 方向
 
         Returns:
             是否可以注入
         """
-        if not departure_slice:
+        if not arrival_slice:
             return False
 
-        # 使用RingSlice的特殊接口，同时处理预约slot和标准流控
-        return departure_slice.can_accept_slot_or_has_reserved_slot(channel, self.node_id)
+        # 获取arrival slice的当前slot状态
+        current_slot = arrival_slice.peek_current_slot(channel)
+        if not current_slot:
+            return False
+
+        # 情况1：slot完全为空
+        if not current_slot.is_occupied:
+            return True
+
+        # 情况2：slot有flit，但在compute阶段已决定下环（检查ejection_transfer_plans）
+        ejection_key = (direction, channel)
+        if ejection_key in [plan.get("direction_channel") for plan in self.ejection_transfer_plans if plan.get("direction_channel") == ejection_key]:
+            return True  # 这个slot即将在update阶段被清空
+
+        # 情况3：slot被本节点预约（I-Tag机制）
+        if current_slot.is_reserved and current_slot.itag_reserver_id == self.node_id:
+            return True
+
+        return False
 
     def _check_itag_for_flit(self, flit: CrossRingFlit, direction: str, channel: str, cycle: int) -> None:
         """
@@ -1131,7 +1156,7 @@ class CrossPoint:
         # 从内部缓冲区获取flit
         if self.injected_flits_buffer["RB"][channel]:
             actual_flit = self.injected_flits_buffer["RB"][channel].pop(0)
-            return self._inject_flit_to_departure_slice(actual_flit, direction, channel)
+            return self._inject_flit_to_arrival_slice(actual_flit, direction, channel)
 
         return False
 
@@ -1151,13 +1176,13 @@ class CrossPoint:
         # 从内部缓冲区获取flit
         if self.injected_flits_buffer["IQ"][channel]:
             flit = self.injected_flits_buffer["IQ"][channel].pop(0)
-            return self._inject_flit_to_departure_slice(flit, direction, channel)
+            return self._inject_flit_to_arrival_slice(flit, direction, channel)
 
         return False
 
-    def _inject_flit_to_departure_slice(self, flit: CrossRingFlit, direction: str, channel: str) -> bool:
+    def _inject_flit_to_arrival_slice(self, flit: CrossRingFlit, direction: str, channel: str) -> bool:
         """
-        将flit注入到departure slice（适配新的PipelinedFIFO架构，简化版本）
+        将flit注入到arrival slice（基于寄存器的环形传递架构）
 
         Args:
             flit: 要注入的flit
@@ -1167,21 +1192,12 @@ class CrossPoint:
         Returns:
             是否注入成功
         """
-        departure_slice = self.slice_connections[direction][channel]["departure"]
-        if not departure_slice:
+        arrival_slice = self.slice_connections[direction][channel]["arrival"]
+        if not arrival_slice:
             return False
 
-        # 创建承载flit的slot
-        new_slot = CrossRingSlot(
-            slot_id=f"{departure_slice.slice_id}_{channel}_injected_{flit.packet_id}",
-            cycle=getattr(self, 'current_cycle', 0),
-            direction=BasicDirection.LOCAL,
-            channel=channel
-        )
-        new_slot.assign_flit(flit)
-        
-        # Update阶段：直接写入到departure slice的PipelinedFIFO
-        success = departure_slice.write_input(new_slot, channel)
+        # 直接将flit注入到arrival slice的当前slot中
+        success = arrival_slice.inject_flit_to_slot(flit, channel)
         if not success:
             return False
 
@@ -1191,55 +1207,39 @@ class CrossPoint:
             self.itag_reservation_counts[direction][channel] -= 1
             
             # 检查是否使用了预约slot
-            # 需要检查departure slice上的预约情况
-            reserved_slot = departure_slice.peek_current_slot(channel)
+            # 需要检查arrival slice上的预约情况
+            reserved_slot = arrival_slice.current_slots.get(channel)
             if reserved_slot and reserved_slot.is_reserved and reserved_slot.itag_reserver_id == self.node_id:
                 # 使用了预约slot，立即释放
                 self.stats["itag_releases"][channel] += 1
-                # 注意：这里不能清除预约，因为我们创建了新的slot而不是使用预约slot
+                # 注意：arrival slice的slot已经被新flit占据，预约状态会被覆盖
             else:
                 # 使用非预约slot，延迟释放
                 self.itag_to_release_counts[direction][channel] += 1
         
-        # 更新flit状态信息
-        self._update_flit_injection_status(flit, direction, new_slot)
+        # 记录注入成功的统计信息
+        # self._record_injection_success(flit, direction, channel)
         return True
 
-    def _update_flit_injection_status(self, flit: CrossRingFlit, direction: str, slot: CrossRingSlot) -> None:
+    def _record_injection_success(self, flit: CrossRingFlit, direction: str, channel: str) -> None:
         """
-        更新注入后的flit状态信息（提取的公共逻辑）
+        记录注入成功的统计信息
         
         Args:
             flit: 注入的flit
             direction: 注入方向
-            slot: 承载flit的slot
+            channel: 通道类型
         """
         # 更新flit状态信息
         flit.current_node_id = self.node_id
 
         target_node = self._calculate_target_node_for_direction(direction)
-        if target_node == self.node_id:
-            # 自环链路
-            reverse_direction = {"TR": "TL", "TL": "TR", "TU": "TD", "TD": "TU"}.get(direction, direction)
-            flit.current_link_id = f"link_{self.node_id}_{direction}_{reverse_direction}_{target_node}"
-        else:
-            # 普通链路
-            flit.current_link_id = f"link_{self.node_id}_{direction}_{target_node}"
+        if target_node:
+            flit.next_node_id = target_node
+        
+        # 记录注入统计
+        self.stats["injection_success"][channel] += 1
 
-        flit.current_slice_index = 0
-        flit.crosspoint_direction = "departure"
-        flit.current_position = self.node_id
-
-        # 设置链路源和目标节点信息
-        flit.link_source_node = self.node_id
-        flit.link_dest_node = target_node
-
-        # 设置flit位置为标准格式
-        flit.flit_position = "Ring_slice"
-
-        # 设置slot索引（如果有的话）
-        if slot:
-            flit.current_slot_index = slot.slot_id
 
     def _calculate_target_node_for_direction(self, direction: str) -> int:
         """
@@ -1314,6 +1314,11 @@ class CrossPoint:
         # 清理allocated_entry_info
         if hasattr(slot, "allocated_entry_info"):
             delattr(slot, "allocated_entry_info")
+        
+        # 关键修复：清空slot中的flit，防止link传递时继续修改已下环的flit
+        slot.flit = None
+        slot.valid = False
+        slot.crosspoint_ejection_planned = False
 
     # def step(self, cycle: int, node_inject_fifos: Dict[str, Dict[str, Any]], node_eject_fifos: Dict[str, Dict[str, Any]]) -> None:
     #     """

@@ -1142,7 +1142,7 @@ class CrossRingIPInterface(BaseIPInterface):
         # 2. 初始化传输决策存储
         self._transfer_decisions = {
             "pending_to_l2h": {"req": None, "rsp": None, "data": None},  # 每个通道独立决策
-            "l2h_to_node": {"req": None, "rsp": None, "data": None},    # 每个通道独立决策
+            "l2h_to_node": {"req": None, "rsp": None, "data": None},  # 每个通道独立决策
             "network_to_h2l_h": {"channel": None, "flit": None},
             "h2l_h_to_h2l_l": {"channel": None, "flit": None},
             "h2l_l_to_completion": {"channel": None, "flit": None},
@@ -1175,7 +1175,7 @@ class CrossRingIPInterface(BaseIPInterface):
             if self.pending_by_channel[channel]:
                 l2h_ready = self.l2h_fifos[channel].ready_signal()
                 flit = self.pending_by_channel[channel][0]
-                
+
                 if l2h_ready:
                     if flit.departure_cycle <= current_cycle:
                         # 检查带宽限制（仅针对data通道）
