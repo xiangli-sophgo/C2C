@@ -439,8 +439,9 @@ class CrossPoint:
                             # 无法上环，检查是否需要触发I-Tag预约
                             self._check_and_trigger_itag_reservation(ring_bridge_flit, direction, channel, cycle)
 
-                # 2. 检查普通inject_input_fifos
-                if direction in node_inject_fifos[channel]:
+                # 2. 检查普通inject_input_fifos（仅水平CrossPoint处理）
+                # 垂直CrossPoint的TU/TD方向flit必须先经过Ring Bridge处理
+                if self.direction == CrossPointDirection.HORIZONTAL and direction in node_inject_fifos[channel]:
                     direction_fifo = node_inject_fifos[channel][direction]
 
                     if direction_fifo.valid_signal():  # FIFO有有效输出
@@ -463,15 +464,17 @@ class CrossPoint:
             for channel in ["req", "rsp", "data"]:
                 self.itag_pending_counts[direction][channel] = 0
 
-        # 遍历所有inject_fifos中的flit进行I-Tag检查
-        for direction in self.managed_directions:
-            for channel in ["req", "rsp", "data"]:
-                if direction in node_inject_fifos[channel]:
-                    direction_fifo = node_inject_fifos[channel][direction]
-                    # 获取FIFO中的所有flit
-                    all_flits = direction_fifo.get_all_flits()
-                    for flit in all_flits:
-                        self._check_itag_for_flit(flit, direction, channel, cycle)
+        # 遍历inject_fifos中的flit进行I-Tag检查（仅水平CrossPoint处理）
+        # 垂直CrossPoint的TU/TD方向flit由Ring Bridge负责处理
+        if self.direction == CrossPointDirection.HORIZONTAL:
+            for direction in self.managed_directions:
+                for channel in ["req", "rsp", "data"]:
+                    if direction in node_inject_fifos[channel]:
+                        direction_fifo = node_inject_fifos[channel][direction]
+                        # 获取FIFO中的所有flit
+                        all_flits = direction_fifo.get_all_flits()
+                        for flit in all_flits:
+                            self._check_itag_for_flit(flit, direction, channel, cycle)
 
         # 如果有ring_bridge，也检查其中等待的flit
         if ring_bridge:

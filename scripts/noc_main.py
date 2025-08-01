@@ -149,14 +149,14 @@ def main():
 
     # 3. 配置各种选项
     model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)
-    # model.setup_debug(trace_packets=[89], update_interval=0.0)
-
-    model.setup_visualization(enable=True, update_interval=0.2, start_cycle=500)
+    # model.setup_debug(trace_packets=[21], update_interval=0.0)
+    #
+    model.setup_visualization(enable=True, update_interval=0.2, start_cycle=1000)
     model.setup_result_analysis(flow_distribution=1, bandwidth_analysis=1, save_figures=0, save_dir=save_dir)
 
     # 4. 运行仿真 - 减小仿真时间进行调试
     print("▶️  开始仿真")
-    model.run_simulation(max_time_ns=1000.0, progress_interval_ns=1000.0, results_analysis=True, verbose=1)
+    model.run_simulation(max_time_ns=4000.0, progress_interval_ns=1000.0, results_analysis=True, verbose=1)
 
 
 if __name__ == "__main__":

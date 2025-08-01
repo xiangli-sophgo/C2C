@@ -441,102 +441,81 @@ class ResultAnalyzer:
         # 注意：这个方法的打印被移动到模型的_print_traffic_statistics中
         # 避免重复打印
 
-    def _print_detailed_bandwidth_analysis(self, bandwidth_metrics):
-        """打印详细的带宽分析结果"""
-        if not bandwidth_metrics:
-            return
+    # def _print_detailed_latency_analysis(self, latency_metrics, metrics):
+    #     """打印详细的延迟分析结果"""
+    #     if not latency_metrics or not metrics:
+    #         return
 
-        print("\n" + "=" * 60)
-        print("网络带宽分析结果摘要")
-        print("=" * 60)
+    #     print("\n延迟统计 (单位: cycle)")
 
-        # 网络整体带宽
-        if "总体带宽" in bandwidth_metrics:
-            overall = bandwidth_metrics["总体带宽"]
-            print("网络整体带宽:")
+    #     # 按读写分类统计延迟
+    #     read_metrics = [m for m in metrics if m.req_type == "read"]
+    #     write_metrics = [m for m in metrics if m.req_type == "write"]
 
-            # 按操作类型分类显示（只显示加权带宽）
-            for op_type in ["读", "写", "混合", "总"]:
-                if f"{op_type}带宽" in overall:
-                    bw_data = overall[f"{op_type}带宽"]
-                    weighted = bw_data.get("加权带宽_GB/s", 0)
-                    print(f"  {op_type}带宽: {weighted:.3f} GB/s")
+    #     # CMD延迟
+    #     if read_metrics:
+    #         read_cmd_avg = sum(m.cmd_latency for m in read_metrics) / len(read_metrics) if len(read_metrics) > 0 else 0
+    #         read_cmd_max = max(m.cmd_latency for m in read_metrics) if len(read_metrics) > 0 else 0
+    #     else:
+    #         read_cmd_avg = read_cmd_max = 0
 
-    def _print_detailed_latency_analysis(self, latency_metrics, metrics):
-        """打印详细的延迟分析结果"""
-        if not latency_metrics or not metrics:
-            return
+    #     if write_metrics:
+    #         write_cmd_avg = sum(m.cmd_latency for m in write_metrics) / len(write_metrics) if len(write_metrics) > 0 else 0
+    #         write_cmd_max = max(m.cmd_latency for m in write_metrics) if len(write_metrics) > 0 else 0
+    #     else:
+    #         write_cmd_avg = write_cmd_max = 0
 
-        print("\n延迟统计 (单位: cycle)")
+    #     mixed_cmd_avg = sum(m.cmd_latency for m in metrics) / len(metrics) if len(metrics) > 0 else 0
+    #     mixed_cmd_max = max(m.cmd_latency for m in metrics) if len(metrics) > 0 else 0
 
-        # 按读写分类统计延迟
-        read_metrics = [m for m in metrics if m.req_type == "read"]
-        write_metrics = [m for m in metrics if m.req_type == "write"]
+    #     print(f"  CMD 延迟  - 读: avg {read_cmd_avg:.2f}, max {read_cmd_max}；写: avg {write_cmd_avg:.2f}, max {write_cmd_max}；混合: avg {mixed_cmd_avg:.2f}, max {mixed_cmd_max}")
 
-        # CMD延迟
-        if read_metrics:
-            read_cmd_avg = sum(m.cmd_latency for m in read_metrics) / len(read_metrics) if len(read_metrics) > 0 else 0
-            read_cmd_max = max(m.cmd_latency for m in read_metrics) if len(read_metrics) > 0 else 0
-        else:
-            read_cmd_avg = read_cmd_max = 0
+    #     # Data延迟
+    #     if read_metrics:
+    #         read_data_avg = sum(m.data_latency for m in read_metrics) / len(read_metrics) if len(read_metrics) > 0 else 0
+    #         read_data_max = max(m.data_latency for m in read_metrics) if len(read_metrics) > 0 else 0
+    #     else:
+    #         read_data_avg = read_data_max = 0
 
-        if write_metrics:
-            write_cmd_avg = sum(m.cmd_latency for m in write_metrics) / len(write_metrics) if len(write_metrics) > 0 else 0
-            write_cmd_max = max(m.cmd_latency for m in write_metrics) if len(write_metrics) > 0 else 0
-        else:
-            write_cmd_avg = write_cmd_max = 0
+    #     if write_metrics:
+    #         write_data_avg = sum(m.data_latency for m in write_metrics) / len(write_metrics) if len(write_metrics) > 0 else 0
+    #         write_data_max = max(m.data_latency for m in write_metrics) if len(write_metrics) > 0 else 0
+    #     else:
+    #         write_data_avg = write_data_max = 0
 
-        mixed_cmd_avg = sum(m.cmd_latency for m in metrics) / len(metrics) if len(metrics) > 0 else 0
-        mixed_cmd_max = max(m.cmd_latency for m in metrics) if len(metrics) > 0 else 0
+    #     mixed_data_avg = sum(m.data_latency for m in metrics) / len(metrics) if len(metrics) > 0 else 0
+    #     mixed_data_max = max(m.data_latency for m in metrics) if len(metrics) > 0 else 0
 
-        print(f"  CMD 延迟  - 读: avg {read_cmd_avg:.2f}, max {read_cmd_max}；写: avg {write_cmd_avg:.2f}, max {write_cmd_max}；混合: avg {mixed_cmd_avg:.2f}, max {mixed_cmd_max}")
+    #     print(f"  Data 延迟  - 读: avg {read_data_avg:.2f}, max {read_data_max}；写: avg {write_data_avg:.2f}, max {write_data_max}；混合: avg {mixed_data_avg:.2f}, max {mixed_data_max}")
 
-        # Data延迟
-        if read_metrics:
-            read_data_avg = sum(m.data_latency for m in read_metrics) / len(read_metrics) if len(read_metrics) > 0 else 0
-            read_data_max = max(m.data_latency for m in read_metrics) if len(read_metrics) > 0 else 0
-        else:
-            read_data_avg = read_data_max = 0
+    #     # Trans延迟
+    #     if read_metrics:
+    #         read_trans_avg = sum(m.transaction_latency for m in read_metrics) / len(read_metrics) if len(read_metrics) > 0 else 0
+    #         read_trans_max = max(m.transaction_latency for m in read_metrics) if len(read_metrics) > 0 else 0
+    #     else:
+    #         read_trans_avg = read_trans_max = 0
 
-        if write_metrics:
-            write_data_avg = sum(m.data_latency for m in write_metrics) / len(write_metrics) if len(write_metrics) > 0 else 0
-            write_data_max = max(m.data_latency for m in write_metrics) if len(write_metrics) > 0 else 0
-        else:
-            write_data_avg = write_data_max = 0
+    #     if write_metrics:
+    #         write_trans_avg = sum(m.transaction_latency for m in write_metrics) / len(write_metrics) if len(write_metrics) > 0 else 0
+    #         write_trans_max = max(m.transaction_latency for m in write_metrics) if len(write_metrics) > 0 else 0
+    #     else:
+    #         write_trans_avg = write_trans_max = 0
 
-        mixed_data_avg = sum(m.data_latency for m in metrics) / len(metrics) if len(metrics) > 0 else 0
-        mixed_data_max = max(m.data_latency for m in metrics) if len(metrics) > 0 else 0
+    #     mixed_trans_avg = sum(m.transaction_latency for m in metrics) / len(metrics) if len(metrics) > 0 else 0
+    #     mixed_trans_max = max(m.transaction_latency for m in metrics) if len(metrics) > 0 else 0
 
-        print(f"  Data 延迟  - 读: avg {read_data_avg:.2f}, max {read_data_max}；写: avg {write_data_avg:.2f}, max {write_data_max}；混合: avg {mixed_data_avg:.2f}, max {mixed_data_max}")
+    #     print(f"  Trans 延迟  - 读: avg {read_trans_avg:.2f}, max {read_trans_max}；写: avg {write_trans_avg:.2f}, max {write_trans_max}；混合: avg {mixed_trans_avg:.2f}, max {mixed_trans_max}")
 
-        # Trans延迟
-        if read_metrics:
-            read_trans_avg = sum(m.transaction_latency for m in read_metrics) / len(read_metrics) if len(read_metrics) > 0 else 0
-            read_trans_max = max(m.transaction_latency for m in read_metrics) if len(read_metrics) > 0 else 0
-        else:
-            read_trans_avg = read_trans_max = 0
+    #     # 总带宽显示（使用加权带宽）
+    #     if "latency_metrics" in locals() and "总体带宽" in latency_metrics:
+    #         total_bw = latency_metrics["总体带宽"].get("总带宽", {}).get("加权带宽_GB/s", 0)
+    #         print(f"Total Bandwidth: {total_bw:.2f} GB/s")
+    #     else:
+    #         # 从带宽指标中获取总带宽
+    #         total_bw = 0
+    #         print(f"Total Bandwidth: {total_bw:.2f} GB/s")
 
-        if write_metrics:
-            write_trans_avg = sum(m.transaction_latency for m in write_metrics) / len(write_metrics) if len(write_metrics) > 0 else 0
-            write_trans_max = max(m.transaction_latency for m in write_metrics) if len(write_metrics) > 0 else 0
-        else:
-            write_trans_avg = write_trans_max = 0
-
-        mixed_trans_avg = sum(m.transaction_latency for m in metrics) / len(metrics) if len(metrics) > 0 else 0
-        mixed_trans_max = max(m.transaction_latency for m in metrics) if len(metrics) > 0 else 0
-
-        print(f"  Trans 延迟  - 读: avg {read_trans_avg:.2f}, max {read_trans_max}；写: avg {write_trans_avg:.2f}, max {write_trans_max}；混合: avg {mixed_trans_avg:.2f}, max {mixed_trans_max}")
-
-        # 总带宽显示（使用加权带宽）
-        if "latency_metrics" in locals() and "总体带宽" in latency_metrics:
-            total_bw = latency_metrics["总体带宽"].get("总带宽", {}).get("加权带宽_GB/s", 0)
-            print(f"Total Bandwidth: {total_bw:.2f} GB/s")
-        else:
-            # 从带宽指标中获取总带宽
-            total_bw = 0
-            print(f"Total Bandwidth: {total_bw:.2f} GB/s")
-
-        print("=" * 60)
+    #     print("=" * 60)
 
     def analyze_bandwidth(self, requests: List[RequestInfo], verbose: bool = True) -> Dict[str, Any]:
         """分析带宽指标（按照老版本逻辑）"""
@@ -562,15 +541,16 @@ class ResultAnalyzer:
         # 显示各类型带宽（总带宽和RN IP平均带宽）
         if verbose:
             # 只计算RN（DMA）IP的平均带宽
-            rn_requests = [r for r in requests if hasattr(r, "source_type") and r.source_type.lower() in ["gdma", "dma"]]
+            rn_requests = [r for r in requests if hasattr(r, "source_type") and "dma" in r.source_type.lower()]
             rn_read_requests = [r for r in rn_requests if r.req_type == "read"]
             rn_write_requests = [r for r in rn_requests if r.req_type == "write"]
 
-            # 统计RN IP数量（去重）
+            # 统计RN IP数量：使用（节点ID，IP类型）组合来区分不同的RN
             rn_ips = set()
             for r in rn_requests:
-                if hasattr(r, "source_ip"):
-                    rn_ips.add(r.source_ip)
+                # 每个节点的同名IP都是不同的实例
+                rn_key = (r.source_node, r.source_type.lower())
+                rn_ips.add(rn_key)
             rn_ip_count = len(rn_ips) if rn_ips else 1
 
             for label, metrics_data in [("读带宽", read_metrics), ("写带宽", write_metrics), ("混合带宽", overall_metrics), ("总带宽", overall_metrics)]:
@@ -1560,7 +1540,9 @@ class ResultAnalyzer:
                 write_requests = ip_analysis[ip_type]["写请求数"]
 
                 # 在X轴标签下方添加请求数信息
-                ax.text(i, -max(max(read_bw), max(write_bw)) * 0.1, f"总请求: {total_requests}\n(读:{read_requests}, 写:{write_requests})", ha="center", va="top", fontsize=8, alpha=0.7)
+                ax.text(
+                    i, -max(max(read_bw), max(write_bw)) * 0.1, f"总请求: {total_requests}\n(读:{read_requests}, 写:{write_requests})", ha="center", va="top", fontsize=8, alpha=0.7
+                )
 
             plt.tight_layout()
 

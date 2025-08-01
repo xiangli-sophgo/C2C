@@ -160,9 +160,34 @@ class RingBridge:
         if not self.ring_bridge_arbitration_state["req"]["input_sources"]:
             self._initialize_ring_bridge_arbitration()
 
-        # 为每个通道计算仲裁决策
+        # 为每个通道计算仲裁决策（IQ源直接传输到RB输出，无需内部FIFO）
         for channel in ["req", "rsp", "data"]:
             self._compute_channel_ring_bridge_arbitration(channel, cycle, inject_input_fifos)
+
+    def _compute_iq_to_rb_transfers(self, cycle: int, inject_input_fifos: Dict) -> None:
+        """计算从IQ到RB内部FIFO的传输（两阶段执行模型第一阶段）。"""
+        input_sources, _ = self._get_ring_bridge_config()
+        
+        # 初始化传输决策
+        self.iq_to_rb_transfer_decisions = {"req": {}, "rsp": {}, "data": {}}
+        
+        for channel in ["req", "rsp", "data"]:
+            for input_source in input_sources:
+                if input_source.startswith("IQ_"):
+                    direction = input_source[3:]  # 从IQ_TD得到TD
+                    
+                    # 检查IQ FIFO是否有数据
+                    iq_fifo = inject_input_fifos[channel][direction]
+                    if iq_fifo.valid_signal():
+                        # 检查RB内部FIFO是否有空间
+                        rb_input_fifo = self.ring_bridge_input_fifos[channel][direction]
+                        if rb_input_fifo.ready_signal():
+                            # 记录传输决策（在update阶段执行）
+                            self.iq_to_rb_transfer_decisions[channel][direction] = True
+                        else:
+                            self.iq_to_rb_transfer_decisions[channel][direction] = False
+                    else:
+                        self.iq_to_rb_transfer_decisions[channel][direction] = False
 
     def _compute_channel_ring_bridge_arbitration(self, channel: str, cycle: int, inject_input_fifos: Dict) -> None:
         """计算单个通道的ring_bridge仲裁决策。"""
@@ -174,8 +199,18 @@ class RingBridge:
             current_input_idx = arb_state["current_input"]
             input_source = input_sources[current_input_idx]
 
-            # 检查是否有可用的flit（但不取出）
-            flit = self._peek_flit_from_ring_bridge_input(input_source, channel, inject_input_fifos)
+            # 对于IQ源，直接从inject_input_fifos读取（绕过RB内部FIFO以减少延迟）
+            # 对于RB源，从RB内部FIFO读取
+            if input_source.startswith("IQ_"):
+                direction = input_source[3:]
+                iq_fifo = inject_input_fifos[channel][direction]
+                if iq_fifo.valid_signal():
+                    flit = iq_fifo.peek_output()
+                else:
+                    flit = None
+            else:
+                flit = self._peek_flit_from_ring_bridge_input(input_source, channel, inject_input_fifos)
+            
             if flit is not None:
                 # 计算输出方向
                 output_direction = self._determine_ring_bridge_output_direction(flit)
@@ -200,19 +235,53 @@ class RingBridge:
             cycle: 当前周期
             inject_input_fifos: 注入方向FIFO
         """
+        # 执行RB仲裁传输（IQ源直接传输到输出）
         for channel in ["req", "rsp", "data"]:
             decision = self.ring_bridge_arbitration_decisions[channel]
             if decision["flit"] is not None:
                 # 执行之前计算的仲裁决策
                 self._execute_channel_ring_bridge_transfer(channel, decision, cycle, inject_input_fifos)
 
+    def _execute_iq_to_rb_transfers(self, cycle: int, inject_input_fifos: Dict) -> None:
+        """执行从IQ到RB内部FIFO的传输（两阶段执行模型第一阶段）。"""
+        if not hasattr(self, 'iq_to_rb_transfer_decisions'):
+            return
+            
+        for channel in ["req", "rsp", "data"]:
+            for direction, should_transfer in self.iq_to_rb_transfer_decisions[channel].items():
+                if should_transfer:
+                    # 从IQ FIFO读取flit
+                    iq_fifo = inject_input_fifos[channel][direction]
+                    if iq_fifo.valid_signal():
+                        flit = iq_fifo.read_output()
+                        if flit is not None:
+                            # 写入RB内部FIFO
+                            rb_input_fifo = self.ring_bridge_input_fifos[channel][direction]
+                            if rb_input_fifo.ready_signal():
+                                success = rb_input_fifo.write_input(flit)
+                                if success:
+                                    # 更新flit位置信息 - 简化为RB_direction，避免重复节点ID
+                                    flit.flit_position = f"RB_{direction}"
+                                    # 可选：打印调试信息
+                                    # print(f"🔄 周期{cycle}: 节点{self.node_id} IQ_{direction} -> RB_{direction} 传输成功")
+
     def _execute_channel_ring_bridge_transfer(self, channel: str, decision: dict, cycle: int, inject_input_fifos: Dict) -> None:
         """执行单个通道的ring_bridge传输。"""
         input_source = decision["input_source"]
         output_direction = decision["output_direction"]
 
-        # 从输入源获取flit（实际取出）
-        flit = self._get_flit_from_ring_bridge_input(input_source, channel, inject_input_fifos)
+        # 根据输入源类型获取flit
+        if input_source.startswith("IQ_"):
+            # 直接从IQ FIFO读取（单周期传输）
+            direction = input_source[3:]
+            iq_fifo = inject_input_fifos[channel][direction]
+            if iq_fifo.valid_signal():
+                flit = iq_fifo.read_output()
+            else:
+                flit = None
+        else:
+            # 从RB内部FIFO读取
+            flit = self._get_flit_from_ring_bridge_input(input_source, channel, inject_input_fifos)
 
         if flit is not None:
             # 分配到输出FIFO
@@ -248,10 +317,11 @@ class RingBridge:
     def _peek_flit_from_ring_bridge_input(self, input_source: str, channel: str, inject_input_fifos: Dict) -> Optional[CrossRingFlit]:
         """查看ring_bridge输入中的flit（不取出）。"""
         if input_source.startswith("IQ_"):
+            # IQ源现在需要从RB内部FIFO读取（两阶段执行模型）
             direction = input_source[3:]
-            iq_fifo = inject_input_fifos[channel][direction]
-            if iq_fifo.valid_signal():
-                return iq_fifo.peek_output()
+            rb_fifo = self.ring_bridge_input_fifos[channel][direction]
+            if rb_fifo.valid_signal():
+                return rb_fifo.peek_output()
 
         elif input_source.startswith("RB_"):
             direction = input_source[3:]
@@ -264,10 +334,11 @@ class RingBridge:
     def _get_flit_from_ring_bridge_input(self, input_source: str, channel: str, inject_input_fifos: Dict) -> Optional[CrossRingFlit]:
         """从指定的ring_bridge输入源获取flit。"""
         if input_source.startswith("IQ_"):
+            # IQ源现在需要从RB内部FIFO读取（两阶段执行模型）
             direction = input_source[3:]
-            iq_fifo = inject_input_fifos[channel][direction]
-            if iq_fifo.valid_signal():
-                return iq_fifo.read_output()
+            rb_fifo = self.ring_bridge_input_fifos[channel][direction]
+            if rb_fifo.valid_signal():
+                return rb_fifo.read_output()
 
         elif input_source.startswith("RB_"):
             direction = input_source[3:]

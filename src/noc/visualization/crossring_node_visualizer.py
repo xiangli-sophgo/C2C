@@ -698,69 +698,47 @@ class CrossRingNodeVisualizer:
         self.fig.canvas.draw_idle()
 
     def _format_flit_info(self, flit):
-        """Format flit information display, consistent with LinkStateVisualizer"""
+        """Format flit information display - use flit's repr for detailed info"""
         if not flit:
             return "No flit info"
 
-        info_lines = []
-
-        # Basic information
-        packet_id = getattr(flit, "packet_id", None) if hasattr(flit, "packet_id") else flit.get("packet_id", None) if isinstance(flit, dict) else None
-        flit_id = getattr(flit, "flit_id", None) if hasattr(flit, "flit_id") else flit.get("flit_id", None) if isinstance(flit, dict) else None
-
-        if packet_id is not None:
-            info_lines.append(f"Packet ID: {packet_id}")
-        if flit_id is not None:
-            info_lines.append(f"Flit ID: {flit_id}")
-
-        # Add flit type information (request/response/data)
-        flit_type = getattr(flit, "flit_type", None) if hasattr(flit, "flit_type") else flit.get("flit_type", None) if isinstance(flit, dict) else None
-        channel = getattr(flit, "channel", None) if hasattr(flit, "channel") else flit.get("channel", None) if isinstance(flit, dict) else None
-        req_type = getattr(flit, "req_type", None) if hasattr(flit, "req_type") else flit.get("req_type", None) if isinstance(flit, dict) else None
-
-        if channel:
-            channel_name = {"req": "Request", "rsp": "Response", "data": "Data"}.get(channel, channel)
-            if flit_type:
-                info_lines.append(f"Type: {channel_name}({flit_type})")
-            else:
-                info_lines.append(f"Type: {channel_name}")
-
-        if req_type:
-            req_name = {"read": "Read", "write": "Write"}.get(req_type, req_type)
-            info_lines.append(f"Request: {req_name}")
-
-        # Tag information
-        etag = getattr(flit, "ETag_priority", None) if hasattr(flit, "ETag_priority") else flit.get("ETag_priority", None) if isinstance(flit, dict) else None
-        if etag:
-            info_lines.append(f"E-Tag: {etag}")
-
-        itag_h = getattr(flit, "itag_h", False) if hasattr(flit, "itag_h") else flit.get("itag_h", False) if isinstance(flit, dict) else False
-        itag_v = getattr(flit, "itag_v", False) if hasattr(flit, "itag_v") else flit.get("itag_v", False) if isinstance(flit, dict) else False
-
-        if itag_h:
-            info_lines.append("I-Tag: Horizontal")
-        elif itag_v:
-            info_lines.append("I-Tag: Vertical")
-
-        # Position information
-        current_pos = getattr(flit, "current_node_id", None) if hasattr(flit, "current_node_id") else flit.get("current_node_id", None) if isinstance(flit, dict) else None
-        if current_pos is not None:
-            info_lines.append(f"Position: {current_pos}")
-
-        # Source-destination information
-        src = getattr(flit, "source_ip_type", None) if hasattr(flit, "source_ip_type") else flit.get("source_ip_type", None) if isinstance(flit, dict) else None
-        dst = getattr(flit, "dest_ip_type", None) if hasattr(flit, "dest_ip_type") else flit.get("dest_ip_type", None) if isinstance(flit, dict) else None
-
-        if src and dst:
-            info_lines.append(f"Path: {src}→{dst}")
-
-        return "\n".join(info_lines) if info_lines else "No valid info"
+        # 对于字典格式的flit（来自快照），检查是否有保存的repr
+        if isinstance(flit, dict):
+            # 优先使用保存的repr
+            if "flit_repr" in flit:
+                return flit["flit_repr"]
+            
+            # 回退到基本信息显示
+            info_lines = []
+            packet_id = flit.get("packet_id", None)
+            flit_id = flit.get("flit_id", None)
+            channel = flit.get("channel", None)
+            
+            if packet_id is not None:
+                info_lines.append(f"Packet ID: {packet_id}")
+            if flit_id is not None:
+                info_lines.append(f"Flit ID: {flit_id}")
+            if channel:
+                info_lines.append(f"Channel: {channel}")
+                
+            return "\n".join(info_lines) if info_lines else "No valid info"
+        
+        # 对于活动的flit对象，直接使用repr
+        try:
+            return repr(flit)
+        except Exception as e:
+            # 如果repr失败，回退到基本信息
+            packet_id = getattr(flit, "packet_id", "Unknown")
+            flit_id = getattr(flit, "flit_id", "Unknown")
+            return f"Packet ID: {packet_id}\nFlit ID: {flit_id}\n(repr failed: {e})"
 
     def _extract_flit_data(self, flit, channel, direction):
-        """提取flit数据的通用方法"""
+        """提取flit数据的通用方法，包含flit的repr信息"""
         if not flit:
             return None
-        return {
+        
+        # 提取基本字段
+        data = {
             "packet_id": getattr(flit, "packet_id", None),
             "flit_id": getattr(flit, "flit_id", None),
             "ETag_priority": getattr(flit, "ETag_priority", None),
@@ -769,6 +747,14 @@ class CrossRingNodeVisualizer:
             "channel": channel,
             "direction": direction,
         }
+        
+        # 保存flit的完整repr信息
+        try:
+            data["flit_repr"] = repr(flit)
+        except Exception as e:
+            data["flit_repr"] = f"repr failed: {e}"
+        
+        return data
 
     def _extract_fifo_data(self, fifos, node_id, channels=["req", "rsp", "data"]):
         """提取FIFO数据的通用方法 - 包含internal_queue和output_register"""

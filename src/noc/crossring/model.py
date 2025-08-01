@@ -922,11 +922,11 @@ class CrossRingModel(BaseNoCModel):
                 ip_interface.step_update_phase(self.cycle)
 
         # 正确的执行顺序：CrossPoint基于当前slice状态做决策，然后执行环形传递
-        self._step_node_compute_phase()   # CrossPoint基于当前current_slots做决策计划
-        self._step_link_compute_phase()   # Link计算：准备从上游传递到next_slots
-        
-        self._step_node_update_phase()    # CrossPoint执行：注入/弹出当前current_slots
-        self._step_link_update_phase()    # Link更新：next_slots -> current_slots (环形前进)
+        self._step_node_compute_phase()  # CrossPoint基于当前current_slots做决策计划
+        self._step_link_compute_phase()  # Link计算：准备从上游传递到next_slots
+
+        self._step_node_update_phase()  # CrossPoint执行：注入/弹出当前current_slots
+        self._step_link_update_phase()  # Link更新：next_slots -> current_slots (环形前进)
 
         # 更新全局统计
         self._update_global_statistics()
@@ -1062,7 +1062,9 @@ class CrossRingModel(BaseNoCModel):
         # 调用base类的enable_debug，传递level=1作为兼容参数
         super().setup_debug(1, trace_packets, update_interval)
 
-    def setup_result_analysis(self, flow_distribution: bool = False, bandwidth_analysis: bool = False, latency_analysis: bool = False, save_figures: bool = True, save_dir: str = "") -> None:
+    def setup_result_analysis(
+        self, flow_distribution: bool = False, bandwidth_analysis: bool = False, latency_analysis: bool = False, save_figures: bool = True, save_dir: str = ""
+    ) -> None:
         """
         配置结果分析
 
@@ -1274,7 +1276,9 @@ class CrossRingModel(BaseNoCModel):
             "cycle_accurate": cycle_accurate,
         }
 
-    def analyze_simulation_results(self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output", verbose: bool = True) -> Dict[str, Any]:
+    def analyze_simulation_results(
+        self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output", verbose: bool = True
+    ) -> Dict[str, Any]:
         """
         分析仿真结果 - 调用CrossRing专用分析器
 
@@ -1317,7 +1321,9 @@ class CrossRingModel(BaseNoCModel):
         analyzer = ResultAnalyzer()
         # 传递可视化配置到ResultAnalyzer
         viz_config = getattr(self, "_viz_config", {})
-        analysis_results = analyzer.analyze_noc_results(self.request_tracker, self.config, self, results, enable_visualization, save_results, timestamped_dir, save_figures, verbose, viz_config)
+        analysis_results = analyzer.analyze_noc_results(
+            self.request_tracker, self.config, self, results, enable_visualization, save_results, timestamped_dir, save_figures, verbose, viz_config
+        )
 
         # ResultAnalyzer现在会根据save_figures参数直接处理显示或保存
 
@@ -1778,7 +1784,12 @@ class CrossRingModel(BaseNoCModel):
 
     def __repr__(self) -> str:
         """字符串表示"""
-        return f"CrossRingModel({self.config.config_name}, " f"{self.config.NUM_ROW}x{self.config.NUM_COL}, " f"cycle={self.cycle}, " f"active_requests={self.get_total_active_requests()})"
+        return (
+            f"CrossRingModel({self.config.config_name}, "
+            f"{self.config.NUM_ROW}x{self.config.NUM_COL}, "
+            f"cycle={self.cycle}, "
+            f"active_requests={self.get_total_active_requests()})"
+        )
 
     # ========== 统一接口方法（用于兼容性） ==========
 

@@ -173,6 +173,8 @@ class EjectQueue:
                     # 保存传输计划
                     self._eject_transfer_plan.append((source, channel, flit, target_ip))
                     arb_state["last_served_source"][source] = cycle
+                    # 成功后更新current_source到下一个，确保下次从不同源开始
+                    arb_state["current_source"] = (current_source_idx + 1) % len(sources)
                     break
                 else:
                     pass

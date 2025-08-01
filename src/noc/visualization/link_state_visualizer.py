@@ -37,14 +37,18 @@ configure_matplotlib_fonts(verbose=False)
 
 # ---------- lightweight flit proxy for snapshot rendering ----------
 class _FlitProxy:
-    __slots__ = ("packet_id", "flit_id", "ETag_priority", "itag_h", "itag_v")
+    __slots__ = ("packet_id", "flit_id", "ETag_priority", "itag_h", "itag_v", "flit_repr", "channel", "current_node_id", "flit_position")
 
-    def __init__(self, pid, fid, etag, ih, iv):
+    def __init__(self, pid, fid, etag, ih, iv, flit_repr=None, channel=None, current_node_id=None, flit_position=None):
         self.packet_id = pid
         self.flit_id = fid
         self.ETag_priority = etag
         self.itag_h = ih
         self.itag_v = iv
+        self.flit_repr = flit_repr
+        self.channel = channel
+        self.current_node_id = current_node_id
+        self.flit_position = flit_position
 
     def __repr__(self):
         itag = "H" if self.itag_h else ("V" if self.itag_v else "")
@@ -142,7 +146,14 @@ class LinkStateVisualizer:
         """设置状态显示"""
         # 在左上角创建状态文本
         self._status_text = self.link_ax.text(
-            0.02, 0.98, "", transform=self.link_ax.transAxes, fontsize=10, verticalalignment="top", bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.8), family="sans-serif"
+            0.02,
+            0.98,
+            "",
+            transform=self.link_ax.transAxes,
+            fontsize=10,
+            verticalalignment="top",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.8),
+            family="sans-serif",
         )
         self._update_status_display()
 
@@ -459,7 +470,9 @@ class LinkStateVisualizer:
                         offset_start_y, offset_end_y = offset_end_y, offset_start_y
 
                     # 绘制箭头
-                    arrow = FancyArrowPatch((offset_start_x, offset_start_y), (offset_end_x, offset_end_y), arrowstyle="-|>", mutation_scale=15, color="black", linewidth=1.5, alpha=0.8, zorder=1)
+                    arrow = FancyArrowPatch(
+                        (offset_start_x, offset_start_y), (offset_end_x, offset_end_y), arrowstyle="-|>", mutation_scale=15, color="black", linewidth=1.5, alpha=0.8, zorder=1
+                    )
                     self.link_ax.add_patch(arrow)
 
             # 绘制slice slots
@@ -468,9 +481,9 @@ class LinkStateVisualizer:
     def _draw_link_slices(self, src_pos, dest_pos, link_id, slice_num, unit_dx, unit_dy, perp_dx, perp_dy):
         """绘制链路上的slice slots，双向链路两侧都显示但对齐"""
         # 计算slice布局参数
-        slot_size = 0.08  # slot边长
-        slot_spacing = 0.02  # slot间距
-        side_offset = 0.15  # 距离箭头的距离
+        slot_size = 0.1  # slot边长 - 增大提高点击灵敏度
+        slot_spacing = 0.00  # slot间距
+        side_offset = 0.18  # 距离箭头的距离
 
         # 计算slice沿链路方向排列的总长度
         total_length = slice_num * slot_size + (slice_num - 1) * slot_spacing
@@ -523,7 +536,7 @@ class LinkStateVisualizer:
 
             for slot_positions, slot_id in target_side_slots:
                 slot_x, slot_y = slot_positions
-                slot_size = 0.08  # 保持与原来相同的大小
+                slot_size = 0.1  # 增大提高点击灵敏度
 
                 # 创建当前链路专用的rectangle
                 slot = Rectangle((slot_x, slot_y), slot_size, slot_size, facecolor="none", edgecolor="gray", linewidth=0.8, linestyle="--", alpha=0.7)
@@ -663,63 +676,43 @@ class LinkStateVisualizer:
                 rect.set_alpha(0.7)
 
     def _format_flit_info(self, flit):
-        """Format flit information display, consistent with CrossRingNodeVisualizer"""
+        """Format flit information display - use flit's repr for detailed info"""
         if not flit:
             return "No flit info"
 
-        info_lines = []
+        # 对于字典格式的flit（来自快照），检查是否有保存的repr
+        if isinstance(flit, dict):
+            # 优先使用保存的repr
+            if "flit_repr" in flit:
+                return flit["flit_repr"]
 
-        # Basic information
-        packet_id = getattr(flit, "packet_id", None)
-        flit_id = getattr(flit, "flit_id", None)
+            # 回退到基本信息显示
+            info_lines = []
+            packet_id = flit.get("packet_id", None)
+            flit_id = flit.get("flit_id", None)
+            channel = flit.get("channel", None)
 
-        if packet_id is not None:
-            info_lines.append(f"Packet ID: {packet_id}")
-        if flit_id is not None:
-            info_lines.append(f"Flit ID: {flit_id}")
+            if packet_id is not None:
+                info_lines.append(f"Packet ID: {packet_id}")
+            if flit_id is not None:
+                info_lines.append(f"Flit ID: {flit_id}")
+            if channel:
+                info_lines.append(f"Channel: {channel}")
 
-        # Add flit type information (request/response/data)
-        flit_type = getattr(flit, "flit_type", None)
-        channel = getattr(flit, "channel", None)
-        req_type = getattr(flit, "req_type", None)
+            return "\n".join(info_lines) if info_lines else "No valid info"
 
-        if channel:
-            channel_name = {"req": "Request", "rsp": "Response", "data": "Data"}.get(channel, channel)
-            if flit_type:
-                info_lines.append(f"Type: {channel_name}({flit_type})")
-            else:
-                info_lines.append(f"Type: {channel_name}")
-
-        if req_type:
-            req_name = {"read": "Read", "write": "Write"}.get(req_type, req_type)
-            info_lines.append(f"Request: {req_name}")
-
-        # Tag information
-        etag = getattr(flit, "ETag_priority", None)
-        if etag:
-            info_lines.append(f"E-Tag: {etag}")
-
-        itag_h = getattr(flit, "itag_h", False)
-        itag_v = getattr(flit, "itag_v", False)
-
-        if itag_h:
-            info_lines.append("I-Tag: Horizontal")
-        elif itag_v:
-            info_lines.append("I-Tag: Vertical")
-
-        # Position information
-        current_pos = getattr(flit, "current_node_id", None)
-        if current_pos is not None:
-            info_lines.append(f"Position: {current_pos}")
-
-        # Source-destination information
-        src = getattr(flit, "source_ip_type", None)
-        dst = getattr(flit, "dest_ip_type", None)
-
-        if src and dst:
-            info_lines.append(f"Path: {src}→{dst}")
-
-        return "\n".join(info_lines) if info_lines else "No valid info"
+        # 对于活动的flit对象，优先使用保存的flit_repr
+        if hasattr(flit, 'flit_repr') and flit.flit_repr:
+            return flit.flit_repr
+        
+        # 否则直接使用repr
+        try:
+            return repr(flit)
+        except Exception as e:
+            # 如果repr失败，回退到基本信息
+            packet_id = getattr(flit, "packet_id", "Unknown")
+            flit_id = getattr(flit, "flit_id", "Unknown")
+            return f"Packet ID: {packet_id}\nFlit ID: {flit_id}\n(repr failed: {e})"
 
     def _connect_events(self):
         """连接各种事件处理器"""
@@ -760,16 +753,23 @@ class LinkStateVisualizer:
 
     def _on_flit_click(self, flit):
         """处理flit点击事件"""
-        pid = getattr(flit, "packet_id", None)
+        # 兼容字典和对象两种格式获取packet_id
+        if isinstance(flit, dict):
+            pid = flit.get("packet_id", None)
+        else:
+            pid = getattr(flit, "packet_id", None)
+
         if pid is not None:
             self._track_packet(pid)
 
-        # 显示flit详细信息（添加这个功能）
+        # 显示flit详细信息（使用_format_flit_info支持repr）
         if hasattr(self, "node_vis") and self.node_vis:
             # 格式化flit信息并显示在右下角
             flit_info = self._format_flit_info(flit)
             self.node_vis.info_text.set_text(flit_info)
             self.node_vis.current_highlight_flit = flit
+
+        print(f"🖱️ 点击了link上的flit: packet_id={pid}")
 
     def _select_node(self, node_id):
         """选择节点并更新右侧详细视图"""
@@ -1045,8 +1045,16 @@ CrossRing可视化控制键:
 
         # 保存历史快照（仅在实时模式下，即非回放状态）
         if self._play_idx is None:
-            # 如果没有提供cycle，使用默认值0或历史长度
-            effective_cycle = cycle if cycle is not None else len(self.history)
+            # 优先使用传入的cycle，其次使用模型的cycle，最后使用递增值
+            if cycle is not None:
+                effective_cycle = cycle
+            elif network and hasattr(network, 'cycle'):
+                effective_cycle = network.cycle
+            elif network and hasattr(network, '_current_cycle'):
+                effective_cycle = network._current_cycle
+            else:
+                # 避免cycle重复：如果历史不为空，使用最后一个cycle+1
+                effective_cycle = (self.history[-1][0] + 1) if self.history else 0
             self._save_history_snapshot(network, effective_cycle)
 
         # 统一使用快照数据更新显示（无论实时还是回放模式）
@@ -1095,20 +1103,28 @@ CrossRing可视化控制键:
 
                                     # 检查RingSlice的所有pipeline阶段，寻找有效的flit
                                     def extract_flit_from_slot(slot, slot_channel):
-                                        """从slot中提取flit信息"""
+                                        """从slot中提取flit信息，包含完整repr"""
                                         if slot and hasattr(slot, "flit") and slot.flit:
+                                            flit_data = {
+                                                "packet_id": getattr(slot.flit, "packet_id", None),
+                                                "flit_id": getattr(slot.flit, "flit_id", None),
+                                                "ETag_priority": getattr(slot.flit, "ETag_priority", None),
+                                                "itag_h": getattr(slot.flit, "itag_h", False),
+                                                "itag_v": getattr(slot.flit, "itag_v", False),
+                                                "current_node_id": getattr(slot.flit, "current_node_id", None),
+                                                "flit_position": getattr(slot.flit, "flit_position", None),
+                                                "channel": slot_channel,
+                                            }
+
+                                            # 保存flit的完整repr信息
+                                            try:
+                                                flit_data["flit_repr"] = repr(slot.flit)
+                                            except Exception as e:
+                                                flit_data["flit_repr"] = f"repr failed: {e}"
+
                                             return {
                                                 "valid": getattr(slot, "valid", False),
-                                                "flit": {
-                                                    "packet_id": getattr(slot.flit, "packet_id", None),
-                                                    "flit_id": getattr(slot.flit, "flit_id", None),
-                                                    "ETag_priority": getattr(slot.flit, "ETag_priority", None),
-                                                    "itag_h": getattr(slot.flit, "itag_h", False),
-                                                    "itag_v": getattr(slot.flit, "itag_v", False),
-                                                    "current_node_id": getattr(slot.flit, "current_node_id", None),
-                                                    "flit_position": getattr(slot.flit, "flit_position", None),
-                                                    "channel": slot_channel,
-                                                },
+                                                "flit": flit_data,
                                             }
                                         return None
 
@@ -1116,20 +1132,20 @@ CrossRing可视化控制键:
                                     slot_info = None
 
                                     # 方法1：尝试获取当前slot（输出位置）
-                                    current_slot = slice_obj.peek_current_slot(channel) if hasattr(slice_obj, 'peek_current_slot') else None
+                                    current_slot = slice_obj.peek_current_slot(channel) if hasattr(slice_obj, "peek_current_slot") else None
                                     if current_slot:
                                         slot_info = extract_flit_from_slot(current_slot, channel)
-                                    
+
                                     # 方法2：如果没有找到，尝试从内部pipeline获取
-                                    if not slot_info and hasattr(slice_obj, 'internal_pipelines'):
+                                    if not slot_info and hasattr(slice_obj, "internal_pipelines"):
                                         pipeline = slice_obj.internal_pipelines.get(channel)
                                         if pipeline:
                                             # 检查output register
-                                            if hasattr(pipeline, 'output_valid') and pipeline.output_valid and hasattr(pipeline, 'output_register'):
+                                            if hasattr(pipeline, "output_valid") and pipeline.output_valid and hasattr(pipeline, "output_register"):
                                                 slot_info = extract_flit_from_slot(pipeline.output_register, channel)
-                                            
+
                                             # 检查internal queue
-                                            if not slot_info and hasattr(pipeline, 'internal_queue') and len(pipeline.internal_queue) > 0:
+                                            if not slot_info and hasattr(pipeline, "internal_queue") and len(pipeline.internal_queue) > 0:
                                                 # 获取队列中的第一个slot
                                                 first_slot = list(pipeline.internal_queue)[0]
                                                 slot_info = extract_flit_from_slot(first_slot, channel)
@@ -1166,18 +1182,26 @@ CrossRing可视化控制键:
                             # 从demo slice格式提取数据
                             if hasattr(slice_obj, "slot") and slice_obj.slot:
                                 slot = slice_obj.slot
+                                flit_data = {
+                                    "packet_id": getattr(slot, "packet_id", None),
+                                    "flit_id": getattr(slot, "flit_id", None),
+                                    "ETag_priority": getattr(slot, "etag_priority", "T2"),
+                                    "itag_h": getattr(slot, "itag_h", False),
+                                    "itag_v": getattr(slot, "itag_v", False),
+                                    "current_node_id": None,
+                                    "flit_position": None,
+                                    "channel": "req",
+                                }
+
+                                # 保存demo slot的repr信息
+                                try:
+                                    flit_data["flit_repr"] = repr(slot)
+                                except Exception as e:
+                                    flit_data["flit_repr"] = f"repr failed: {e}"
+
                                 slot_info = {
                                     "valid": getattr(slot, "valid", True),
-                                    "flit": {
-                                        "packet_id": getattr(slot, "packet_id", None),
-                                        "flit_id": getattr(slot, "flit_id", None),
-                                        "ETag_priority": getattr(slot, "etag_priority", "T2"),
-                                        "itag_h": getattr(slot, "itag_h", False),
-                                        "itag_v": getattr(slot, "itag_v", False),
-                                        "current_node_id": None,
-                                        "flit_position": None,
-                                        "channel": "req",
-                                    },
+                                    "flit": flit_data,
                                 }
                             else:
                                 slot_info = None
@@ -1262,23 +1286,18 @@ CrossRing可视化控制键:
                             if flit_data:
                                 flit_count += 1
 
-                                # 创建临时flit对象
+                                # 创建临时flit对象，直接传入所有字段避免__slots__限制
                                 temp_flit = _FlitProxy(
                                     pid=flit_data.get("packet_id"),
                                     fid=flit_data.get("flit_id"),
                                     etag=flit_data.get("ETag_priority", "T2"),
                                     ih=flit_data.get("itag_h", False),
                                     iv=flit_data.get("itag_v", False),
+                                    flit_repr=flit_data.get("flit_repr"),
+                                    channel=flit_data.get("channel"),
+                                    current_node_id=flit_data.get("current_node_id"),
+                                    flit_position=flit_data.get("flit_position"),
                                 )
-
-                                # 添加其他属性（跳过__slots__限制的属性）
-                                for attr, value in flit_data.items():
-                                    if not hasattr(temp_flit, attr):
-                                        try:
-                                            setattr(temp_flit, attr, value)
-                                        except AttributeError:
-                                            # 跳过无法设置的属性（由于__slots__限制）
-                                            pass
 
                                 self._update_slot_visual(link_id, slice_idx_int, temp_flit)
                                 break  # 每个slice只显示一个flit
@@ -1343,7 +1362,9 @@ CrossRing可视化控制键:
                         self.rect_info_map[rect] = (rect_link_ids, slot, rect_slot_idx)
 
                         # 获取flit样式并应用
-                        face_color, alpha, line_width, edge_color = self._get_flit_style(slot, use_highlight=self.use_highlight, expected_packet_id=self.tracked_pid, highlight_color="red")
+                        face_color, alpha, line_width, edge_color = self._get_flit_style(
+                            slot, use_highlight=self.use_highlight, expected_packet_id=self.tracked_pid, highlight_color="red"
+                        )
                         rect.set_facecolor(face_color)
                         rect.set_alpha(alpha)
                         rect.set_edgecolor(edge_color)
