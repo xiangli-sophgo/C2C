@@ -389,15 +389,15 @@ class TrafficScheduler:
         chain.load_traffic_requests(requests, traffic_id)
 
         if self.verbose:
-            print(f"Started traffic {traffic_file} on {chain.chain_id}")
-            print(f"  Traffic ID: {traffic_id}, Requests: {total_req}, Flits: {total_flit}")
-            print(f"  Time offset: {chain.chain_time_offset}ns")
+            print(f"在{chain.chain_id}上启动流量 {traffic_file}")
+            print(f"  流量 ID: {traffic_id}, 请求数: {total_req}, Flit数: {total_flit}")
+            print(f"  时间偏移: {chain.chain_time_offset}ns")
             if requests:
                 network_freq = getattr(self.config.basic_config, 'NETWORK_FREQUENCY', 1.0) * 1000000000
                 first_time_ns = requests[0][0] * 1e9 / int(network_freq)
                 last_time_ns = requests[-1][0] * 1e9 / int(network_freq)
-                print(f"  First request time: {first_time_ns}ns ({requests[0][0]} cycles)")
-                print(f"  Last request time: {last_time_ns}ns ({requests[-1][0]} cycles)")
+                print(f"  首个请求时间: {first_time_ns}ns ({requests[0][0]} 周期)")
+                print(f"  最后请求时间: {last_time_ns}ns ({requests[-1][0]} 周期)")
 
     def _parse_traffic_file(self, filename: str, time_offset: int, traffic_id: str) -> Tuple[int, int, List[Tuple]]:
         """解析traffic文件并添加时间偏移
@@ -546,9 +546,9 @@ class TrafficScheduler:
                     chain.chain_time_offset = actual_end_ns + gap_time
 
                     if self.verbose:
-                        print(f"Traffic {traffic_id} completed:")
-                        print(f"  Actual end time: {actual_end_ns}ns")
-                        print(f"  Next time offset: {chain.chain_time_offset}ns")
+                        print(f"流量 {traffic_id} 完成:")
+                        print(f"  实际结束时间: {actual_end_ns}ns")
+                        print(f"  下一个时间偏移: {chain.chain_time_offset}ns")
 
                     # 推进到下一个traffic
                     chain.advance_to_next()
@@ -558,7 +558,7 @@ class TrafficScheduler:
                         self._start_single_traffic(chain)
                     else:
                         if self.verbose:
-                            print(f"Chain {chain.chain_id} completed")
+                            print(f"链 {chain.chain_id} 完成")
 
                 del self.active_traffics[traffic_id]
 
@@ -578,6 +578,32 @@ class TrafficScheduler:
     def get_active_traffic_count(self) -> int:
         """获取当前活跃的traffic数量"""
         return len(self.active_traffics)
+
+    def get_total_requests(self) -> int:
+        """获取所有traffic文件的总请求数
+        
+        Returns:
+            所有traffic文件中的总请求数量
+        """
+        total = 0
+        for traffic_state in self.active_traffics.values():
+            total += traffic_state.total_req
+        
+        # 如果当前没有活跃的traffic，检查已完成的链
+        if total == 0:
+            for chain in self.parallel_chains:
+                for traffic_file in chain.traffic_files:
+                    # 创建临时reader来获取统计信息
+                    reader = TrafficFileReader(
+                        traffic_file, 
+                        self.traffic_file_path, 
+                        self.config, 
+                        0,  # time_offset不影响统计
+                        f"temp_{traffic_file}"
+                    )
+                    total += reader.total_req
+        
+        return total
 
     def get_chain_status(self) -> Dict[str, Dict]:
         """获取所有链的状态信息

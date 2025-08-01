@@ -914,22 +914,16 @@ class CrossRingModel(BaseNoCModel):
             ready_requests = self.traffic_scheduler.get_ready_requests(self.cycle)
             self._inject_traffic_requests(ready_requests)
 
-        # ============ 全局Compute阶段 ============
-        # 1. 所有IP接口的compute阶段
         for node_interfaces in self.ip_interfaces.values():
             for ip_interface in node_interfaces.values():
                 ip_interface.step_compute_phase(self.cycle)
                 ip_interface.step_update_phase(self.cycle)
 
-        # 正确的执行顺序：CrossPoint基于当前slice状态做决策，然后执行环形传递
-        self._step_node_compute_phase()  # CrossPoint基于当前current_slots做决策计划
-        self._step_link_compute_phase()  # Link计算：准备从上游传递到next_slots
+        self._step_node_compute_phase()
+        self._step_link_compute_phase()
 
-        self._step_node_update_phase()  # CrossPoint执行：注入/弹出当前current_slots
-        self._step_link_update_phase()  # Link更新：next_slots -> current_slots (环形前进)
-
-        # 更新全局统计
-        self._update_global_statistics()
+        self._step_node_update_phase()
+        self._step_link_update_phase()
 
         # 调试功能
         if self.debug_enabled:
@@ -947,8 +941,6 @@ class CrossRingModel(BaseNoCModel):
 
             if self._realtime_visualizer:
                 self._update_visualization()
-
-        # Debug休眠已移至_print_debug_info中，只有在打印信息时才执行
 
     def _step_link_compute_phase(self) -> None:
         """Link层计算阶段：计算slice移动规划，不实际移动flit"""
@@ -1063,16 +1055,34 @@ class CrossRingModel(BaseNoCModel):
         super().setup_debug(1, trace_packets, update_interval)
 
     def setup_result_analysis(
-        self, flow_distribution: bool = False, bandwidth_analysis: bool = False, latency_analysis: bool = False, save_figures: bool = True, save_dir: str = ""
+        self,
+        # 图片生成控制
+        flow_distribution_fig: bool = False,
+        bandwidth_analysis_fig: bool = False,
+        latency_analysis_fig: bool = False,
+        save_figures: bool = True,
+        # CSV文件导出控制
+        export_request_csv: bool = True,
+        export_fifo_csv: bool = True,
+        export_link_csv: bool = True,
+        # 通用设置
+        save_dir: str = "",
     ) -> None:
         """
         配置结果分析
 
-        Args:
-            flow_distribution: 是否生成流量分布图
-            bandwidth_analysis: 是否生成带宽分析图
-            latency_analysis: 是否生成延迟分析图
+        图片生成控制:
+            flow_distribution_fig: 是否生成流量分布图
+            bandwidth_analysis_fig: 是否生成带宽分析图
+            latency_analysis_fig: 是否生成延迟分析图
             save_figures: 是否保存图片文件到磁盘
+
+        CSV文件导出控制:
+            export_request_csv: 是否导出请求统计CSV文件
+            export_fifo_csv: 是否导出FIFO统计CSV文件
+            export_link_csv: 是否导出链路统计CSV文件
+
+        通用设置:
             save_dir: 保存目录，如果为None或空字符串则不保存任何文件
         """
         # 如果save_dir为None或空字符串，禁用所有保存功能
@@ -1086,10 +1096,16 @@ class CrossRingModel(BaseNoCModel):
 
         self._viz_config.update(
             {
-                "flow_distribution": flow_distribution,
-                "bandwidth_analysis": bandwidth_analysis,
-                "latency_analysis": latency_analysis,
+                # 图片生成控制
+                "flow_distribution": flow_distribution_fig,
+                "bandwidth_analysis": bandwidth_analysis_fig,
+                "latency_analysis": latency_analysis_fig,
                 "save_figures": actual_save_figures,
+                # CSV导出控制
+                "export_request_csv": export_request_csv,
+                "export_fifo_csv": export_fifo_csv,
+                "export_link_csv": export_link_csv,
+                # 通用设置
                 "save_dir": save_dir,
             }
         )
@@ -1276,9 +1292,7 @@ class CrossRingModel(BaseNoCModel):
             "cycle_accurate": cycle_accurate,
         }
 
-    def analyze_simulation_results(
-        self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output", verbose: bool = True
-    ) -> Dict[str, Any]:
+    def analyze_simulation_results(self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output", verbose: bool = True) -> Dict[str, Any]:
         """
         分析仿真结果 - 调用CrossRing专用分析器
 
@@ -1311,8 +1325,16 @@ class CrossRingModel(BaseNoCModel):
             timestamp = int(time.time())
             timestamped_dir = os.path.join(save_dir, f"analysis_{timestamp}")
 
-            # 收集链路带宽统计数据并导出CSV
-            self._collect_and_export_link_statistics(timestamped_dir, timestamp)
+            # 根据配置决定是否导出链路统计数据到CSV
+            link_csv_path = ""
+            if self._viz_config.get("export_link_csv", True):
+                self._collect_and_export_link_statistics(timestamped_dir, timestamp)
+                link_csv_path = os.path.join(timestamped_dir, f"link_bandwidth_{timestamp}.csv")
+
+            # 根据配置决定是否导出FIFO统计数据到CSV
+            fifo_csv_path = ""
+            if self._viz_config.get("export_fifo_csv", True):
+                fifo_csv_path = self.export_fifo_statistics(f"fifo_stats_{timestamp}", timestamped_dir)
         else:
             timestamped_dir = ""
             # 如果save_dir为空，禁用结果保存
@@ -1321,9 +1343,18 @@ class CrossRingModel(BaseNoCModel):
         analyzer = ResultAnalyzer()
         # 传递可视化配置到ResultAnalyzer
         viz_config = getattr(self, "_viz_config", {})
-        analysis_results = analyzer.analyze_noc_results(
-            self.request_tracker, self.config, self, results, enable_visualization, save_results, timestamped_dir, save_figures, verbose, viz_config
-        )
+
+        # 添加CSV文件路径和统计数量到配置中
+        if save_dir:
+            viz_config["fifo_csv_path"] = fifo_csv_path
+            viz_config["link_csv_path"] = link_csv_path
+            # 添加数量信息
+            if fifo_csv_path:
+                viz_config["fifo_count"] = len(self.fifo_stats_collector.fifo_registry)
+            if link_csv_path and hasattr(self, "links"):
+                viz_config["link_count"] = len(self.links)
+
+        analysis_results = analyzer.analyze_noc_results(self.request_tracker, self.config, self, results, enable_visualization, save_results, timestamped_dir, save_figures, verbose, viz_config)
 
         # ResultAnalyzer现在会根据save_figures参数直接处理显示或保存
 
@@ -1784,12 +1815,7 @@ class CrossRingModel(BaseNoCModel):
 
     def __repr__(self) -> str:
         """字符串表示"""
-        return (
-            f"CrossRingModel({self.config.config_name}, "
-            f"{self.config.NUM_ROW}x{self.config.NUM_COL}, "
-            f"cycle={self.cycle}, "
-            f"active_requests={self.get_total_active_requests()})"
-        )
+        return f"CrossRingModel({self.config.config_name}, " f"{self.config.NUM_ROW}x{self.config.NUM_COL}, " f"cycle={self.cycle}, " f"active_requests={self.get_total_active_requests()})"
 
     # ========== 统一接口方法（用于兼容性） ==========
 
@@ -1887,8 +1913,12 @@ class CrossRingModel(BaseNoCModel):
         """
         self.debug_config["sleep_time"] = sleep_time
 
-    def _collect_and_export_link_statistics(self, save_dir: str, timestamp: int = None) -> None:
-        """收集所有链路的带宽统计数据并导出CSV文件"""
+    def _collect_and_export_link_statistics(self, save_dir: str, timestamp: int = None) -> str:
+        """收集所有链路的带宽统计数据并导出CSV文件
+
+        Returns:
+            导出的CSV文件路径
+        """
         try:
             import csv
             from pathlib import Path
@@ -1899,7 +1929,7 @@ class CrossRingModel(BaseNoCModel):
             # CSV文件路径（使用传入的时间戳或生成新的）
             if timestamp is None:
                 timestamp = int(time.time())
-            csv_file_path = os.path.join(save_dir, f"link_bandwidth_stats_{timestamp}.csv")
+            csv_file_path = os.path.join(save_dir, f"link_bandwidth_{timestamp}.csv")
 
             # 收集所有链路的统计数据
             all_link_stats = []
@@ -1959,6 +1989,8 @@ class CrossRingModel(BaseNoCModel):
                     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                     writer.writeheader()
                     writer.writerows(all_link_stats)
+
+                # 输出信息统一在结果总结中显示，这里不重复输出
 
                 # 打印链路带宽汇总
                 # self._print_link_bandwidth_summary(all_link_stats)
@@ -2110,7 +2142,7 @@ class CrossRingModel(BaseNoCModel):
                 analysis_results = self.analyze_simulation_results(results, enable_visualization=True, save_results=True, verbose=verbose)
                 results["analysis"] = analysis_results
             except Exception as e:
-                print(f"Error during results analysis: {e}")
+                print(f"结果分析过程中出错: {e}")
 
         return results
 

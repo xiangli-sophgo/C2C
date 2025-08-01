@@ -42,10 +42,6 @@ class FIFOStatistics:
         self.overflow_attempts = 0
         self.underflow_attempts = 0
         
-        # 延迟统计
-        self.flit_timestamps = {}  # {flit_id: enter_time}
-        self.residence_times = []
-        
         # 行为模式统计
         self.priority_writes = 0
         self.total_simulation_cycles = 0
@@ -84,17 +80,6 @@ class FIFOStatistics:
         else:
             self.read_stalls += 1
             
-    def record_flit_enter(self, flit_id: str, cycle: int):
-        """记录flit进入时间"""
-        self.flit_timestamps[flit_id] = cycle
-        
-    def record_flit_exit(self, flit_id: str, cycle: int):
-        """记录flit离开时间并计算停留时间"""
-        if flit_id in self.flit_timestamps:
-            residence_time = cycle - self.flit_timestamps[flit_id]
-            self.residence_times.append(residence_time)
-            del self.flit_timestamps[flit_id]
-            
     def record_overflow_attempt(self):
         """记录溢出尝试"""
         self.overflow_attempts += 1
@@ -111,15 +96,11 @@ class FIFOStatistics:
         write_efficiency = self.total_writes_successful / max(1, self.total_writes_attempted)
         read_efficiency = self.total_reads_successful / max(1, self.total_reads_attempted)
         
-        avg_residence = sum(self.residence_times) / max(1, len(self.residence_times)) if self.residence_times else 0
-        min_residence = min(self.residence_times) if self.residence_times else 0
-        max_residence = max(self.residence_times) if self.residence_times else 0
-        
         active_percentage = self.active_cycles / max(1, self.total_simulation_cycles)
         
         return {
             "当前深度": self.current_depth,
-            "峰值深度": self.peak_depth,
+            "峰值深度": self.peak_depth,  
             "平均深度": round(avg_depth, 2),
             "利用率百分比": round(utilization * 100, 2),
             "空队列周期数": self.empty_cycles,
@@ -134,9 +115,6 @@ class FIFOStatistics:
             "读取阻塞次数": self.read_stalls,
             "溢出尝试次数": self.overflow_attempts,
             "下溢尝试次数": self.underflow_attempts,
-            "平均停留时间": round(avg_residence, 2),
-            "最小停留时间": min_residence,
-            "最大停留时间": max_residence,
             "高优先级写入": self.priority_writes,
             "总仿真周期": self.total_simulation_cycles,
             "活跃周期百分比": round(active_percentage * 100, 2)
@@ -213,20 +191,6 @@ class PipelinedFIFO:
         if self.output_valid and not self.read_this_cycle:
             self.read_this_cycle = True
             self.stats.record_read_attempt(successful=True)
-            
-            # 记录flit退出时间
-            if hasattr(self.output_register, 'packet_id'):
-                self.stats.record_flit_exit(str(self.output_register.packet_id), self.current_cycle)
-            elif hasattr(self.output_register, 'slot_id'):
-                # 处理CrossRingSlot对象
-                self.stats.record_flit_exit(str(self.output_register.slot_id), self.current_cycle)
-            else:
-                try:
-                    self.stats.record_flit_exit(str(hash(self.output_register)), self.current_cycle)
-                except TypeError:
-                    # 对象不可哈希，使用id代替
-                    self.stats.record_flit_exit(f"obj_{id(self.output_register)}", self.current_cycle)
-                
             return self.output_register
         else:
             # 尝试读取但失败
@@ -244,20 +208,6 @@ class PipelinedFIFO:
         if self.can_accept_input():
             self.internal_queue.append(data)
             self.stats.record_write_attempt(successful=True)
-            
-            # 记录flit进入时间
-            if hasattr(data, 'packet_id'):
-                self.stats.record_flit_enter(str(data.packet_id), self.current_cycle)
-            elif hasattr(data, 'slot_id'):
-                # 处理CrossRingSlot对象
-                self.stats.record_flit_enter(str(data.slot_id), self.current_cycle)
-            elif hasattr(data, '__hash__'):
-                try:
-                    self.stats.record_flit_enter(str(hash(data)), self.current_cycle)
-                except TypeError:
-                    # 对象不可哈希，使用id代替
-                    self.stats.record_flit_enter(f"obj_{id(data)}", self.current_cycle)
-                
             return True
         else:
             self.stats.record_write_attempt(successful=False)
@@ -294,20 +244,6 @@ class PipelinedFIFO:
             # 将数据插入到队列头部
             self.internal_queue.appendleft(data)
             self.stats.record_write_attempt(successful=True, is_priority=True)
-            
-            # 记录flit进入时间
-            if hasattr(data, 'packet_id'):
-                self.stats.record_flit_enter(str(data.packet_id), self.current_cycle)
-            elif hasattr(data, 'slot_id'):
-                # 处理CrossRingSlot对象
-                self.stats.record_flit_enter(str(data.slot_id), self.current_cycle)
-            elif hasattr(data, '__hash__'):
-                try:
-                    self.stats.record_flit_enter(str(hash(data)), self.current_cycle)
-                except TypeError:
-                    # 对象不可哈希，使用id代替
-                    self.stats.record_flit_enter(f"obj_{id(data)}", self.current_cycle)
-                
             return True
         else:
             self.stats.record_write_attempt(successful=False, is_priority=True)

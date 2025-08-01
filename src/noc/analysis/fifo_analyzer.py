@@ -53,7 +53,7 @@ class FIFOStatsCollector:
         # 生成文件名（统一使用Unix时间戳格式）
         if filename is None:
             timestamp = int(time.time())
-            filename = f"fifo_statistics_{timestamp}"
+            filename = f"fifo_stats_{timestamp}"
             
         filepath = os.path.join(output_dir, f"{filename}.csv")
         
@@ -62,7 +62,7 @@ class FIFOStatsCollector:
             print("⚠️ 没有收集到FIFO统计数据")
             return filepath
             
-        # 定义CSV列标题（中文）- 移除冗余列
+        # 定义CSV列标题（中文）- 移除延迟统计相关列
         headers = [
             "节点ID", "FIFO名称", "最大容量",
             "当前深度", "峰值深度", "平均深度", "利用率百分比",
@@ -70,7 +70,6 @@ class FIFOStatsCollector:
             "总写入尝试", "成功写入次数", "总读取尝试", "成功读取次数",
             "写入效率", "读取效率", "写入阻塞次数", "读取阻塞次数",
             "溢出尝试次数", "下溢尝试次数",
-            "平均停留时间", "最小停留时间", "最大停留时间",
             "高优先级写入", "总仿真周期", "活跃周期百分比"
         ]
         
@@ -86,8 +85,7 @@ class FIFOStatsCollector:
                     row[header] = stats.get(header, 0)
                 writer.writerow(row)
                 
-        print(f"📊 FIFO统计数据已导出到: {filepath}")
-        print(f"📈 共导出 {len(collected_stats)} 个FIFO的统计信息")
+        # 输出信息统一在结果总结中显示，这里不重复输出
         
         return filepath
         

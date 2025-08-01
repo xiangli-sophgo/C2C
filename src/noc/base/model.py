@@ -62,19 +62,7 @@ class BaseNoCModel(ABC):
         # Flit对象池
         self.flit_pools: Dict[Type[BaseFlit], FlitPool] = {}
 
-        # 性能统计
-        self.global_stats = {
-            "total_cycles": 0,
-            "total_requests": 0,
-            "total_responses": 0,
-            "total_data_flits": 0,
-            "total_retries": 0,
-            "peak_active_requests": 0,
-            "current_active_requests": 0,
-            "average_latency": 0.0,
-            "throughput": 0.0,
-            "network_utilization": 0.0,
-        }
+        # 性能统计已移除，改为按需计算
 
         # 仿真状态
         self.is_running = False
@@ -288,9 +276,6 @@ class BaseNoCModel(ABC):
 
         self._step_link_update_phase()
 
-        # 更新全局统计
-        self._update_global_statistics()
-
         # 调试功能
         if self.debug_enabled:
             self.debug_func()
@@ -397,7 +382,7 @@ class BaseNoCModel(ABC):
                 analysis_results = self.analyze_simulation_results(results, enable_visualization=True, save_results=True, verbose=verbose)
                 results["analysis"] = analysis_results
             except Exception as e:
-                print(f"Error during results analysis: {e}")
+                print(f"结果分析过程中出错: {e}")
 
         return results
 
@@ -407,25 +392,12 @@ class BaseNoCModel(ABC):
         if self.user_interrupted:
             return True
             
-        # 获取总请求数和已完成请求数
+        # 直接从TrafficScheduler获取总请求数（已经计算过的）
         total_requests = 0
-        completed_requests = 0
-
         if hasattr(self, "traffic_scheduler") and self.traffic_scheduler:
-            # 统计traffic文件中的总请求数
-            for chain in self.traffic_scheduler.parallel_chains:
-                for traffic_file in chain.traffic_files:
-                    abs_path = os.path.join(self.traffic_scheduler.traffic_file_path, traffic_file)
-                    try:
-                        with open(abs_path, "r") as f:
-                            for line in f:
-                                if line.strip() and not line.startswith("#"):
-                                    parts = line.strip().split(",")
-                                    if len(parts) >= 7:
-                                        total_requests += 1
-                    except Exception:
-                        continue
+            total_requests = self.traffic_scheduler.get_total_requests()
 
+        completed_requests = 0
         if hasattr(self, "request_tracker") and self.request_tracker:
             completed_requests = len(self.request_tracker.completed_requests)
 
@@ -434,18 +406,9 @@ class BaseNoCModel(ABC):
 
     def _reset_statistics(self) -> None:
         """重置统计计数器"""
-        self.global_stats = {
-            "total_cycles": 0,
-            "total_requests": 0,
-            "total_responses": 0,
-            "total_data_flits": 0,
-            "total_retries": 0,
-            "peak_active_requests": 0,
-            "current_active_requests": 0,
-            "average_latency": 0.0,
-            "throughput": 0.0,
-            "network_utilization": 0.0,
-        }
+        # 统计已移至按需计算，这里只重置IP接口统计
+        for ip in self._ip_registry.values():
+            ip.reset_stats()
 
         # 重置IP接口统计
         for ip in self._ip_registry.values():
@@ -458,42 +421,6 @@ class BaseNoCModel(ABC):
                 "throughput": {"requests_per_cycle": 0.0, "data_per_cycle": 0.0},
             }
 
-    def _update_global_statistics(self) -> None:
-        """更新全局统计"""
-        self.global_stats["total_cycles"] = self.cycle
-
-        # 汇总IP接口统计
-        total_requests = 0
-        total_responses = 0
-        total_data = 0
-        total_retries = 0
-        all_latencies = []
-
-        for ip in self._ip_registry.values():
-            total_requests += sum(ip.stats["requests_sent"].values())
-            total_responses += sum(ip.stats["responses_received"].values())
-            total_data += sum(ip.stats["data_transferred"].values())
-            total_retries += sum(ip.stats["retries"].values())
-            all_latencies.extend(ip.stats["latencies"]["total"])
-
-        self.global_stats["total_requests"] = total_requests
-        self.global_stats["total_responses"] = total_responses
-        self.global_stats["total_data_flits"] = total_data
-        self.global_stats["total_retries"] = total_retries
-
-        # 计算平均延迟
-        if all_latencies:
-            self.global_stats["average_latency"] = sum(all_latencies) / len(all_latencies)
-
-        # 计算吞吐量
-        if self.cycle > 0:
-            self.global_stats["throughput"] = total_requests / self.cycle
-
-        # 更新当前活跃请求数
-        current_active = self.get_total_active_requests()
-        self.global_stats["current_active_requests"] = current_active
-        if current_active > self.global_stats["peak_active_requests"]:
-            self.global_stats["peak_active_requests"] = current_active
 
     def _generate_simulation_results(self, stats_start_cycle: int) -> Dict[str, Any]:
         """生成仿真结果"""
@@ -509,6 +436,24 @@ class BaseNoCModel(ABC):
         for flit_type, pool in self.flit_pools.items():
             pool_stats[flit_type.__name__] = pool.get_stats()
 
+        # 计算全局统计（替代原来的global_stats）
+        total_requests = 0
+        total_responses = 0
+        total_data_flits = 0
+        total_retries = 0
+        all_latencies = []
+        
+        for ip in self._ip_registry.values():
+            total_requests += sum(ip.stats["requests_sent"].values())
+            total_responses += sum(ip.stats["responses_received"].values())
+            total_data_flits += sum(ip.stats["data_transferred"].values())
+            total_retries += sum(ip.stats["retries"].values())
+            all_latencies.extend(ip.stats["latencies"]["total"])
+        
+        # 计算平均延迟和吞吐量
+        average_latency = sum(all_latencies) / len(all_latencies) if all_latencies else 0.0
+        throughput = total_requests / self.cycle if self.cycle > 0 else 0.0
+
         results = {
             "simulation_info": {
                 "model_name": self.model_name,
@@ -518,12 +463,22 @@ class BaseNoCModel(ABC):
                 "config": self._get_config_summary(),
                 "topology": self._get_topology_info() if hasattr(self, "_get_topology_info") else {},
             },
-            "global_stats": self.global_stats.copy(),
+            "global_stats": {
+                "total_cycles": self.cycle,
+                "total_requests": total_requests,
+                "total_responses": total_responses,
+                "total_data_flits": total_data_flits,
+                "total_retries": total_retries,
+                "average_latency": average_latency,
+                "throughput": throughput,
+            },
             "ip_interface_stats": ip_detailed_stats,
             "memory_stats": {
                 "flit_pools": pool_stats,
             },
-            "performance_metrics": self._calculate_performance_metrics(),
+            "performance_metrics": self._calculate_performance_metrics_direct(
+                total_requests, total_retries, total_data_flits, all_latencies
+            ),
         }
 
         return results
@@ -536,30 +491,25 @@ class BaseNoCModel(ABC):
             "ip_interface_count": len(self.ip_interfaces),
         }
 
-    def _calculate_performance_metrics(self) -> Dict[str, Any]:
-        """计算性能指标"""
+    def _calculate_performance_metrics_direct(self, total_requests: int, total_retries: int, 
+                                              total_data_flits: int, all_latencies: list) -> Dict[str, Any]:
+        """直接计算性能指标（不依赖global_stats）"""
         metrics = {}
 
         # 计算延迟分布
-        all_latencies = []
-        for ip in self._ip_registry.values():
-            all_latencies.extend(ip.stats["latencies"]["total"])
-
         if all_latencies:
-            all_latencies.sort()
-            n = len(all_latencies)
+            all_latencies_sorted = sorted(all_latencies)
+            n = len(all_latencies_sorted)
             metrics["latency_percentiles"] = {
-                "p50": all_latencies[int(n * 0.5)],
-                "p90": all_latencies[int(n * 0.9)],
-                "p95": all_latencies[int(n * 0.95)],
-                "p99": all_latencies[int(n * 0.99)],
-                "min": min(all_latencies),
-                "max": max(all_latencies),
+                "p50": all_latencies_sorted[int(n * 0.5)],
+                "p90": all_latencies_sorted[int(n * 0.9)],
+                "p95": all_latencies_sorted[int(n * 0.95)],
+                "p99": all_latencies_sorted[int(n * 0.99)],
+                "min": min(all_latencies_sorted),
+                "max": max(all_latencies_sorted),
             }
 
         # 计算重试率
-        total_requests = self.global_stats["total_requests"]
-        total_retries = self.global_stats["total_retries"]
         if total_requests > 0:
             metrics["retry_rate"] = total_retries / total_requests
 
@@ -567,7 +517,7 @@ class BaseNoCModel(ABC):
         if self.cycle > 0:
             metrics["network_efficiency"] = {
                 "requests_per_cycle": total_requests / self.cycle,
-                "data_flits_per_cycle": self.global_stats["total_data_flits"] / self.cycle,
+                "data_flits_per_cycle": total_data_flits / self.cycle,
             }
 
         return metrics
@@ -693,6 +643,14 @@ class BaseNoCModel(ABC):
     def _print_final_statistics(self) -> None:
         """打印最终统计信息"""
         print("仿真完成!")
+        
+        # 计算仿真用时统计
+        simulation_time = self.end_time - self.start_time
+        cycles_per_second = self.cycle / simulation_time if simulation_time > 0 else 0
+        
+        print(f"仿真用时: {simulation_time:.2f} 秒")
+        print(f"处理周期数: {self.cycle} 个周期")
+        print(f"仿真性能: {cycles_per_second:.0f} 周期/秒")
 
         # 计算时间（ns） - 从配置获取网络频率
         network_freq = 1.0  # 默认1GHz
@@ -944,9 +902,7 @@ class BaseNoCModel(ABC):
             },
             "topology_info": self._get_topology_info() if hasattr(self, "_get_topology_info") else {},
             "performance": {
-                "throughput": self.global_stats["throughput"],
-                "average_latency": self.global_stats["average_latency"],
-                "retry_rate": (self.global_stats["total_retries"] / max(1, self.global_stats["total_requests"])),
+                "note": "性能统计已移至仿真结束时计算",
             },
         }
 
@@ -954,7 +910,7 @@ class BaseNoCModel(ABC):
         """打印调试状态"""
         print(f"\n=== {self.model_name} 调试状态 (周期 {self.cycle}) ===")
         print(f"活跃请求总数: {self.get_total_active_requests()}")
-        print(f"全局统计: {self.global_stats}")
+        print(f"当前周期: {self.cycle}")
 
         if self.debug_config["detailed_stats"]:
             print("\nIP接口详细状态:")
@@ -1036,7 +992,7 @@ class BaseNoCModel(ABC):
 
         # 打印统计信息
         if self.debug_config["detailed_stats"]:
-            print(f"\n全局统计: {self.global_stats}")
+            print(f"\n当前周期: {self.cycle}, 活跃请求: {self.get_total_active_requests()}")
 
     def validate_traffic_correctness(self) -> Dict[str, Any]:
         """验证流量的正确性"""
@@ -1076,8 +1032,7 @@ class BaseNoCModel(ABC):
         # 清理Flit对象池
         self.flit_pools.clear()
 
-        # 清理统计信息
-        self.global_stats.clear()
+        # 统计信息已移除
 
     def __repr__(self) -> str:
         """字符串表示"""

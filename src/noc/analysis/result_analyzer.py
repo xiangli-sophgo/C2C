@@ -97,6 +97,42 @@ class WorkingInterval:
         return self.total_bytes / self.duration if self.duration > 0 else 0.0
 
 
+class AnalysisDataCache:
+    """分析数据缓存类，避免重复计算"""
+    
+    def __init__(self, metrics: List[RequestInfo]):
+        """初始化时一次性提取所有数据"""
+        # 分离读写请求
+        self.all_metrics = metrics
+        self.read_metrics = [m for m in metrics if m.req_type == "read"]
+        self.write_metrics = [m for m in metrics if m.req_type == "write"]
+        
+        # 提取所有延迟数据
+        self.all_cmd_latencies = [m.cmd_latency for m in metrics]
+        self.all_data_latencies = [m.data_latency for m in metrics]
+        self.all_trans_latencies = [m.transaction_latency for m in metrics]
+        
+        # 按类型分组的延迟数据
+        self.read_cmd_latencies = [m.cmd_latency for m in self.read_metrics]
+        self.read_data_latencies = [m.data_latency for m in self.read_metrics]
+        self.read_trans_latencies = [m.transaction_latency for m in self.read_metrics]
+        
+        self.write_cmd_latencies = [m.cmd_latency for m in self.write_metrics]
+        self.write_data_latencies = [m.data_latency for m in self.write_metrics]
+        self.write_trans_latencies = [m.transaction_latency for m in self.write_metrics]
+        
+        # 统计信息
+        self.read_flit_count = sum(m.burst_length for m in self.read_metrics)
+        self.write_flit_count = sum(m.burst_length for m in self.write_metrics)
+        self.total_flit_count = self.read_flit_count + self.write_flit_count
+        
+        # 按IP类型分组的数据（用于端口带宽分析）
+        self.ip_grouped_data = defaultdict(lambda: {"read": [], "write": []})
+        for metric in metrics:
+            source_ip_type = metric.source_type.upper()  # 'GDMA' 或 'DDR'
+            self.ip_grouped_data[source_ip_type][metric.req_type].append(metric)
+
+
 class ResultAnalyzer:
     """通用NoC结果分析器"""
 
@@ -441,6 +477,11 @@ class ResultAnalyzer:
         # 注意：这个方法的打印被移动到模型的_print_traffic_statistics中
         # 避免重复打印
 
+    def _print_data_statistics_cached(self, data_cache: AnalysisDataCache):
+        """使用缓存数据打印统计信息"""
+        # 使用缓存的数据，避免重复计算
+        pass  # 实际打印逻辑已移到模型中
+
     # def _print_detailed_latency_analysis(self, latency_metrics, metrics):
     #     """打印详细的延迟分析结果"""
     #     if not latency_metrics or not metrics:
@@ -565,6 +606,49 @@ class ResultAnalyzer:
 
         return {"总体带宽": overall_metrics, "读操作带宽": read_metrics, "写操作带宽": write_metrics}
 
+    def analyze_bandwidth_cached(self, data_cache: AnalysisDataCache, verbose: bool = True) -> Dict[str, Any]:
+        """使用缓存数据分析带宽指标，避免重复计算"""
+        if not data_cache.all_metrics:
+            return {}
+
+        # 使用缓存的读写分离数据，避免重复过滤
+        overall_metrics = self.calculate_bandwidth_metrics(data_cache.all_metrics, operation_type=None)
+        read_metrics = self.calculate_bandwidth_metrics(data_cache.read_metrics, operation_type="read")
+        write_metrics = self.calculate_bandwidth_metrics(data_cache.write_metrics, operation_type="write")
+
+        # 打印带宽分析结果（仅在verbose=True时）
+        if verbose:
+            print("\n" + "=" * 60)
+            print("网络带宽分析结果摘要")
+            print("=" * 60)
+            print("网络整体带宽:")
+
+        # 显示各类型带宽（总带宽和RN IP平均带宽）
+        if verbose:
+            # 只计算RN（DMA）IP的平均带宽 - 使用缓存数据
+            rn_requests = [r for r in data_cache.all_metrics if hasattr(r, "source_type") and "dma" in r.source_type.lower()]
+            rn_read_requests = [r for r in rn_requests if r.req_type == "read"]
+            rn_write_requests = [r for r in rn_requests if r.req_type == "write"]
+
+            # 统计RN IP数量：使用（节点ID，IP类型）组合来区分不同的RN
+            rn_ips = set()
+            for r in rn_requests:
+                if hasattr(r, "source_node") and hasattr(r, "source_type"):
+                    rn_ips.add((r.source_node, r.source_type))
+            rn_ip_count = len(rn_ips)
+
+            for label, metrics in [("总体带宽", overall_metrics), ("读操作带宽", read_metrics), ("写操作带宽", write_metrics)]:
+                if metrics:  # 检查metrics是否为空
+                    weighted_bw = metrics.get("加权带宽_GB/s", "N/A")
+                    try:
+                        total_bw = float(weighted_bw)
+                        rn_avg_bw = total_bw / rn_ip_count if rn_ip_count > 0 else 0
+                        print(f"  {label}: {total_bw:.2f} GB/s (总), {rn_avg_bw:.2f} GB/s (平均)")
+                    except (ValueError, TypeError):
+                        print(f"  {label}: {weighted_bw} GB/s")
+
+        return {"总体带宽": overall_metrics, "读操作带宽": read_metrics, "写操作带宽": write_metrics}
+
     def analyze_latency(self, metrics, verbose: bool = True) -> Dict[str, Any]:
         """分析延迟指标"""
         if not metrics:
@@ -633,6 +717,62 @@ class ResultAnalyzer:
 
         return result
 
+    def analyze_latency_cached(self, data_cache: AnalysisDataCache, verbose: bool = True) -> Dict[str, Any]:
+        """使用缓存数据分析延迟指标，避免重复计算"""
+        if not data_cache.all_metrics:
+            return {}
+
+        # 使用缓存的延迟数据，避免重复提取
+        result = {
+            "总体延迟": {
+                "平均延迟_ns": f"{np.mean(data_cache.all_trans_latencies):.2f}",
+                "最小延迟_ns": f"{np.min(data_cache.all_trans_latencies):.2f}",
+                "最大延迟_ns": f"{np.max(data_cache.all_trans_latencies):.2f}",
+                "P95延迟_ns": f"{np.percentile(data_cache.all_trans_latencies, 95):.2f}",
+            }
+        }
+
+        if data_cache.read_trans_latencies:
+            result["读操作延迟"] = {
+                "平均延迟_ns": f"{np.mean(data_cache.read_trans_latencies):.2f}",
+                "最小延迟_ns": f"{np.min(data_cache.read_trans_latencies):.2f}",
+                "最大延迟_ns": f"{np.max(data_cache.read_trans_latencies):.2f}",
+            }
+
+        if data_cache.write_trans_latencies:
+            result["写操作延迟"] = {
+                "平均延迟_ns": f"{np.mean(data_cache.write_trans_latencies):.2f}",
+                "最小延迟_ns": f"{np.min(data_cache.write_trans_latencies):.2f}",
+                "最大延迟_ns": f"{np.max(data_cache.write_trans_latencies):.2f}",
+            }
+
+        # 打印延迟分析结果（仅在verbose=True时）
+        if verbose:
+            print("\n" + "=" * 60)
+            print("网络延迟分析结果摘要")
+            print("=" * 60)
+
+            # 总体延迟统计（分CMD、Data、Transaction）- 使用缓存数据
+            print("总体延迟统计:")
+            print(f"  CMD延迟: 平均 {np.mean(data_cache.all_cmd_latencies):.2f} ns, 最小 {np.min(data_cache.all_cmd_latencies):.2f} ns, 最大 {np.max(data_cache.all_cmd_latencies):.2f} ns")
+            print(f"  Data延迟: 平均 {np.mean(data_cache.all_data_latencies):.2f} ns, 最小 {np.min(data_cache.all_data_latencies):.2f} ns, 最大 {np.max(data_cache.all_data_latencies):.2f} ns")
+            print(f"  Transaction延迟: 平均 {np.mean(data_cache.all_trans_latencies):.2f} ns, 最小 {np.min(data_cache.all_trans_latencies):.2f} ns, 最大 {np.max(data_cache.all_trans_latencies):.2f} ns")
+
+            # 按类型分类延迟统计 - 使用缓存数据
+            if data_cache.read_trans_latencies:
+                print(f"\n读操作延迟:")
+                print(f"  CMD延迟: 平均 {np.mean(data_cache.read_cmd_latencies):.2f} ns, 最大 {np.max(data_cache.read_cmd_latencies):.2f} ns")
+                print(f"  Data延迟: 平均 {np.mean(data_cache.read_data_latencies):.2f} ns, 最大 {np.max(data_cache.read_data_latencies):.2f} ns")
+                print(f"  Transaction延迟: 平均 {np.mean(data_cache.read_trans_latencies):.2f} ns, 最大 {np.max(data_cache.read_trans_latencies):.2f} ns")
+
+            if data_cache.write_trans_latencies:
+                print(f"\n写操作延迟:")
+                print(f"  CMD延迟: 平均 {np.mean(data_cache.write_cmd_latencies):.2f} ns, 最大 {np.max(data_cache.write_cmd_latencies):.2f} ns")
+                print(f"  Data延迟: 平均 {np.mean(data_cache.write_data_latencies):.2f} ns, 最大 {np.max(data_cache.write_data_latencies):.2f} ns")
+                print(f"  Transaction延迟: 平均 {np.mean(data_cache.write_trans_latencies):.2f} ns, 最大 {np.max(data_cache.write_trans_latencies):.2f} ns")
+
+        return result
+
     def analyze_port_bandwidth(self, metrics, verbose: bool = True) -> Dict[str, Any]:
         """分析端口级别带宽（按IP类型分组，使用统一的工作区间算法）"""
         ip_analysis = defaultdict(lambda: {"read": [], "write": []})
@@ -644,6 +784,36 @@ class ResultAnalyzer:
 
         ip_summary = {}
         for ip_type, data in ip_analysis.items():
+            read_reqs = data["read"]
+            write_reqs = data["write"]
+
+            # 使用统一的工作区间算法计算读写带宽
+            read_metrics = self.calculate_bandwidth_metrics(read_reqs, operation_type="read", endpoint_type="network")
+            write_metrics = self.calculate_bandwidth_metrics(write_reqs, operation_type="write", endpoint_type="network")
+
+            # 提取带宽数值（去除GB/s后缀并转换为float）
+            read_bw = float(read_metrics.get("非加权带宽_GB/s", "0.00"))
+            write_bw = float(write_metrics.get("非加权带宽_GB/s", "0.00"))
+
+            ip_summary[ip_type] = {
+                "读带宽_GB/s": f"{read_bw:.2f}",
+                "写带宽_GB/s": f"{write_bw:.2f}",
+                "总带宽_GB/s": f"{read_bw + write_bw:.2f}",
+                "读请求数": len(read_reqs),
+                "写请求数": len(write_reqs),
+                "总请求数": len(read_reqs) + len(write_reqs),
+            }
+
+        # 端口统计不需要摘要输出（按用户要求移除）
+
+        return ip_summary
+
+    def analyze_port_bandwidth_cached(self, data_cache: AnalysisDataCache, verbose: bool = True) -> Dict[str, Any]:
+        """分析端口级别带宽（使用缓存数据，避免重复计算）"""
+        ip_summary = {}
+        
+        # 直接使用缓存的IP分组数据
+        for ip_type, data in data_cache.ip_grouped_data.items():
             read_reqs = data["read"]
             write_reqs = data["write"]
 
@@ -2180,17 +2350,20 @@ class ResultAnalyzer:
         if not metrics:
             return analysis
 
+        # 创建数据缓存，避免重复计算
+        data_cache = AnalysisDataCache(metrics)
+
         # 添加详细数据统计输出
-        self._print_data_statistics(metrics)
+        self._print_data_statistics_cached(data_cache)
 
-        # 带宽分析（在分析时同时打印）
-        analysis["带宽指标"] = self.analyze_bandwidth(metrics, verbose=verbose)
+        # 带宽分析（使用缓存数据）
+        analysis["带宽指标"] = self.analyze_bandwidth_cached(data_cache, verbose=verbose)
 
-        # 延迟分析（在分析时同时打印）
-        analysis["延迟指标"] = self.analyze_latency(metrics, verbose=verbose)
+        # 延迟分析（使用缓存数据）
+        analysis["延迟指标"] = self.analyze_latency_cached(data_cache, verbose=verbose)
 
-        # 端口带宽分析
-        analysis["端口带宽分析"] = self.analyze_port_bandwidth(metrics, verbose=verbose)
+        # 端口带宽分析（使用缓存数据）
+        analysis["端口带宽分析"] = self.analyze_port_bandwidth_cached(data_cache, verbose=verbose)
 
         # Tag和绕环数据分析（在分析时同时打印）
         analysis["Tag和绕环分析"] = self.analyze_tag_data(model, verbose=verbose)
@@ -2208,9 +2381,9 @@ class ResultAnalyzer:
                 if bw_path:
                     chart_paths.append(bw_path)
 
-            # 延迟分析图
+            # 延迟分析图 - 使用缓存数据（暂时使用原方法，避免重复开发）
             if viz_config.get("latency_analysis", False):
-                lat_path = self.plot_latency_distribution(metrics, save_dir=save_dir, save_figures=save_figures, verbose=verbose)
+                lat_path = self.plot_latency_distribution(data_cache.all_metrics, save_dir=save_dir, save_figures=save_figures, verbose=verbose)
                 if lat_path:
                     chart_paths.append(lat_path)
 
@@ -2227,11 +2400,15 @@ class ResultAnalyzer:
             # 保存分析结果JSON
             results_file = self.save_results(analysis, save_dir=save_dir)
 
-            # 保存详细请求CSV文件
-            csv_files = self.save_detailed_requests_csv(metrics, save_dir=save_dir)
+            # 根据配置决定是否保存详细请求CSV文件
+            csv_files = {}
+            if viz_config and viz_config.get("export_request_csv", True):
+                csv_files = self.save_detailed_requests_csv(metrics, save_dir=save_dir)
 
-            # 保存端口带宽CSV文件
-            ports_csv = self.save_ports_bandwidth_csv(metrics, save_dir=save_dir, config=config)
+            # 保存端口带宽CSV文件（通常与请求CSV一起导出）
+            ports_csv = {}
+            if viz_config and viz_config.get("export_request_csv", True):
+                ports_csv = self.save_ports_bandwidth_csv(metrics, save_dir=save_dir, config=config)
 
             output_files = {}
             if results_file:
@@ -2246,6 +2423,13 @@ class ResultAnalyzer:
 
             if ports_csv:
                 output_files["端口带宽CSV"] = ports_csv
+                
+            # 添加FIFO和链路CSV文件信息
+            if viz_config:
+                if viz_config.get("fifo_csv_path") and os.path.exists(viz_config.get("fifo_csv_path", "")):
+                    output_files["FIFO统计CSV"] = viz_config["fifo_csv_path"]
+                if viz_config.get("link_csv_path") and os.path.exists(viz_config.get("link_csv_path", "")):
+                    output_files["链路统计CSV"] = viz_config["link_csv_path"]
 
             if output_files:
                 analysis["输出文件"] = {
@@ -2273,6 +2457,12 @@ class ResultAnalyzer:
 
                 if "端口带宽CSV" in output_files:
                     print(f"具体端口的统计CSV： {output_files['端口带宽CSV']}")
+                    
+                if "FIFO统计CSV" in output_files:
+                    print(f"FIFO使用情况统计CSV： {output_files['FIFO统计CSV']}")
+                    
+                if "链路统计CSV" in output_files:
+                    print(f"链路带宽统计CSV： {output_files['链路统计CSV']}")
 
                 print("=" * 60)
 
