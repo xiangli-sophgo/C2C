@@ -162,7 +162,7 @@ def main():
         # 图片生成控制
         flow_distribution_fig=1,
         bandwidth_analysis_fig=1,
-        latency_analysis_fig=0,
+        latency_analysis_fig=1,
         save_figures=0,
         # CSV文件导出控制
         export_request_csv=1,
