@@ -41,6 +41,7 @@ def create_3x3_config():
     config.tag_config.TU_ETAG_T2_UE_MAX = 8
     config.tag_config.TU_ETAG_T1_UE_MAX = 12
     config.tag_config.TD_ETAG_T2_UE_MAX = 12
+    config.tag_config.ETAG_BOTHSIDE_UPGRADE = 0
     config.validate_config()
 
     return config
@@ -152,25 +153,28 @@ def main():
 
     # 3. 配置各种选项
     model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)
-    # model.setup_debug(trace_packets=[21], update_interval=0.0)
+    # 关闭debug跟踪，专注查看等待队列处理
+    # model.setup_debug(trace_packets=[257], update_interval=0.0)
+    # 配置实时可视化
+    # model.setup_visualization(enable=True, update_interval=0.5, start_cycle=0)
 
     model.setup_result_analysis(
         # 图片生成控制
         flow_distribution_fig=1,
         bandwidth_analysis_fig=1,
-        latency_analysis_fig=1,
+        latency_analysis_fig=0,
         save_figures=0,
         # CSV文件导出控制
         export_request_csv=1,
-        export_fifo_csv=1,
-        export_link_csv=1,
+        export_fifo_csv=0,
+        export_link_csv=0,
         # 通用设置
         save_dir=save_dir,
     )
 
     # 4. 运行仿真 - 减小仿真时间进行调试
     print("▶️  开始仿真")
-    model.run_simulation(max_time_ns=6000.0, progress_interval_ns=2000.0, results_analysis=True, verbose=1)
+    model.run_simulation(max_time_ns=2000.0, progress_interval_ns=2000.0, results_analysis=True, verbose=1)
 
 
 if __name__ == "__main__":

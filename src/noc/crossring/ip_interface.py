@@ -74,8 +74,8 @@ class CrossRingIPInterface(BaseIPInterface):
 
         self.sn_wdb = {}  # SN写数据缓冲
 
-        # ✅ 修复：升级为三维等待队列结构 [req_type][ip_type][ip_pos]
-        self.sn_req_wait = {"read": defaultdict(lambda: defaultdict(list)), "write": defaultdict(lambda: defaultdict(list))}
+        # ✅ 修复：简化为FIFO等待队列结构
+        self.sn_req_wait = {"read": deque(), "write": deque()}
 
         # SN tracker延迟释放
         self.sn_tracker_release_time = defaultdict(list)
@@ -328,6 +328,7 @@ class CrossRingIPInterface(BaseIPInterface):
 
                     # ✅ 成功分配资源，标记为已处理
                     req._request_processed = True
+                    
 
                     self._create_read_packet(req)
                     self._release_completed_sn_tracker(req)
@@ -337,10 +338,8 @@ class CrossRingIPInterface(BaseIPInterface):
                     # 资源不足，发送negative响应
                     self._create_response(req, "negative")
 
-                    # ✅ 修复：使用三维等待队列结构
-                    source_ip_type = getattr(req, "source_type", "unknown")
-                    source_node_id = str(req.source)  # 使用源节点ID作为位置标识
-                    self.sn_req_wait["read"][source_ip_type][source_node_id].append(req)
+                    # ✅ 修复：使用简单FIFO等待队列
+                    self.sn_req_wait["read"].append(req)
             else:
                 # 重试读请求：直接生成数据
                 # ✅ 标记为已处理（retry请求也算成功处理）
@@ -363,15 +362,14 @@ class CrossRingIPInterface(BaseIPInterface):
 
                     # ✅ 成功分配资源，标记为已处理
                     req._request_processed = True
+                    
                     self._create_response(req, "datasend")
                 else:
                     # 资源不足，发送negative响应
                     self._create_response(req, "negative")
 
-                    # ✅ 修复：使用三维等待队列结构
-                    source_ip_type = getattr(req, "source_type", "unknown")
-                    source_node_id = str(req.source)  # 使用源节点ID作为位置标识
-                    self.sn_req_wait["write"][source_ip_type][source_node_id].append(req)
+                    # ✅ 修复：使用简单FIFO等待队列
+                    self.sn_req_wait["write"].append(req)
             else:
                 # 重试写请求：应该已经有资源分配（通过positive响应），直接发送datasend
                 # 检查请求是否在SN tracker中（positive响应发送时应该已经分配了资源）
@@ -756,6 +754,7 @@ class CrossRingIPInterface(BaseIPInterface):
         if req in self.sn_tracker:
             self.sn_tracker.remove(req)
             self.sn_tracker_count[req.sn_tracker_type] += 1
+            
 
         # 对于写请求，释放WDB
         if req.req_type == "write":
@@ -766,55 +765,47 @@ class CrossRingIPInterface(BaseIPInterface):
 
     def _process_waiting_requests(self, req_type: str, tracker_type: str) -> None:
         """处理等待队列中的请求 - 发送positive响应通知RN端资源可用"""
-        # ✅ 修复：遍历三维等待队列结构 [req_type][ip_type][ip_pos]
-        type_queues = self.sn_req_wait[req_type]
+        # ✅ 修复：使用简单FIFO等待队列
+        wait_queue = self.sn_req_wait[req_type]
+        
+        if not wait_queue:
+            return
+            
+        # 从队列头部取出最早的等待请求
+        waiting_req = wait_queue[0]  # peek，不移除
+        
+        if req_type == "write":
+            # 检查tracker和wdb资源
+            if self.sn_tracker_count[tracker_type] > 0 and self.sn_wdb_count >= waiting_req.burst_length:
+                # 从等待队列中移除请求
+                wait_queue.popleft()
+                waiting_req.sn_tracker_type = tracker_type
 
-        # 按FIFO顺序处理等待请求：先遍历ip_type，再遍历node_id
-        for ip_type in type_queues:
-            for node_id in type_queues[ip_type]:
-                wait_list = type_queues[ip_type][node_id]
-                if not wait_list:
-                    continue
+                # ✅ 关键修复：为等待的请求分配资源
+                self.sn_tracker.append(waiting_req)
+                self.sn_tracker_count[tracker_type] -= 1
+                self.sn_wdb_count -= waiting_req.burst_length
 
-                if req_type == "write":
-                    # 检查tracker和wdb资源
-                    if self.sn_tracker_count[tracker_type] > 0 and self.sn_wdb_count >= wait_list[0].burst_length:
-                        waiting_req = wait_list.pop(0)
-                        waiting_req.sn_tracker_type = tracker_type
+                # ✅ 关键修复：发送positive响应，通知RN端资源已分配
+                self._create_response(waiting_req, "positive")
 
-                        # ✅ 关键修复：为等待的请求分配资源
-                        self.sn_tracker.append(waiting_req)
-                        self.sn_tracker_count[tracker_type] -= 1
-                        self.sn_wdb_count -= waiting_req.burst_length
+        elif req_type == "read":
+            # 检查tracker资源
+            if self.sn_tracker_count[tracker_type] > 0:
+                # 从等待队列中移除请求
+                wait_queue.popleft()
+                waiting_req.sn_tracker_type = tracker_type
 
-                        # ✅ 关键修复：发送positive响应，通知RN端资源已分配
-                        self._create_response(waiting_req, "positive")
-                        return  # 一次只处理一个请求
+                # ✅ 关键修复：为等待的请求分配资源
+                self.sn_tracker.append(waiting_req)
+                self.sn_tracker_count[tracker_type] -= 1
 
-                elif req_type == "read":
-                    # 检查tracker资源
-                    if self.sn_tracker_count[tracker_type] > 0:
-                        waiting_req = wait_list.pop(0)
-                        waiting_req.sn_tracker_type = tracker_type
-
-                        # ✅ 关键修复：为等待的请求分配资源
-                        self.sn_tracker.append(waiting_req)
-                        self.sn_tracker_count[tracker_type] -= 1
-
-                        # ✅ 关键修复：发送positive响应，通知RN端资源已分配
-                        self._create_response(waiting_req, "positive")
-                        return  # 一次只处理一个请求
+                # ✅ 关键修复：发送positive响应，通知RN端资源已分配
+                self._create_response(waiting_req, "positive")
 
     def _count_waiting_requests(self, req_type: str) -> int:
         """计算指定类型的等待请求总数"""
-        total_count = 0
-        type_queues = self.sn_req_wait[req_type]
-
-        for ip_type in type_queues:
-            for node_id in type_queues[ip_type]:
-                total_count += len(type_queues[ip_type][node_id])
-
-        return total_count
+        return len(self.sn_req_wait[req_type])
 
     def _process_sn_tracker_release(self) -> None:
         """处理SN tracker的延迟释放"""

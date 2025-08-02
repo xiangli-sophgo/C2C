@@ -46,14 +46,11 @@ class InjectQueue:
         # 方向化的注入队列
         self.inject_input_fifos = self._create_direction_fifos()
 
-        # 注入仲裁状态 - 添加IP级别的轮询
+        # 注入仲裁状态 - 改为轮询通道-IP组合
         self.inject_arbitration_state = {
-            "current_ip_index": 0,  # 当前IP索引，用于IP级别轮询
-            "channels": {
-                "req": {"current_direction": 0, "directions": ["TR", "TL", "TU", "TD", "EQ"]},
-                "rsp": {"current_direction": 0, "directions": ["TR", "TL", "TU", "TD", "EQ"]},
-                "data": {"current_direction": 0, "directions": ["TR", "TL", "TU", "TD", "EQ"]},
-            }
+            "req": {"current_ip_index": 0},
+            "rsp": {"current_ip_index": 0}, 
+            "data": {"current_ip_index": 0},
         }
 
         # 传输计划（两阶段执行用）
@@ -124,7 +121,7 @@ class InjectQueue:
     def compute_arbitration(self, cycle: int) -> None:
         """
         计算阶段：确定要传输的flit但不执行传输。
-        使用轮询机制确保公平性。
+        使用轮询机制确保公平性，按通道轮询IP。
 
         Args:
             cycle: 当前周期
@@ -139,27 +136,29 @@ class InjectQueue:
         max_transfers_per_cycle = len(self.connected_ips) * 3  # 每个IP最多处理3个通道
         transfers_planned = 0
 
-        # 从当前IP索引开始轮询
-        start_ip_index = self.inject_arbitration_state["current_ip_index"]
-        
-        for ip_offset in range(len(self.connected_ips)):
+        # 按通道轮询IP，确保每个通道内的公平性
+        channels = ["req", "rsp", "data"]
+        for channel in channels:
             if transfers_planned >= max_transfers_per_cycle:
                 break
                 
-            # 计算实际的IP索引
-            ip_index = (start_ip_index + ip_offset) % len(self.connected_ips)
-            ip_id = self.connected_ips[ip_index]
+            # 获取当前通道的轮询状态
+            arb_state = self.inject_arbitration_state[channel]
+            start_ip_index = arb_state["current_ip_index"]
+            channel_has_transfer = False  # 标记当前通道是否有传输
             
-            if ip_id not in self.ip_inject_channel_buffers:
-                continue
-
-            # 对每个通道进行轮询
-            channels = ["req", "rsp", "data"]
-            for channel_offset in range(len(channels)):
+            # 为当前通道轮询所有IP
+            for ip_offset in range(len(self.connected_ips)):
                 if transfers_planned >= max_transfers_per_cycle:
                     break
                     
-                channel = channels[channel_offset]
+                # 计算实际的IP索引
+                ip_index = (start_ip_index + ip_offset) % len(self.connected_ips)
+                ip_id = self.connected_ips[ip_index]
+                
+                if ip_id not in self.ip_inject_channel_buffers:
+                    continue
+                    
                 channel_buffer = self.ip_inject_channel_buffers[ip_id][channel]
                 
                 if not channel_buffer.valid_signal():
@@ -181,12 +180,15 @@ class InjectQueue:
                     # 规划传输
                     self._inject_transfer_plan.append((ip_id, channel, flit, correct_direction))
                     transfers_planned += 1
+                    channel_has_transfer = True
                     
-                    # 成功规划传输后，继续处理其他通道
-                    # 不要break，让每个通道都有机会传输
-
-        # 每轮结束后更新IP索引，确保公平性
-        self.inject_arbitration_state["current_ip_index"] = (start_ip_index + 1) % len(self.connected_ips)
+                    # 成功后更新当前通道的IP索引，确保下次从不同IP开始
+                    arb_state["current_ip_index"] = (ip_index + 1) % len(self.connected_ips)
+                    break  # 当前通道已处理一个，转到下一个通道
+            
+            # 如果当前通道没有找到可传输的，更新索引确保轮询
+            if not channel_has_transfer:
+                arb_state["current_ip_index"] = (start_ip_index + 1) % len(self.connected_ips)
 
     def execute_arbitration(self, cycle: int) -> None:
         """
@@ -208,11 +210,11 @@ class InjectQueue:
                 actual_flit.flit_position = f"IQ_{direction}"
                 actual_flit.current_node_id = self.node_id
 
-                # 更新仲裁状态
-                arb_state = self.inject_arbitration_state["channels"][channel]
-                if "last_served" not in arb_state:
-                    arb_state["last_served"] = {}
-                arb_state["last_served"][direction] = cycle
+                # 更新仲裁状态 - 暂时注释掉，因为新的轮询机制不需要这个
+                # arb_state = self.inject_arbitration_state[channel]
+                # if "last_served" not in arb_state:
+                #     arb_state["last_served"] = {}
+                # arb_state["last_served"][direction] = cycle
 
     def step_compute_phase(self, cycle: int) -> None:
         """FIFO组合逻辑更新。"""
