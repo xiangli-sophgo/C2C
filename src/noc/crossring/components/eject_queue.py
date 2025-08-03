@@ -59,10 +59,18 @@ class EjectQueue:
 
     def _create_eject_input_fifos(self) -> Dict[str, Dict[str, PipelinedFIFO]]:
         """创建eject输入FIFO集合。"""
-        return {
-            channel: {direction: PipelinedFIFO(f"eject_in_{channel}_{direction}_{self.node_id}", depth=self.eq_in_depth) for direction in ["TU", "TD", "TR", "TL"]}
-            for channel in ["req", "rsp", "data"]
-        }
+        # 获取统计采样间隔
+        sample_interval = self.config.basic_config.FIFO_STATS_SAMPLE_INTERVAL
+        
+        result = {}
+        for channel in ["req", "rsp", "data"]:
+            result[channel] = {}
+            for direction in ["TU", "TD", "TR", "TL"]:
+                fifo = PipelinedFIFO(f"eject_in_{channel}_{direction}_{self.node_id}", depth=self.eq_in_depth)
+                # 设置统计采样间隔
+                fifo._stats_sample_interval = sample_interval
+                result[channel][direction] = fifo
+        return result
 
     def connect_ip(self, ip_id: str) -> bool:
         """
@@ -78,11 +86,15 @@ class EjectQueue:
             self.connected_ips.append(ip_id)
 
             # 为这个IP创建eject channel_buffer
-            self.ip_eject_channel_buffers[ip_id] = {
-                "req": PipelinedFIFO(f"ip_eject_channel_req_{ip_id}_{self.node_id}", depth=self.eq_ch_depth),
-                "rsp": PipelinedFIFO(f"ip_eject_channel_rsp_{ip_id}_{self.node_id}", depth=self.eq_ch_depth),
-                "data": PipelinedFIFO(f"ip_eject_channel_data_{ip_id}_{self.node_id}", depth=self.eq_ch_depth),
-            }
+            # 获取统计采样间隔
+            sample_interval = self.config.basic_config.FIFO_STATS_SAMPLE_INTERVAL
+            
+            self.ip_eject_channel_buffers[ip_id] = {}
+            for channel in ["req", "rsp", "data"]:
+                fifo = PipelinedFIFO(f"ip_eject_channel_{channel}_{ip_id}_{self.node_id}", depth=self.eq_ch_depth)
+                # 设置统计采样间隔
+                fifo._stats_sample_interval = sample_interval
+                self.ip_eject_channel_buffers[ip_id][channel] = fifo
 
             # 更新eject仲裁状态中的IP列表
             self._update_eject_arbitration_ips()
@@ -255,9 +267,34 @@ class EjectQueue:
             # 从eject_input_fifos获取
             input_fifo = self.eject_input_fifos[channel][source]
             if input_fifo.valid_signal():
-                return input_fifo.read_output()
+                flit = input_fifo.read_output()
+                # 通知entry释放
+                if flit and self.parent_node:
+                    self._notify_entry_release(flit, channel, source)
+                return flit
 
         return None
+
+    def _notify_entry_release(self, flit, channel: str, direction: str) -> None:
+        """通知entry释放"""
+        if hasattr(flit, "allocated_entry_info") and flit.allocated_entry_info:
+            alloc_info = flit.allocated_entry_info
+            alloc_direction = alloc_info.get("direction")
+            alloc_priority = alloc_info.get("priority")
+            
+            if alloc_direction and alloc_priority:
+                # 根据方向找到对应的CrossPoint
+                crosspoint = None
+                if direction in ["TU", "TD"]:
+                    crosspoint = self.parent_node.vertical_crosspoint
+                elif direction in ["TL", "TR"]:
+                    crosspoint = self.parent_node.horizontal_crosspoint
+                
+                if crosspoint and hasattr(crosspoint, 'etag_entry_managers'):
+                    if channel in crosspoint.etag_entry_managers and alloc_direction in crosspoint.etag_entry_managers[channel]:
+                        entry_manager = crosspoint.etag_entry_managers[channel][alloc_direction]
+                        if entry_manager.release_entry(alloc_priority):
+                            crosspoint.stats["entry_releases"][channel][alloc_priority] += 1
 
     def _find_target_ip_for_flit(self, flit: CrossRingFlit, channel: str, cycle: int) -> Optional[str]:
         """为flit找到目标IP。"""

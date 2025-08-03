@@ -58,10 +58,18 @@ class InjectQueue:
 
     def _create_direction_fifos(self) -> Dict[str, Dict[str, PipelinedFIFO]]:
         """创建方向化FIFO集合。"""
-        return {
-            channel: {direction: PipelinedFIFO(f"inject_{channel}_{direction}_{self.node_id}", depth=self.iq_out_depth) for direction in ["TR", "TL", "TU", "TD", "EQ"]}
-            for channel in ["req", "rsp", "data"]
-        }
+        # 获取统计采样间隔
+        sample_interval = self.config.basic_config.FIFO_STATS_SAMPLE_INTERVAL
+        
+        result = {}
+        for channel in ["req", "rsp", "data"]:
+            result[channel] = {}
+            for direction in ["TR", "TL", "TU", "TD", "EQ"]:
+                fifo = PipelinedFIFO(f"inject_{channel}_{direction}_{self.node_id}", depth=self.iq_out_depth)
+                # 设置统计采样间隔
+                fifo._stats_sample_interval = sample_interval
+                result[channel][direction] = fifo
+        return result
 
     def connect_ip(self, ip_id: str) -> bool:
         """
@@ -77,11 +85,15 @@ class InjectQueue:
             self.connected_ips.append(ip_id)
 
             # 为这个IP创建inject channel_buffer
-            self.ip_inject_channel_buffers[ip_id] = {
-                "req": PipelinedFIFO(f"ip_inject_channel_req_{ip_id}_{self.node_id}", depth=self.iq_ch_depth),
-                "rsp": PipelinedFIFO(f"ip_inject_channel_rsp_{ip_id}_{self.node_id}", depth=self.iq_ch_depth),
-                "data": PipelinedFIFO(f"ip_inject_channel_data_{ip_id}_{self.node_id}", depth=self.iq_ch_depth),
-            }
+            # 获取统计采样间隔
+            sample_interval = self.config.basic_config.FIFO_STATS_SAMPLE_INTERVAL
+            
+            self.ip_inject_channel_buffers[ip_id] = {}
+            for channel in ["req", "rsp", "data"]:
+                fifo = PipelinedFIFO(f"ip_inject_channel_{channel}_{ip_id}_{self.node_id}", depth=self.iq_ch_depth)
+                # 设置统计采样间隔
+                fifo._stats_sample_interval = sample_interval
+                self.ip_inject_channel_buffers[ip_id][channel] = fifo
 
             return True
         else:

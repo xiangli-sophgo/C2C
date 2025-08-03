@@ -38,6 +38,9 @@ class BasicConfiguration:
 
     # Link Slice配置 - CrossRing非环绕设计专用
     SELF_LINK_SLICES: int = 2  # 自连接（边界节点到自己）的slice数量
+    
+    # 性能优化配置
+    FIFO_STATS_SAMPLE_INTERVAL: int = 100  # FIFO统计采样间隔（周期数）
 
 
 @dataclass

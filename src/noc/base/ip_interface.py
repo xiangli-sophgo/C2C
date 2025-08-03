@@ -149,9 +149,12 @@ class PipelinedFIFO:
         if cycle is not None:
             self.current_cycle = cycle
             
-        # 更新深度统计
-        current_depth = len(self.internal_queue) + (1 if self.output_valid else 0)
-        self.stats.update_depth_stats(current_depth, self.max_depth, self.current_cycle)
+        # 更新深度统计 - 使用采样间隔以提升性能
+        # 默认采样间隔为100周期，可通过环境变量覆盖
+        sample_interval = getattr(self, '_stats_sample_interval', 100)
+        if self.current_cycle % sample_interval == 0:
+            current_depth = len(self.internal_queue) + (1 if self.output_valid else 0)
+            self.stats.update_depth_stats(current_depth, self.max_depth, self.current_cycle)
         
         # 计算下周期的输出有效性
         if self.internal_queue and not self.output_valid:
@@ -343,6 +346,9 @@ class BaseIPInterface(ABC):
         l2h_depth = self.config.ip_config.IP_L2H_FIFO_DEPTH
         h2l_h_depth = self.config.ip_config.IP_H2L_H_FIFO_DEPTH
         h2l_l_depth = self.config.ip_config.IP_H2L_L_FIFO_DEPTH
+        
+        # 获取统计采样间隔配置
+        sample_interval = getattr(self.config.basic_config, 'FIFO_STATS_SAMPLE_INTERVAL', 100)
 
         # L2H FIFO (保持不变)
         self.l2h_fifos = {
@@ -363,6 +369,11 @@ class BaseIPInterface(ABC):
             "rsp": PipelinedFIFO("h2l_l_rsp", depth=h2l_l_depth),
             "data": PipelinedFIFO("h2l_l_data", depth=h2l_l_depth)
         }
+        
+        # 为所有FIFO设置统计采样间隔
+        for fifo_dict in [self.l2h_fifos, self.h2l_h_fifos, self.h2l_l_fifos]:
+            for fifo in fifo_dict.values():
+                fifo._stats_sample_interval = sample_interval
         
     def _setup_token_bucket(self, rate: float, bucket_size: float) -> None:
         """

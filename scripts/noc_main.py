@@ -136,16 +136,16 @@ def main():
     traffic_file_path = str(Path(__file__).parent.parent / "traffic_data")
     traffic_chains = [
         [
-            # "LLama2_AllReduce.txt",
-            "test1.txt",
+            "LLama2_AllReduce.txt",
+            # "test1.txt",
             # "R_5x2.txt",
         ]
     ]
 
     # 2. 创建模型
-    config = create_3x3_config()
+    # config = create_3x3_config()
     # config = create_5x2_config()
-    # config = create_5x4_config()
+    config = create_5x4_config()
     model = CrossRingModel(config)
 
     save_dir = None
@@ -156,13 +156,13 @@ def main():
     # 关闭debug跟踪，专注查看等待队列处理
     # model.setup_debug(trace_packets=[257], update_interval=0.0)
     # 配置实时可视化
-    # model.setup_visualization(enable=True, update_interval=0.5, start_cycle=0)
+    # model.setup_visualization(enable=True, update_interval=0.5, start_cycle=300)
 
     model.setup_result_analysis(
         # 图片生成控制
-        flow_distribution_fig=1,
-        bandwidth_analysis_fig=1,
-        latency_analysis_fig=1,
+        flow_distribution_fig=0,
+        bandwidth_analysis_fig=0,
+        latency_analysis_fig=0,
         save_figures=0,
         # CSV文件导出控制
         export_request_csv=1,
@@ -174,7 +174,7 @@ def main():
 
     # 4. 运行仿真 - 减小仿真时间进行调试
     print("▶️  开始仿真")
-    model.run_simulation(max_time_ns=2000.0, progress_interval_ns=2000.0, results_analysis=True, verbose=1)
+    model.run_simulation(max_time_ns=4000.0, progress_interval_ns=1000.0, results_analysis=True, verbose=1)
 
 
 if __name__ == "__main__":

@@ -60,17 +60,33 @@ class RingBridge:
 
     def _create_input_fifos(self) -> Dict[str, Dict[str, PipelinedFIFO]]:
         """创建ring_bridge输入FIFO集合。"""
-        return {
-            channel: {direction: PipelinedFIFO(f"ring_bridge_in_{channel}_{direction}_{self.node_id}", depth=self.rb_in_depth) for direction in ["TR", "TL", "TU", "TD"]}
-            for channel in ["req", "rsp", "data"]
-        }
+        # 获取统计采样间隔
+        sample_interval = self.config.basic_config.FIFO_STATS_SAMPLE_INTERVAL
+        
+        result = {}
+        for channel in ["req", "rsp", "data"]:
+            result[channel] = {}
+            for direction in ["TR", "TL", "TU", "TD"]:
+                fifo = PipelinedFIFO(f"ring_bridge_in_{channel}_{direction}_{self.node_id}", depth=self.rb_in_depth)
+                # 设置统计采样间隔
+                fifo._stats_sample_interval = sample_interval
+                result[channel][direction] = fifo
+        return result
 
     def _create_output_fifos(self) -> Dict[str, Dict[str, PipelinedFIFO]]:
         """创建ring_bridge输出FIFO集合。"""
-        return {
-            channel: {direction: PipelinedFIFO(f"ring_bridge_out_{channel}_{direction}_{self.node_id}", depth=self.rb_out_depth) for direction in ["EQ", "TR", "TL", "TU", "TD"]}
-            for channel in ["req", "rsp", "data"]
-        }
+        # 获取统计采样间隔
+        sample_interval = self.config.basic_config.FIFO_STATS_SAMPLE_INTERVAL
+        
+        result = {}
+        for channel in ["req", "rsp", "data"]:
+            result[channel] = {}
+            for direction in ["EQ", "TR", "TL", "TU", "TD"]:
+                fifo = PipelinedFIFO(f"ring_bridge_out_{channel}_{direction}_{self.node_id}", depth=self.rb_out_depth)
+                # 设置统计采样间隔
+                fifo._stats_sample_interval = sample_interval
+                result[channel][direction] = fifo
+        return result
 
     def _get_ring_bridge_config(self) -> Tuple[List[str], List[str]]:
         """根据路由策略获取ring_bridge的输入源和输出方向配置。"""
@@ -338,15 +354,44 @@ class RingBridge:
             direction = input_source[3:]
             rb_fifo = self.ring_bridge_input_fifos[channel][direction]
             if rb_fifo.valid_signal():
-                return rb_fifo.read_output()
+                flit = rb_fifo.read_output()
+                # 通知entry释放
+                if flit and self.parent_node:
+                    self._notify_entry_release(flit, channel, direction)
+                return flit
 
         elif input_source.startswith("RB_"):
             direction = input_source[3:]
             rb_fifo = self.ring_bridge_input_fifos[channel][direction]
             if rb_fifo.valid_signal():
-                return rb_fifo.read_output()
+                flit = rb_fifo.read_output()
+                # 通知entry释放
+                if flit and self.parent_node:
+                    self._notify_entry_release(flit, channel, direction)
+                return flit
 
         return None
+
+    def _notify_entry_release(self, flit, channel: str, direction: str) -> None:
+        """通知entry释放"""
+        if hasattr(flit, "allocated_entry_info") and flit.allocated_entry_info:
+            alloc_info = flit.allocated_entry_info
+            alloc_direction = alloc_info.get("direction")
+            alloc_priority = alloc_info.get("priority")
+            
+            if alloc_direction and alloc_priority:
+                # 根据方向找到对应的CrossPoint
+                crosspoint = None
+                if direction in ["TU", "TD"]:
+                    crosspoint = self.parent_node.vertical_crosspoint
+                elif direction in ["TL", "TR"]:
+                    crosspoint = self.parent_node.horizontal_crosspoint
+                
+                if crosspoint and hasattr(crosspoint, 'etag_entry_managers'):
+                    if channel in crosspoint.etag_entry_managers and alloc_direction in crosspoint.etag_entry_managers[channel]:
+                        entry_manager = crosspoint.etag_entry_managers[channel][alloc_direction]
+                        if entry_manager.release_entry(alloc_priority):
+                            crosspoint.stats["entry_releases"][channel][alloc_priority] += 1
 
     def _determine_ring_bridge_output_direction(self, flit: CrossRingFlit) -> str:
         """确定flit在ring_bridge中的输出方向。"""

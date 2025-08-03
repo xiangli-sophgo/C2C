@@ -135,6 +135,7 @@ class CrossRingNode:
         self.inject_queue.compute_arbitration(cycle)
         self.ring_bridge.compute_arbitration(cycle, self.inject_queue.inject_input_fifos)
         self.eject_queue.compute_arbitration(cycle, self.inject_queue.inject_input_fifos, self.ring_bridge)
+        
 
     def step_update_phase(self, cycle: int) -> None:
         """

@@ -99,33 +99,33 @@ class WorkingInterval:
 
 class AnalysisDataCache:
     """分析数据缓存类，避免重复计算"""
-    
+
     def __init__(self, metrics: List[RequestInfo]):
         """初始化时一次性提取所有数据"""
         # 分离读写请求
         self.all_metrics = metrics
         self.read_metrics = [m for m in metrics if m.req_type == "read"]
         self.write_metrics = [m for m in metrics if m.req_type == "write"]
-        
+
         # 提取所有延迟数据
         self.all_cmd_latencies = [m.cmd_latency for m in metrics]
         self.all_data_latencies = [m.data_latency for m in metrics]
         self.all_trans_latencies = [m.transaction_latency for m in metrics]
-        
+
         # 按类型分组的延迟数据
         self.read_cmd_latencies = [m.cmd_latency for m in self.read_metrics]
         self.read_data_latencies = [m.data_latency for m in self.read_metrics]
         self.read_trans_latencies = [m.transaction_latency for m in self.read_metrics]
-        
+
         self.write_cmd_latencies = [m.cmd_latency for m in self.write_metrics]
         self.write_data_latencies = [m.data_latency for m in self.write_metrics]
         self.write_trans_latencies = [m.transaction_latency for m in self.write_metrics]
-        
+
         # 统计信息
         self.read_flit_count = sum(m.burst_length for m in self.read_metrics)
         self.write_flit_count = sum(m.burst_length for m in self.write_metrics)
         self.total_flit_count = self.read_flit_count + self.write_flit_count
-        
+
         # 按IP类型分组的数据（用于端口带宽分析）
         self.ip_grouped_data = defaultdict(lambda: {"read": [], "write": []})
         for metric in metrics:
@@ -754,9 +754,15 @@ class ResultAnalyzer:
 
             # 总体延迟统计（分CMD、Data、Transaction）- 使用缓存数据
             print("总体延迟统计:")
-            print(f"  CMD延迟: 平均 {np.mean(data_cache.all_cmd_latencies):.2f} ns, 最小 {np.min(data_cache.all_cmd_latencies):.2f} ns, 最大 {np.max(data_cache.all_cmd_latencies):.2f} ns")
-            print(f"  Data延迟: 平均 {np.mean(data_cache.all_data_latencies):.2f} ns, 最小 {np.min(data_cache.all_data_latencies):.2f} ns, 最大 {np.max(data_cache.all_data_latencies):.2f} ns")
-            print(f"  Transaction延迟: 平均 {np.mean(data_cache.all_trans_latencies):.2f} ns, 最小 {np.min(data_cache.all_trans_latencies):.2f} ns, 最大 {np.max(data_cache.all_trans_latencies):.2f} ns")
+            print(
+                f"  CMD延迟: 平均 {np.mean(data_cache.all_cmd_latencies):.2f} ns, 最小 {np.min(data_cache.all_cmd_latencies):.2f} ns, 最大 {np.max(data_cache.all_cmd_latencies):.2f} ns"
+            )
+            print(
+                f"  Data延迟: 平均 {np.mean(data_cache.all_data_latencies):.2f} ns, 最小 {np.min(data_cache.all_data_latencies):.2f} ns, 最大 {np.max(data_cache.all_data_latencies):.2f} ns"
+            )
+            print(
+                f"  Transaction延迟: 平均 {np.mean(data_cache.all_trans_latencies):.2f} ns, 最小 {np.min(data_cache.all_trans_latencies):.2f} ns, 最大 {np.max(data_cache.all_trans_latencies):.2f} ns"
+            )
 
             # 按类型分类延迟统计 - 使用缓存数据
             if data_cache.read_trans_latencies:
@@ -811,7 +817,7 @@ class ResultAnalyzer:
     def analyze_port_bandwidth_cached(self, data_cache: AnalysisDataCache, verbose: bool = True) -> Dict[str, Any]:
         """分析端口级别带宽（使用缓存数据，避免重复计算）"""
         ip_summary = {}
-        
+
         # 直接使用缓存的IP分组数据
         for ip_type, data in data_cache.ip_grouped_data.items():
             read_reqs = data["read"]
@@ -843,9 +849,9 @@ class ResultAnalyzer:
         tag_analysis = {
             "Circuits统计": {"req_h": 0, "req_v": 0, "rsp_h": 0, "rsp_v": 0, "data_h": 0, "data_v": 0},
             "Wait_cycle统计": {"req_h": 0, "req_v": 0, "rsp_h": 0, "rsp_v": 0, "data_h": 0, "data_v": 0},
-            "RB_ETag统计": {"T1": 0, "T0": 0},  # 水平CrossPoint的E-Tag统计
-            "EQ_ETag统计": {"T1": 0, "T0": 0},  # 垂直CrossPoint的E-Tag统计
-            "ITag统计": {"h": 0, "v": 0},
+            "RB_ETag统计": {"req": {"T1": 0, "T0": 0}, "rsp": {"T1": 0, "T0": 0}, "data": {"T1": 0, "T0": 0}},  # 水平CrossPoint的E-Tag统计（按通道分组）
+            "EQ_ETag统计": {"req": {"T1": 0, "T0": 0}, "rsp": {"T1": 0, "T0": 0}, "data": {"T1": 0, "T0": 0}},  # 垂直CrossPoint的E-Tag统计（按通道分组）
+            "ITag统计": {"h": {"req": 0, "rsp": 0, "data": 0}, "v": {"req": 0, "rsp": 0, "data": 0}},
             "Retry统计": {"read": 0, "write": 0},
         }
 
@@ -864,9 +870,9 @@ class ResultAnalyzer:
                         tag_analysis["Circuits统计"]["data_h"] += stats.get("bypass_events", {}).get("data", 0)
 
                         # I-Tag统计
-                        tag_analysis["ITag统计"]["h"] += stats.get("itag_triggers", {}).get("req", 0)
-                        tag_analysis["ITag统计"]["h"] += stats.get("itag_triggers", {}).get("rsp", 0)
-                        tag_analysis["ITag统计"]["h"] += stats.get("itag_triggers", {}).get("data", 0)
+                        tag_analysis["ITag统计"]["h"]["req"] += stats.get("itag_triggers", {}).get("req", 0)
+                        tag_analysis["ITag统计"]["h"]["rsp"] += stats.get("itag_triggers", {}).get("rsp", 0)
+                        tag_analysis["ITag统计"]["h"]["data"] += stats.get("itag_triggers", {}).get("data", 0)
 
                 # 收集纵向环统计数据
                 if hasattr(node, "vertical_crosspoint"):
@@ -880,24 +886,24 @@ class ResultAnalyzer:
                         tag_analysis["Circuits统计"]["data_v"] += stats.get("bypass_events", {}).get("data", 0)
 
                         # I-Tag统计
-                        tag_analysis["ITag统计"]["v"] += stats.get("itag_triggers", {}).get("req", 0)
-                        tag_analysis["ITag统计"]["v"] += stats.get("itag_triggers", {}).get("rsp", 0)
-                        tag_analysis["ITag统计"]["v"] += stats.get("itag_triggers", {}).get("data", 0)
+                        tag_analysis["ITag统计"]["v"]["req"] += stats.get("itag_triggers", {}).get("req", 0)
+                        tag_analysis["ITag统计"]["v"]["rsp"] += stats.get("itag_triggers", {}).get("rsp", 0)
+                        tag_analysis["ITag统计"]["v"]["data"] += stats.get("itag_triggers", {}).get("data", 0)
 
                 # 收集CrossPoint E-Tag统计（真正的E-Tag实现位置）
                 if hasattr(node, "horizontal_crosspoint") and hasattr(node.horizontal_crosspoint, "stats"):
                     h_stats = node.horizontal_crosspoint.stats
                     if "etag_upgrades" in h_stats:
                         for channel in ["req", "rsp", "data"]:
-                            tag_analysis["RB_ETag统计"]["T1"] += h_stats["etag_upgrades"].get(channel, {}).get("T1", 0)
-                            tag_analysis["RB_ETag统计"]["T0"] += h_stats["etag_upgrades"].get(channel, {}).get("T0", 0)
+                            tag_analysis["RB_ETag统计"][channel]["T1"] += h_stats["etag_upgrades"].get(channel, {}).get("T1", 0)
+                            tag_analysis["RB_ETag统计"][channel]["T0"] += h_stats["etag_upgrades"].get(channel, {}).get("T0", 0)
 
                 if hasattr(node, "vertical_crosspoint") and hasattr(node.vertical_crosspoint, "stats"):
                     v_stats = node.vertical_crosspoint.stats
                     if "etag_upgrades" in v_stats:
                         for channel in ["req", "rsp", "data"]:
-                            tag_analysis["EQ_ETag统计"]["T1"] += v_stats["etag_upgrades"].get(channel, {}).get("T1", 0)
-                            tag_analysis["EQ_ETag统计"]["T0"] += v_stats["etag_upgrades"].get(channel, {}).get("T0", 0)
+                            tag_analysis["EQ_ETag统计"][channel]["T1"] += v_stats["etag_upgrades"].get(channel, {}).get("T1", 0)
+                            tag_analysis["EQ_ETag统计"][channel]["T0"] += v_stats["etag_upgrades"].get(channel, {}).get("T0", 0)
 
             # 收集Retry统计和等待周期统计（从模型的IP接口中）
             if hasattr(model, "ip_interfaces"):
@@ -919,13 +925,7 @@ class ResultAnalyzer:
                             tag_analysis["Wait_cycle统计"]["data_h"] += getattr(ip_interface, "data_wait_cycles_h", 0)
                             tag_analysis["Wait_cycle统计"]["data_v"] += getattr(ip_interface, "data_wait_cycles_v", 0)
 
-                            # Circuits统计（绕环完成事件）
-                            tag_analysis["Circuits统计"]["req_h"] += getattr(ip_interface, "req_cir_h_num", 0)
-                            tag_analysis["Circuits统计"]["req_v"] += getattr(ip_interface, "req_cir_v_num", 0)
-                            tag_analysis["Circuits统计"]["rsp_h"] += getattr(ip_interface, "rsp_cir_h_num", 0)
-                            tag_analysis["Circuits统计"]["rsp_v"] += getattr(ip_interface, "rsp_cir_v_num", 0)
-                            tag_analysis["Circuits统计"]["data_h"] += getattr(ip_interface, "data_cir_h_num", 0)
-                            tag_analysis["Circuits统计"]["data_v"] += getattr(ip_interface, "data_cir_v_num", 0)
+                            # Circuits统计已通过CrossPoint的bypass_events统计，避免重复计数
                     else:
                         # 简单结构：直接是IP接口对象
                         ip_interface = node_interfaces
@@ -941,13 +941,7 @@ class ResultAnalyzer:
                         tag_analysis["Wait_cycle统计"]["data_h"] += getattr(ip_interface, "data_wait_cycles_h", 0)
                         tag_analysis["Wait_cycle统计"]["data_v"] += getattr(ip_interface, "data_wait_cycles_v", 0)
 
-                        # Circuits统计（绕环完成事件）
-                        tag_analysis["Circuits统计"]["req_h"] += getattr(ip_interface, "req_cir_h_num", 0)
-                        tag_analysis["Circuits统计"]["req_v"] += getattr(ip_interface, "req_cir_v_num", 0)
-                        tag_analysis["Circuits统计"]["rsp_h"] += getattr(ip_interface, "rsp_cir_h_num", 0)
-                        tag_analysis["Circuits统计"]["rsp_v"] += getattr(ip_interface, "rsp_cir_v_num", 0)
-                        tag_analysis["Circuits统计"]["data_h"] += getattr(ip_interface, "data_cir_h_num", 0)
-                        tag_analysis["Circuits统计"]["data_v"] += getattr(ip_interface, "data_cir_v_num", 0)
+                        # Circuits统计已通过CrossPoint的bypass_events统计，避免重复计数
 
         except Exception as e:
             print(f"收集Tag和绕环数据时出错: {e}")
@@ -972,13 +966,19 @@ class ResultAnalyzer:
             print(f"  数据等待时间  - 横向: {wait_cycles['data_h']}, 纵向: {wait_cycles['data_v']}")
 
             rb_etag = tag_analysis["RB_ETag统计"]
-            print(f"  RB ETag统计 - T1: {rb_etag['T1']}, T0: {rb_etag['T0']}")
+            print(f"  RB ETag统计:")
+            for channel in ["req", "rsp", "data"]:
+                print(f"    {channel.upper()}: T1={rb_etag[channel]['T1']}, T0={rb_etag[channel]['T0']}")
 
             eq_etag = tag_analysis["EQ_ETag统计"]
-            print(f"  EQ ETag统计 - T1: {eq_etag['T1']}, T0: {eq_etag['T0']}")
+            print(f"  EQ ETag统计:")
+            for channel in ["req", "rsp", "data"]:
+                print(f"    {channel.upper()}: T1={eq_etag[channel]['T1']}, T0={eq_etag[channel]['T0']}")
 
             itag = tag_analysis["ITag统计"]
-            print(f"  ITag统计 - 横向: {itag['h']}, 纵向: {itag['v']}")
+            print(f"  ITag统计:")
+            for channel in ["req", "rsp", "data"]:
+                print(f"    {channel.upper()}: H={itag['h'][channel]}, V={itag['v'][channel]}")
 
             retry = tag_analysis["Retry统计"]
             print(f"  Retry数量 - 读: {retry['read']}, 写: {retry['write']}")
@@ -1127,11 +1127,11 @@ class ResultAnalyzer:
                 fig.savefig(save_path, bbox_inches="tight", dpi=100)
                 plt.close(fig)
                 if verbose:
-                    print(f"📁 累积带宽曲线图已保存到: {save_path}")
+                    print(f"  累积带宽曲线图已保存到: {save_path}")
                 return save_path
             else:
                 if verbose:
-                    print(f"📊 显示累积带宽曲线图")
+                    print(f"  显示累积带宽曲线图")
                 try:
                     plt.show()  # 使用默认的block=True，保持窗口打开
                 except Exception as e:
@@ -1651,11 +1651,11 @@ class ResultAnalyzer:
                 fig.savefig(save_path, bbox_inches="tight", dpi=300)
                 plt.close(fig)
                 if verbose:
-                    print(f"📁 延迟分布图已保存到: {save_path}")
+                    print(f"  延迟分布图已保存到: {save_path}")
                 return save_path
             else:
                 if verbose:
-                    print(f"📊 显示延迟分布图")
+                    print(f"  显示延迟分布图")
                 plt.show()
                 return ""
 
@@ -1724,11 +1724,11 @@ class ResultAnalyzer:
                 fig.savefig(save_path, bbox_inches="tight", dpi=150)
                 plt.close(fig)
                 if verbose:
-                    print(f"📁 IP带宽对比图已保存到: {save_path}")
+                    print(f"  IP带宽对比图已保存到: {save_path}")
                 return save_path
             else:
                 if verbose:
-                    print(f"📊 显示IP带宽对比图")
+                    print(f"  显示IP带宽对比图")
                 plt.show()
                 return ""
 
@@ -2286,11 +2286,11 @@ class ResultAnalyzer:
                 fig.savefig(save_path, bbox_inches="tight", dpi=150)
                 plt.close(fig)
                 if verbose:
-                    print(f"📁 流量分布图已保存到: {save_path}")
+                    print(f"  流量分布图已保存到: {save_path}")
                 return save_path
             else:
                 if verbose:
-                    print(f"📊 显示流量分布图")
+                    print(f"  显示流量分布图")
                 plt.show()
                 return ""
 
@@ -2370,6 +2370,11 @@ class ResultAnalyzer:
 
         # 生成图表
         if enable_visualization:
+            if verbose:
+                print("\n" + "=" * 60)
+                print("图表可视化")
+                print("=" * 60)
+
             chart_paths = []
 
             # 使用viz_config控制独立的图表生成
@@ -2423,7 +2428,7 @@ class ResultAnalyzer:
 
             if ports_csv:
                 output_files["端口带宽CSV"] = ports_csv
-                
+
             # 添加FIFO和链路CSV文件信息
             if viz_config:
                 if viz_config.get("fifo_csv_path") and os.path.exists(viz_config.get("fifo_csv_path", "")):
@@ -2439,7 +2444,7 @@ class ResultAnalyzer:
 
                 # 输出文件保存路径总结
                 print("\n" + "=" * 60)
-                print("📁 结果文件保存总结")
+                print("结果文件保存总结")
                 print("=" * 60)
 
                 # 统计请求数量
@@ -2457,10 +2462,10 @@ class ResultAnalyzer:
 
                 if "端口带宽CSV" in output_files:
                     print(f"具体端口的统计CSV： {output_files['端口带宽CSV']}")
-                    
+
                 if "FIFO统计CSV" in output_files:
                     print(f"FIFO使用情况统计CSV： {output_files['FIFO统计CSV']}")
-                    
+
                 if "链路统计CSV" in output_files:
                     print(f"链路带宽统计CSV： {output_files['链路统计CSV']}")
 

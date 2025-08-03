@@ -18,6 +18,11 @@ from ..base.ip_interface import PipelinedFIFO
 from .config import CrossRingConfig
 from .flit import CrossRingFlit
 
+# 性能优化：使用常量避免重复的字符串赋值
+FLIT_POSITION_RING_SLICE = "Ring_slice"
+FLIT_POSITION_CROSSPOINT = "CrossPoint"
+FLIT_POSITION_FIFO = "FIFO"
+
 
 class PriorityLevel(Enum):
     """CrossRing特定的ETag优先级"""
@@ -479,7 +484,9 @@ class RingSlice:
                 flit = self.next_slots[channel].flit
                 flit.current_slice_index = self.position
                 flit.current_position = self.position
-                flit.flit_position = "Ring_slice"
+                # 性能优化：只在位置真正改变时更新
+                if flit.flit_position != FLIT_POSITION_RING_SLICE:
+                    flit.flit_position = FLIT_POSITION_RING_SLICE
                 # 设置link的源和目标节点信息
                 flit.link_source_node = getattr(self, "source_node_id", -1)
                 flit.link_dest_node = getattr(self, "dest_node_id", -1)
