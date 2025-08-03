@@ -19,105 +19,54 @@ from src.noc.utils.token_bucket import TokenBucket
 
 
 class FIFOStatistics:
-    """FIFO统计信息收集器"""
+    """简化的FIFO统计信息收集器 - 基于累加数据"""
     
     def __init__(self):
-        # 利用率统计
-        self.current_depth = 0
-        self.peak_depth = 0
-        self.depth_sum = 0
-        self.sample_count = 0
-        self.empty_cycles = 0
-        self.full_cycles = 0
+        # 核心累加字段
+        self.depth_sum = 0          # 深度累加和（用于计算平均深度）
+        self.peak_depth = 0         # 峰值深度
+        self.sample_count = 0       # 采样次数
+        self.write_stalls = 0       # 写入阻塞累加次数
         
-        # 吞吐量统计
-        self.total_writes_attempted = 0
-        self.total_writes_successful = 0
-        self.total_reads_attempted = 0
-        self.total_reads_successful = 0
-        
-        # 流控统计
-        self.write_stalls = 0
-        self.read_stalls = 0
-        self.overflow_attempts = 0
-        self.underflow_attempts = 0
-        
-        # 行为模式统计
-        self.priority_writes = 0
-        self.total_simulation_cycles = 0
-        self.active_cycles = 0  # 有数据传输的周期
-        
-    def update_depth_stats(self, current_depth: int, max_capacity: int, cycle: int):
-        """更新深度相关统计"""
-        self.current_depth = current_depth
+    def update_depth_stats(self, current_depth: int, max_capacity: int):
+        """更新深度相关统计 - 仅累加数据"""
         self.peak_depth = max(self.peak_depth, current_depth)
         self.depth_sum += current_depth
         self.sample_count += 1
-        self.total_simulation_cycles = cycle
-        
-        if current_depth == 0:
-            self.empty_cycles += 1
-        elif current_depth == max_capacity:
-            self.full_cycles += 1
             
-    def record_write_attempt(self, successful: bool, is_priority: bool = False):
-        """记录写入尝试"""
-        self.total_writes_attempted += 1
-        if successful:
-            self.total_writes_successful += 1
-            self.active_cycles += 1
-            if is_priority:
-                self.priority_writes += 1
-        else:
-            self.write_stalls += 1
+    def record_write_stall(self):
+        """记录写入阻塞 - 仅累加计数"""
+        self.write_stalls += 1
+        
+    def get_raw_statistics(self) -> dict:
+        """获取原始累加数据，供最终统计时计算"""
+        return {
+            "depth_sum": self.depth_sum,
+            "peak_depth": self.peak_depth,
+            "sample_count": self.sample_count,
+            "write_stalls": self.write_stalls
+        }
+        
+    def calculate_final_statistics(self, fifo_capacity: int) -> dict:
+        """计算最终统计指标"""
+        if self.sample_count == 0:
+            return {
+                "峰值深度": 0,
+                "平均深度": 0.0,
+                "利用率百分比": 0.0,
+                "写入阻塞次数": self.write_stalls,
+                "采样次数": 0
+            }
             
-    def record_read_attempt(self, successful: bool):
-        """记录读取尝试"""
-        self.total_reads_attempted += 1
-        if successful:
-            self.total_reads_successful += 1
-            self.active_cycles += 1
-        else:
-            self.read_stalls += 1
-            
-    def record_overflow_attempt(self):
-        """记录溢出尝试"""
-        self.overflow_attempts += 1
-        
-    def record_underflow_attempt(self):
-        """记录下溢尝试"""
-        self.underflow_attempts += 1
-        
-    def get_statistics(self) -> dict:
-        """获取统计数据字典"""
-        avg_depth = self.depth_sum / max(1, self.sample_count)
-        utilization = (avg_depth / max(1, self.current_depth)) if self.current_depth > 0 else 0
-        
-        write_efficiency = self.total_writes_successful / max(1, self.total_writes_attempted)
-        read_efficiency = self.total_reads_successful / max(1, self.total_reads_attempted)
-        
-        active_percentage = self.active_cycles / max(1, self.total_simulation_cycles)
+        avg_depth = self.depth_sum / self.sample_count
+        utilization = avg_depth / max(1, fifo_capacity)
         
         return {
-            "当前深度": self.current_depth,
-            "峰值深度": self.peak_depth,  
+            "峰值深度": self.peak_depth,
             "平均深度": round(avg_depth, 2),
             "利用率百分比": round(utilization * 100, 2),
-            "空队列周期数": self.empty_cycles,
-            "满队列周期数": self.full_cycles,
-            "总写入尝试": self.total_writes_attempted,
-            "成功写入次数": self.total_writes_successful,
-            "总读取尝试": self.total_reads_attempted,
-            "成功读取次数": self.total_reads_successful,
-            "写入效率": round(write_efficiency * 100, 2),
-            "读取效率": round(read_efficiency * 100, 2),
             "写入阻塞次数": self.write_stalls,
-            "读取阻塞次数": self.read_stalls,
-            "溢出尝试次数": self.overflow_attempts,
-            "下溢尝试次数": self.underflow_attempts,
-            "高优先级写入": self.priority_writes,
-            "总仿真周期": self.total_simulation_cycles,
-            "活跃周期百分比": round(active_percentage * 100, 2)
+            "采样次数": self.sample_count
         }
 
 
@@ -149,20 +98,18 @@ class PipelinedFIFO:
         if cycle is not None:
             self.current_cycle = cycle
             
-        # 更新深度统计 - 使用采样间隔以提升性能
-        # 默认采样间隔为100周期，可通过环境变量覆盖
-        sample_interval = getattr(self, '_stats_sample_interval', 100)
-        if self.current_cycle % sample_interval == 0:
-            current_depth = len(self.internal_queue) + (1 if self.output_valid else 0)
-            self.stats.update_depth_stats(current_depth, self.max_depth, self.current_cycle)
+        # 优化：缓存采样间隔，避免每次getattr调用
+        if not hasattr(self, '_cached_sample_interval'):
+            self._cached_sample_interval = getattr(self, '_stats_sample_interval', 100)
         
-        # 计算下周期的输出有效性
-        if self.internal_queue and not self.output_valid:
-            self.next_output_valid = True
-        elif self.read_this_cycle and self.internal_queue:
-            self.next_output_valid = True  # 本周期被读，下周期继续输出
-        else:
-            self.next_output_valid = False
+        # 更新深度统计 - 使用缓存的采样间隔
+        if self.current_cycle % self._cached_sample_interval == 0:
+            current_depth = len(self.internal_queue) + (1 if self.output_valid else 0)
+            self.stats.update_depth_stats(current_depth, self.max_depth)
+        
+        # 优化：简化下周期输出有效性计算
+        self.next_output_valid = (self.internal_queue and 
+                                  (not self.output_valid or self.read_this_cycle))
 
     def step_update_phase(self):
         """时序逻辑：更新寄存器 - 修复同周期读写竞争"""
@@ -193,14 +140,10 @@ class PipelinedFIFO:
         """读取输出（只能每周期调用一次）"""
         if self.output_valid and not self.read_this_cycle:
             self.read_this_cycle = True
-            self.stats.record_read_attempt(successful=True)
             return self.output_register
         else:
-            # 尝试读取但失败
-            if not self.output_valid:
-                self.stats.record_read_attempt(successful=False)
-                self.stats.record_underflow_attempt()
-        return None
+            # 读取失败，但不记录统计（简化后移除读取统计）
+            return None
 
     def can_accept_input(self):
         """检查是否能接受输入（组合逻辑）"""
@@ -210,16 +153,15 @@ class PipelinedFIFO:
         """写入新数据"""
         if self.can_accept_input():
             self.internal_queue.append(data)
-            self.stats.record_write_attempt(successful=True)
             return True
         else:
-            self.stats.record_write_attempt(successful=False)
-            self.stats.record_overflow_attempt()
+            # 写入失败，记录阻塞统计
+            self.stats.record_write_stall()
             return False
 
     def ready_signal(self):
-        """Ready信号：能否接受新数据"""
-        return self.can_accept_input()
+        """优化Ready信号：直接计算，避免函数调用开销"""
+        return len(self.internal_queue) < self.internal_queue.maxlen
 
     def valid_signal(self):
         """Valid信号：输出是否有效"""
@@ -246,11 +188,10 @@ class PipelinedFIFO:
         if self.can_accept_input():
             # 将数据插入到队列头部
             self.internal_queue.appendleft(data)
-            self.stats.record_write_attempt(successful=True, is_priority=True)
             return True
         else:
-            self.stats.record_write_attempt(successful=False, is_priority=True)
-            self.stats.record_overflow_attempt()
+            # 写入失败，记录阻塞统计
+            self.stats.record_write_stall()
             return False
     
     def get_all_flits(self) -> List[Any]:
@@ -275,7 +216,7 @@ class PipelinedFIFO:
             
     def get_statistics(self) -> dict:
         """获取FIFO统计信息"""
-        stats_dict = self.stats.get_statistics()
+        stats_dict = self.stats.calculate_final_statistics(self.max_depth)
         stats_dict["FIFO名称"] = self.name
         stats_dict["最大容量"] = self.max_depth
         return stats_dict
