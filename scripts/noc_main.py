@@ -8,7 +8,6 @@ from src.noc.crossring.config import CrossRingConfig
 
 
 def create_3x3_config():
-    """创建CrossRing配置"""
     config = CrossRingConfig(num_row=3, num_col=3)
     config.basic_config.NETWORK_FREQUENCY = 2
 
@@ -48,7 +47,6 @@ def create_3x3_config():
 
 
 def create_5x2_config():
-    """创建CrossRing配置"""
     config = CrossRingConfig(num_row=5, num_col=2)
     config.basic_config.NETWORK_FREQUENCY = 2
 
@@ -87,12 +85,8 @@ def create_5x2_config():
 
 
 def create_5x4_config():
-    """创建CrossRing配置"""
     config = CrossRingConfig(num_row=5, num_col=4)
     config.basic_config.NETWORK_FREQUENCY = 2
-
-    # config.ip_config.DDR_BW_LIMIT = 64
-    # config.ip_config.GDMA_BW_LIMIT = 20
 
     config.tracker_config.RN_R_TRACKER_OSTD = 64
     config.tracker_config.RN_W_TRACKER_OSTD = 64
@@ -136,16 +130,16 @@ def main():
     traffic_file_path = str(Path(__file__).parent.parent / "traffic_data")
     traffic_chains = [
         [
-            "LLama2_AllReduce.txt",
-            # "test1.txt",
+            # "LLama2_AllReduce.txt",
+            "test1.txt",
             # "R_5x2.txt",
         ]
     ]
 
     # 2. 创建模型
-    # config = create_3x3_config()
+    config = create_3x3_config()
     # config = create_5x2_config()
-    config = create_5x4_config()
+    # config = create_5x4_config()
     model = CrossRingModel(config)
 
     save_dir = None
@@ -153,19 +147,17 @@ def main():
 
     # 3. 配置各种选项
     model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)
-    # 关闭debug跟踪，专注查看等待队列处理
     # model.setup_debug(trace_packets=[257], update_interval=0.0)
-    # 配置实时可视化
-    # model.setup_visualization(enable=True, update_interval=0.5, start_cycle=300)
+    # model.setup_visualization(enable=True, update_interval=0.5, start_cycle=1000)
 
     model.setup_result_analysis(
         # 图片生成控制
-        flow_distribution_fig=0,
-        bandwidth_analysis_fig=0,
-        latency_analysis_fig=0,
+        flow_distribution_fig=1,
+        bandwidth_analysis_fig=1,
+        latency_analysis_fig=1,
         save_figures=0,
         # CSV文件导出控制
-        export_request_csv=1,
+        export_request_csv=0,
         export_fifo_csv=0,
         export_link_csv=0,
         # 通用设置

@@ -164,16 +164,20 @@ class EjectQueue:
             self._compute_channel_eject_arbitration(channel, cycle, inject_input_fifos, ring_bridge)
 
     def _compute_channel_eject_arbitration(self, channel: str, cycle: int, inject_input_fifos: Dict, ring_bridge) -> None:
-        """计算单个通道的eject仲裁。"""
+        """计算单个通道的eject仲裁，支持不同IP的并行传输。"""
         if not self.connected_ips:
             return
 
         arb_state = self.eject_arbitration_state[channel]
         sources = arb_state["sources"]
+        
+        # 记录每个IP是否已被占用（同一IP只能接收一个flit）
+        ip_used = set()
+        first_transfer_source_idx = None  # 记录第一个成功传输的源索引
 
         # 轮询所有输入源
         for source_attempt in range(len(sources)):
-            current_source_idx = arb_state["current_source"]
+            current_source_idx = (arb_state["current_source"] + source_attempt) % len(sources)
             source = sources[current_source_idx]
 
             # 获取来自当前源的flit (使用peek，不实际读取)
@@ -181,20 +185,28 @@ class EjectQueue:
             if flit is not None:
                 # 找到flit，现在确定分配给哪个IP
                 target_ip = self._find_target_ip_for_flit(flit, channel, cycle)
-                if target_ip:
+                if target_ip and target_ip not in ip_used:
                     # 保存传输计划
                     self._eject_transfer_plan.append((source, channel, flit, target_ip))
                     arb_state["last_served_source"][source] = cycle
-                    # 成功后更新current_source到下一个，确保下次从不同源开始
-                    arb_state["current_source"] = (current_source_idx + 1) % len(sources)
-                    break
+                    ip_used.add(target_ip)  # 标记该IP已被占用
+                    
+                    # 记录第一个成功传输的源索引
+                    if first_transfer_source_idx is None:
+                        first_transfer_source_idx = current_source_idx
+                    
+                    # 继续检查其他源（不break），允许不同IP的并行传输
                 else:
                     pass
             else:
                 pass
 
-            # 移动到下一个源
-            arb_state["current_source"] = (current_source_idx + 1) % len(sources)
+        # 更新起始源索引，确保下次从不同源开始
+        if first_transfer_source_idx is not None:
+            arb_state["current_source"] = (first_transfer_source_idx + 1) % len(sources)
+        else:
+            # 没有成功传输，也要更新索引确保轮询
+            arb_state["current_source"] = (arb_state["current_source"] + 1) % len(sources)
 
     def execute_arbitration(self, cycle: int, inject_input_fifos: Dict, ring_bridge) -> None:
         """

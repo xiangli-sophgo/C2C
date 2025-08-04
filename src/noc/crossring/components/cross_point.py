@@ -452,13 +452,17 @@ class CrossPoint:
                                 self._handle_ejection_failure_in_compute(current_slot, channel, direction, cycle)
 
         # ========== 第二部分：上环分析和计划 ==========
+        # 职责分工：
+        # - 水平CrossPoint: 只处理inject_input_fifos (IQ) 的上环
+        # - 垂直CrossPoint: 只处理Ring Bridge输出 (RB) 的上环
         for direction in self.managed_directions:
             for channel in ["req", "rsp", "data"]:
                 arrival_slice = self.slice_connections[direction][channel]["arrival"]
                 if not arrival_slice:
                     raise ValueError("非法的slice")
-                # 1. 优先检查ring_bridge输出（维度转换后的flit重新注入）
-                if ring_bridge:
+                # 1. 检查ring_bridge输出（仅垂直CrossPoint处理）
+                # 垂直CrossPoint负责将Ring Bridge输出的flit重新注入到垂直环
+                if self.direction == CrossPointDirection.VERTICAL and ring_bridge:
                     ring_bridge_flit = ring_bridge.peek_output_flit(direction, channel)
                     if ring_bridge_flit:
                         # 检查arrival slice状态是否允许注入（考虑下环计划）

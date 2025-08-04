@@ -133,7 +133,7 @@ class InjectQueue:
     def compute_arbitration(self, cycle: int) -> None:
         """
         计算阶段：确定要传输的flit但不执行传输。
-        使用轮询机制确保公平性，按通道轮询IP。
+        使用轮询机制确保公平性，支持不同方向的并行传输。
 
         Args:
             cycle: 当前周期
@@ -157,6 +157,9 @@ class InjectQueue:
             # 获取当前通道的轮询状态
             arb_state = self.inject_arbitration_state[channel]
             start_ip_index = arb_state["current_ip_index"]
+            
+            # 记录每个方向是否已被占用（同一方向只能有一个flit）
+            direction_used = set()
             channel_has_transfer = False  # 标记当前通道是否有传输
             
             # 为当前通道轮询所有IP
@@ -186,6 +189,10 @@ class InjectQueue:
                 if correct_direction == "INVALID":
                     continue
 
+                # 检查该方向是否已被占用
+                if correct_direction in direction_used:
+                    continue  # 该方向已有flit，跳过
+
                 # 检查目标inject_direction_fifo是否有空间
                 target_fifo = self.inject_input_fifos[channel][correct_direction]
                 if target_fifo.ready_signal():
@@ -193,10 +200,13 @@ class InjectQueue:
                     self._inject_transfer_plan.append((ip_id, channel, flit, correct_direction))
                     transfers_planned += 1
                     channel_has_transfer = True
+                    direction_used.add(correct_direction)  # 标记该方向已被占用
                     
-                    # 成功后更新当前通道的IP索引，确保下次从不同IP开始
-                    arb_state["current_ip_index"] = (ip_index + 1) % len(self.connected_ips)
-                    break  # 当前通道已处理一个，转到下一个通道
+                    # 如果是第一个成功的传输，更新起始索引
+                    if len(direction_used) == 1:
+                        arb_state["current_ip_index"] = (ip_index + 1) % len(self.connected_ips)
+                    
+                    # 继续检查其他IP（不break），允许不同方向的并行传输
             
             # 如果当前通道没有找到可传输的，更新索引确保轮询
             if not channel_has_transfer:

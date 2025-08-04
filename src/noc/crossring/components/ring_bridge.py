@@ -168,9 +168,8 @@ class RingBridge:
             cycle: 当前周期
             inject_input_fifos: 注入方向FIFO
         """
-        # 清空上一周期的决策
-        for channel in ["req", "rsp", "data"]:
-            self.ring_bridge_arbitration_decisions[channel] = {"flit": None, "output_direction": None, "input_source": None}
+        # 清空上一周期的决策 - 改为列表以支持多个传输
+        self.ring_bridge_arbitration_decisions = {"req": [], "rsp": [], "data": []}
 
         # 首先初始化源和方向列表（如果还没有初始化）
         if not self.ring_bridge_arbitration_state["req"]["input_sources"]:
@@ -206,13 +205,17 @@ class RingBridge:
                         self.iq_to_rb_transfer_decisions[channel][direction] = False
 
     def _compute_channel_ring_bridge_arbitration(self, channel: str, cycle: int, inject_input_fifos: Dict) -> None:
-        """计算单个通道的ring_bridge仲裁决策。"""
+        """计算单个通道的ring_bridge仲裁决策，支持不同输出方向的并行传输。"""
         arb_state = self.ring_bridge_arbitration_state[channel]
         input_sources = arb_state["input_sources"]
+        
+        # 记录每个输出方向是否已被占用（同一输出方向只能有一个flit）
+        output_direction_used = set()
+        first_transfer_source_idx = None  # 记录第一个成功传输的源索引
 
         # 轮询所有输入源，寻找可用的flit
         for input_attempt in range(len(input_sources)):
-            current_input_idx = arb_state["current_input"]
+            current_input_idx = (arb_state["current_input"] + input_attempt) % len(input_sources)
             input_source = input_sources[current_input_idx]
 
             # 对于IQ源，直接从inject_input_fifos读取（绕过RB内部FIFO以减少延迟）
@@ -230,18 +233,34 @@ class RingBridge:
             if flit is not None:
                 # 计算输出方向
                 output_direction = self._determine_ring_bridge_output_direction(flit)
+                
+                # 检查该输出方向是否已被占用
+                if output_direction in output_direction_used:
+                    continue  # 该输出方向已有flit，跳过
 
                 # 检查输出FIFO是否可用
                 output_fifo = self.ring_bridge_output_fifos[channel][output_direction]
                 if output_fifo.ready_signal():
                     # 保存仲裁决策（在update阶段执行）
-                    self.ring_bridge_arbitration_decisions[channel] = {"flit": flit, "output_direction": output_direction, "input_source": input_source}
-                    # 成功仲裁后，更新current_input到下一个输入源以确保公平性
-                    arb_state["current_input"] = (current_input_idx + 1) % len(input_sources)
-                    break
+                    self.ring_bridge_arbitration_decisions[channel].append({
+                        "flit": flit, 
+                        "output_direction": output_direction, 
+                        "input_source": input_source
+                    })
+                    output_direction_used.add(output_direction)  # 标记该输出方向已被占用
+                    
+                    # 记录第一个成功传输的源索引
+                    if first_transfer_source_idx is None:
+                        first_transfer_source_idx = current_input_idx
+                    
+                    # 继续检查其他源（不break），允许不同输出方向的并行传输
 
-            # 移动到下一个输入源
-            arb_state["current_input"] = (current_input_idx + 1) % len(input_sources)
+        # 更新起始源索引，确保下次从不同源开始
+        if first_transfer_source_idx is not None:
+            arb_state["current_input"] = (first_transfer_source_idx + 1) % len(input_sources)
+        else:
+            # 没有成功传输，也要更新索引确保轮询
+            arb_state["current_input"] = (arb_state["current_input"] + 1) % len(input_sources)
 
     def execute_arbitration(self, cycle: int, inject_input_fifos: Dict) -> None:
         """
@@ -253,10 +272,11 @@ class RingBridge:
         """
         # 执行RB仲裁传输（IQ源直接传输到输出）
         for channel in ["req", "rsp", "data"]:
-            decision = self.ring_bridge_arbitration_decisions[channel]
-            if decision["flit"] is not None:
-                # 执行之前计算的仲裁决策
-                self._execute_channel_ring_bridge_transfer(channel, decision, cycle, inject_input_fifos)
+            decisions = self.ring_bridge_arbitration_decisions[channel]
+            # 执行所有计算的仲裁决策
+            for decision in decisions:
+                if decision["flit"] is not None:
+                    self._execute_channel_ring_bridge_transfer(channel, decision, cycle, inject_input_fifos)
 
     def _execute_iq_to_rb_transfers(self, cycle: int, inject_input_fifos: Dict) -> None:
         """执行从IQ到RB内部FIFO的传输（两阶段执行模型第一阶段）。"""
