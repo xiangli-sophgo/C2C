@@ -659,11 +659,10 @@ class LinkStateVisualizer:
         for rect, (rect_link_ids, flit, rect_slot_idx) in self.rect_info_map.items():
             if flit:
                 # 重新计算flit样式
-                face_color, alpha, line_width, edge_color = self._get_flit_style(flit, use_highlight=self.use_highlight, expected_packet_id=self.tracked_pid, highlight_color="red")
+                face_color, line_width, edge_color = self._get_flit_style(flit, use_highlight=self.use_highlight, expected_packet_id=self.tracked_pid, highlight_color="red")
 
-                # 应用样式
+                # 应用样式 - face_color已包含透明度信息，不再使用set_alpha
                 rect.set_facecolor(face_color)
-                rect.set_alpha(alpha)
                 rect.set_edgecolor(edge_color)
                 rect.set_linewidth(max(line_width, 0.8))
                 rect.set_linestyle("-")
@@ -1185,7 +1184,7 @@ CrossRing可视化控制键:
                                 flit_data = {
                                     "packet_id": getattr(slot, "packet_id", None),
                                     "flit_id": getattr(slot, "flit_id", None),
-                                    "ETag_priority": getattr(slot, "etag_priority", "T2"),
+                                    "ETag_priority": getattr(slot, "ETag_priority", getattr(slot, "etag_priority", "T2")),
                                     "itag_h": getattr(slot, "itag_h", False),
                                     "itag_v": getattr(slot, "itag_v", False),
                                     "current_node_id": None,
@@ -1362,11 +1361,10 @@ CrossRing可视化控制键:
                         self.rect_info_map[rect] = (rect_link_ids, slot, rect_slot_idx)
 
                         # 获取flit样式并应用
-                        face_color, alpha, line_width, edge_color = self._get_flit_style(
+                        face_color, line_width, edge_color = self._get_flit_style(
                             slot, use_highlight=self.use_highlight, expected_packet_id=self.tracked_pid, highlight_color="red"
                         )
                         rect.set_facecolor(face_color)
-                        rect.set_alpha(alpha)
                         rect.set_edgecolor(edge_color)
                         rect.set_linewidth(max(line_width, 0.8))
                         rect.set_linestyle("-")
@@ -1376,35 +1374,44 @@ CrossRing可视化控制键:
 
     def _get_flit_style(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None):
         """
-        返回 (facecolor, alpha, linewidth, edgecolor)
-        - facecolor 沿用调色板逻辑（高亮 / 调色板）
-        - alpha / linewidth 由 flit.ETag_priority 和 flit_id 决定
+        返回 (facecolor, linewidth, edgecolor)
+        - facecolor 包含透明度信息的RGBA颜色（基于flit_id调整透明度）
+        - linewidth / edgecolor 由 flit.ETag_priority 决定（tag相关边框属性，不透明）
         """
-        # E-Tag样式映射
-        _ETAG_ALPHA = {"T0": 1.0, "T1": 0.9, "T2": 0.75}
+        import matplotlib.colors as mcolors
+        
+        # E-Tag样式映射 - 仅控制边框属性，不影响填充透明度
         _ETAG_LW = {"T0": 2.0, "T1": 1.5, "T2": 1.0}
         _ETAG_EDGE = {"T0": "darkred", "T1": "darkblue", "T2": "black"}
 
-        # 获取基础颜色
-        face_color = self._get_flit_color(flit, use_highlight, expected_packet_id, highlight_color)
+        # 获取基础颜色（不含透明度）
+        base_color = self._get_flit_color(flit, use_highlight, expected_packet_id, highlight_color)
 
-        # 获取E-Tag优先级
-        etag = getattr(flit, "ETag_priority", "T2")  # 缺省视为 T2
-        base_alpha = _ETAG_ALPHA.get(etag, 0.8)
+        # 获取E-Tag优先级 - 仅控制边框样式（边框保持完全不透明）
+        # CrossRing flit使用etag_priority（小写），优先检查这个
+        etag = getattr(flit, "etag_priority", getattr(flit, "ETag_priority", "T2"))  # 缺省视为 T2
         line_width = _ETAG_LW.get(etag, 1.0)
-        edge_color = _ETAG_EDGE.get(etag, "black")
+        edge_color = _ETAG_EDGE.get(etag, "black")  # 边框颜色保持不透明
 
-        # 根据flit_id调整透明度（同一packet的不同flit使用不同透明度）
+        # 根据flit_id调整填充颜色透明度（转换为RGBA格式）
         flit_id = getattr(flit, "flit_id", 0)
         if flit_id is not None:
             # 为同一packet内的不同flit分配不同透明度
             # flit_id=0 -> 1.0倍透明度, flit_id=1 -> 0.8倍, flit_id=2 -> 0.6倍, 等等
-            flit_alpha_modifier = max(0.4, 1.0 - (int(flit_id) * 0.2))
-            alpha = base_alpha * flit_alpha_modifier
+            alpha = max(0.4, 1.0 - (int(flit_id) * 0.2))
         else:
-            alpha = base_alpha
+            alpha = 1.0  # 默认完全不透明
 
-        return face_color, alpha, line_width, edge_color
+        # 将基础颜色转换为RGBA格式，嵌入透明度信息
+        try:
+            # 转换颜色为RGBA元组
+            rgba = mcolors.to_rgba(base_color, alpha=alpha)
+            face_color_with_alpha = rgba
+        except:
+            # 如果转换失败，使用默认颜色
+            face_color_with_alpha = (0.5, 0.5, 1.0, alpha)  # 浅蓝色
+
+        return face_color_with_alpha, line_width, edge_color
 
     def _get_flit_color(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None):
         """获取flit颜色，支持多种PID格式"""

@@ -130,16 +130,16 @@ def main():
     traffic_file_path = str(Path(__file__).parent.parent / "traffic_data")
     traffic_chains = [
         [
-            # "LLama2_AllReduce.txt",
-            "test1.txt",
+            "LLama2_AllReduce.txt",
+            # "test1.txt",
             # "R_5x2.txt",
         ]
     ]
 
     # 2. 创建模型
-    config = create_3x3_config()
+    # config = create_3x3_config()
     # config = create_5x2_config()
-    # config = create_5x4_config()
+    config = create_5x4_config()
     model = CrossRingModel(config)
 
     save_dir = None
@@ -148,7 +148,7 @@ def main():
     # 3. 配置各种选项
     model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)
     # model.setup_debug(trace_packets=[257], update_interval=0.0)
-    # model.setup_visualization(enable=True, update_interval=0.5, start_cycle=1000)
+    model.setup_visualization(enable=True, update_interval=0.5, start_cycle=3000)
 
     model.setup_result_analysis(
         # 图片生成控制

@@ -44,11 +44,11 @@ class RingBridge:
         # ring_bridge输出FIFO
         self.ring_bridge_output_fifos = self._create_output_fifos()
 
-        # Ring_bridge轮询仲裁器状态
+        # Ring_bridge轮询仲裁器状态 - 修改为输出端独立仲裁
         self.ring_bridge_arbitration_state = {
-            "req": {"current_input": 0, "current_output": 0, "input_sources": [], "output_directions": [], "last_served_input": {}, "last_served_output": {}},
-            "rsp": {"current_input": 0, "current_output": 0, "input_sources": [], "output_directions": [], "last_served_input": {}, "last_served_output": {}},
-            "data": {"current_input": 0, "current_output": 0, "input_sources": [], "output_directions": [], "last_served_input": {}, "last_served_output": {}},
+            "req": {"input_sources": [], "output_directions": [], "output_current_input": {}, "last_served_input": {}, "last_served_output": {}},
+            "rsp": {"input_sources": [], "output_directions": [], "output_current_input": {}, "last_served_input": {}, "last_served_output": {}},
+            "data": {"input_sources": [], "output_directions": [], "output_current_input": {}, "last_served_input": {}, "last_served_output": {}},
         }
 
         # Ring_bridge仲裁决策缓存（两阶段执行用）
@@ -108,13 +108,15 @@ class RingBridge:
         return input_sources, output_directions
 
     def _initialize_ring_bridge_arbitration(self) -> None:
-        """初始化ring_bridge仲裁的源和方向列表。"""
+        """初始化ring_bridge仲裁的源和方向列表 - 输出端独立仲裁。"""
         input_sources, output_directions = self._get_ring_bridge_config()
 
         for channel in ["req", "rsp", "data"]:
             arb_state = self.ring_bridge_arbitration_state[channel]
             arb_state["input_sources"] = input_sources.copy()
             arb_state["output_directions"] = output_directions.copy()
+            # 每个输出方向维护独立的输入源轮询索引
+            arb_state["output_current_input"] = {direction: 0 for direction in output_directions}
             arb_state["last_served_input"] = {source: 0 for source in input_sources}
             arb_state["last_served_output"] = {direction: 0 for direction in output_directions}
 
@@ -205,62 +207,54 @@ class RingBridge:
                         self.iq_to_rb_transfer_decisions[channel][direction] = False
 
     def _compute_channel_ring_bridge_arbitration(self, channel: str, cycle: int, inject_input_fifos: Dict) -> None:
-        """计算单个通道的ring_bridge仲裁决策，支持不同输出方向的并行传输。"""
+        """计算单个通道的ring_bridge仲裁决策 - 输出端独立仲裁。"""
         arb_state = self.ring_bridge_arbitration_state[channel]
         input_sources = arb_state["input_sources"]
-        
-        # 记录每个输出方向是否已被占用（同一输出方向只能有一个flit）
-        output_direction_used = set()
-        first_transfer_source_idx = None  # 记录第一个成功传输的源索引
+        output_directions = arb_state["output_directions"]
 
-        # 轮询所有输入源，寻找可用的flit
-        for input_attempt in range(len(input_sources)):
-            current_input_idx = (arb_state["current_input"] + input_attempt) % len(input_sources)
-            input_source = input_sources[current_input_idx]
+        # 为每个输出方向独立进行仲裁
+        for output_direction in output_directions:
+            # 检查输出FIFO是否可用
+            output_fifo = self.ring_bridge_output_fifos[channel][output_direction]
+            if not output_fifo.ready_signal():
+                continue  # 输出FIFO满，跳过该输出方向
 
-            # 对于IQ源，直接从inject_input_fifos读取（绕过RB内部FIFO以减少延迟）
-            # 对于RB源，从RB内部FIFO读取
-            if input_source.startswith("IQ_"):
-                direction = input_source[3:]
-                iq_fifo = inject_input_fifos[channel][direction]
-                if iq_fifo.valid_signal():
-                    flit = iq_fifo.peek_output()
-                else:
-                    flit = None
-            else:
-                flit = self._peek_flit_from_ring_bridge_input(input_source, channel, inject_input_fifos)
+            # 获取该输出方向的当前轮询索引
+            current_input_idx = arb_state["output_current_input"][output_direction]
             
-            if flit is not None:
-                # 计算输出方向
-                output_direction = self._determine_ring_bridge_output_direction(flit)
+            # 轮询该输出方向的所有输入源
+            selected_flit = None
+            selected_input_source = None
+            
+            for input_attempt in range(len(input_sources)):
+                input_idx = (current_input_idx + input_attempt) % len(input_sources)
+                input_source = input_sources[input_idx]
+
+                # 获取该输入源的flit
+                flit = self._peek_flit_from_input_source(input_source, channel, inject_input_fifos)
                 
-                # 检查该输出方向是否已被占用
-                if output_direction in output_direction_used:
-                    continue  # 该输出方向已有flit，跳过
-
-                # 检查输出FIFO是否可用
-                output_fifo = self.ring_bridge_output_fifos[channel][output_direction]
-                if output_fifo.ready_signal():
-                    # 保存仲裁决策（在update阶段执行）
-                    self.ring_bridge_arbitration_decisions[channel].append({
-                        "flit": flit, 
-                        "output_direction": output_direction, 
-                        "input_source": input_source
-                    })
-                    output_direction_used.add(output_direction)  # 标记该输出方向已被占用
+                if flit is not None:
+                    # 检查该flit是否想要去这个输出方向
+                    flit_output_direction = self._determine_ring_bridge_output_direction(flit)
                     
-                    # 记录第一个成功传输的源索引
-                    if first_transfer_source_idx is None:
-                        first_transfer_source_idx = current_input_idx
-                    
-                    # 继续检查其他源（不break），允许不同输出方向的并行传输
-
-        # 更新起始源索引，确保下次从不同源开始
-        if first_transfer_source_idx is not None:
-            arb_state["current_input"] = (first_transfer_source_idx + 1) % len(input_sources)
-        else:
-            # 没有成功传输，也要更新索引确保轮询
-            arb_state["current_input"] = (arb_state["current_input"] + 1) % len(input_sources)
+                    if flit_output_direction == output_direction:
+                        # 找到了匹配的flit
+                        selected_flit = flit
+                        selected_input_source = input_source
+                        # 更新该输出方向的轮询索引到下一个输入源
+                        arb_state["output_current_input"][output_direction] = (input_idx + 1) % len(input_sources)
+                        break
+            
+            # 如果找到了匹配的flit，保存仲裁决策
+            if selected_flit is not None:
+                self.ring_bridge_arbitration_decisions[channel].append({
+                    "flit": selected_flit,
+                    "output_direction": output_direction,
+                    "input_source": selected_input_source
+                })
+            else:
+                # 没有找到flit，也要更新轮询索引确保公平性
+                arb_state["output_current_input"][output_direction] = (current_input_idx + 1) % len(input_sources)
 
     def execute_arbitration(self, cycle: int, inject_input_fifos: Dict) -> None:
         """
@@ -349,6 +343,19 @@ class RingBridge:
 
                     # 清除flit的entry信息（已经释放）
                     delattr(flit, "allocated_entry_info")
+
+    def _peek_flit_from_input_source(self, input_source: str, channel: str, inject_input_fifos: Dict) -> Optional[CrossRingFlit]:
+        """从指定输入源查看flit（输出端独立仲裁用）。"""
+        if input_source.startswith("IQ_"):
+            # 对于IQ源，直接从inject_input_fifos读取（绕过RB内部FIFO以减少延迟）
+            direction = input_source[3:]
+            iq_fifo = inject_input_fifos[channel][direction]
+            if iq_fifo.valid_signal():
+                return iq_fifo.peek_output()
+        else:
+            # 对于RB源，从RB内部FIFO读取
+            return self._peek_flit_from_ring_bridge_input(input_source, channel, inject_input_fifos)
+        return None
 
     def _peek_flit_from_ring_bridge_input(self, input_source: str, channel: str, inject_input_fifos: Dict) -> Optional[CrossRingFlit]:
         """查看ring_bridge输入中的flit（不取出）。"""

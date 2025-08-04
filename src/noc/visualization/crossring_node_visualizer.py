@@ -561,28 +561,31 @@ class CrossRingNodeVisualizer:
 
     def _get_flit_style(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None):
         """
-        返回 (facecolor, alpha, linewidth, edgecolor)
-        - facecolor 沿用调色板逻辑（高亮 / 调色板）
-        - alpha / linewidth 由 flit.ETag_priority 和 flit_id 决定
+        返回 (facecolor, linewidth, edgecolor)
+        - facecolor 包含透明度信息的RGBA颜色（基于flit_id调整透明度）
+        - linewidth / edgecolor 由 flit.ETag_priority 决定（tag相关边框属性，不透明）
         """
-        # E-Tag样式映射
-        _ETAG_ALPHA = {"T0": 1.0, "T1": 0.9, "T2": 0.75}
-        _ETAG_LW = {"T0": 2.0, "T1": 1.5, "T2": 1.0}
+        import matplotlib.colors as mcolors
+        
+        # E-Tag样式映射 - 仅控制边框属性，不影响填充透明度
+        # 为node中的小方格调整更合适的线宽
+        _ETAG_LW = {"T0": 1.2, "T1": 0.9, "T2": 0.6}
         _ETAG_EDGE = {"T0": "darkred", "T1": "darkblue", "T2": "black"}
 
-        # 获取基础颜色
-        face_color = self._get_flit_color(flit, use_highlight, expected_packet_id, highlight_color)
+        # 获取基础颜色（不含透明度）
+        base_color = self._get_flit_color(flit, use_highlight, expected_packet_id, highlight_color)
 
-        # 获取E-Tag优先级（兼容字典和对象格式）
+        # 获取E-Tag优先级（兼容字典和对象格式）- 仅控制边框样式（边框保持完全不透明）
         if isinstance(flit, dict):
-            etag = flit.get("ETag_priority", "T2")
+            # 字典格式：优先使用标准化的ETag_priority，然后尝试etag_priority
+            etag = flit.get("ETag_priority", flit.get("etag_priority", "T2"))
         else:
-            etag = getattr(flit, "ETag_priority", "T2")  # 缺省视为 T2
-        base_alpha = _ETAG_ALPHA.get(etag, 0.8)
+            # 对象格式：优先使用etag_priority（CrossRing flit的实际属性名），然后尝试ETag_priority
+            etag = getattr(flit, "etag_priority", getattr(flit, "ETag_priority", "T2"))
         line_width = _ETAG_LW.get(etag, 1.0)
-        edge_color = _ETAG_EDGE.get(etag, "black")
+        edge_color = _ETAG_EDGE.get(etag, "black")  # 边框颜色保持不透明
 
-        # 根据flit_id调整透明度（同一packet的不同flit使用不同透明度）
+        # 根据flit_id调整填充颜色透明度（转换为RGBA格式）
         if isinstance(flit, dict):
             flit_id = flit.get("flit_id", 0)
         else:
@@ -591,12 +594,20 @@ class CrossRingNodeVisualizer:
         if flit_id is not None:
             # 为同一packet内的不同flit分配不同透明度
             # flit_id=0 -> 1.0倍透明度, flit_id=1 -> 0.8倍, flit_id=2 -> 0.6倍, 等等
-            flit_alpha_modifier = max(0.4, 1.0 - (int(flit_id) * 0.2))
-            alpha = base_alpha * flit_alpha_modifier
+            alpha = max(0.4, 1.0 - (int(flit_id) * 0.2))
         else:
-            alpha = base_alpha
+            alpha = 1.0  # 默认完全不透明
 
-        return face_color, alpha, line_width, edge_color
+        # 将基础颜色转换为RGBA格式，嵌入透明度信息
+        try:
+            # 转换颜色为RGBA元组
+            rgba = mcolors.to_rgba(base_color, alpha=alpha)
+            face_color_with_alpha = rgba
+        except:
+            # 如果转换失败，使用默认颜色
+            face_color_with_alpha = (0.5, 0.5, 1.0, alpha)  # 浅蓝色
+
+        return face_color_with_alpha, line_width, edge_color
 
     def _get_flit_color(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None):
         """获取flit颜色，支持字典和对象两种格式的flit数据"""
@@ -675,13 +686,12 @@ class CrossRingNodeVisualizer:
 
             # 重新计算并应用flit样式（包括颜色）
             if flit:
-                face, alpha, lw, edge = self._get_flit_style(
+                face, lw, edge = self._get_flit_style(
                     flit,
                     use_highlight=self.use_highlight,
                     expected_packet_id=self.highlight_pid,
                 )
                 patch.set_facecolor(face)
-                patch.set_alpha(alpha)
                 patch.set_linewidth(lw)
                 patch.set_edgecolor(edge)
 
@@ -738,10 +748,18 @@ class CrossRingNodeVisualizer:
             return None
         
         # 提取基本字段
+        # 为ETag_priority添加多种可能的属性名检查，确保兼容性
+        # CrossRing flit使用etag_priority（小写），优先检查这个
+        etag_priority = getattr(flit, "etag_priority", None)
+        if etag_priority is None:
+            etag_priority = getattr(flit, "ETag_priority", None)
+        if etag_priority is None:
+            etag_priority = getattr(flit, "priority", "T2")  # 最后使用默认值
+        
         data = {
             "packet_id": getattr(flit, "packet_id", None),
             "flit_id": getattr(flit, "flit_id", None),
-            "ETag_priority": getattr(flit, "ETag_priority", None),
+            "ETag_priority": etag_priority,
             "itag_h": getattr(flit, "itag_h", False),
             "itag_v": getattr(flit, "itag_v", False),
             "channel": channel,
@@ -768,9 +786,10 @@ class CrossRingNodeVisualizer:
                     fifo_data = [self._extract_flit_data(flit, channel, direction) for flit in fifo.internal_queue]
 
                     # 提取output_register中的flit（如果存在且有效）
+                    # 输出寄存器的flit应该在队列第一个位置（下一个要输出的flit）
                     if hasattr(fifo, "output_register") and hasattr(fifo, "output_valid") and fifo.output_valid and fifo.output_register:
                         output_flit_data = self._extract_flit_data(fifo.output_register, channel, direction)
-                        fifo_data.append(output_flit_data)
+                        fifo_data.insert(0, output_flit_data)  # 插入到队列开头而不是末尾
 
                     channel_data[direction] = {node_id: fifo_data}
             result[channel] = channel_data
@@ -788,10 +807,11 @@ class CrossRingNodeVisualizer:
                     fifo_data = [self._extract_flit_data(flit, channel, direction_type) for flit in ip_interface[channel].internal_queue]
 
                     # 提取output_register中的flit（如果存在且有效）
+                    # 输出寄存器的flit应该在队列第一个位置（下一个要输出的flit）
                     fifo = ip_interface[channel]
                     if hasattr(fifo, "output_register") and hasattr(fifo, "output_valid") and fifo.output_valid and fifo.output_register:
                         output_flit_data = self._extract_flit_data(fifo.output_register, channel, direction_type)
-                        fifo_data.append(output_flit_data)
+                        fifo_data.insert(0, output_flit_data)  # 插入到队列开头而不是末尾
 
                     channel_data[ip_id] = fifo_data
             result[channel] = channel_data
@@ -1122,7 +1142,6 @@ class CrossRingNodeVisualizer:
         """清空FIFO patch的显示"""
         for p in patches:
             p.set_facecolor("none")
-            p.set_alpha(1.0)
             p.set_linewidth(0)
             p.set_edgecolor("none")
             # 从patch_info_map中移除
@@ -1143,7 +1162,6 @@ class CrossRingNodeVisualizer:
         # 清空所有patch并移除映射
         for p in patches:
             p.set_facecolor("none")
-            p.set_alpha(1.0)
             p.set_linewidth(0)
             p.set_edgecolor("none")
             # 从patch_info_map中移除
@@ -1170,13 +1188,12 @@ class CrossRingNodeVisualizer:
                     packet_id = getattr(flit, "packet_id", None)
                     flit_id = getattr(flit, "flit_id", str(flit))
 
-                face, alpha, lw, edge = self._get_flit_style(
+                face, lw, edge = self._get_flit_style(
                     flit,
                     use_highlight=self.use_highlight,
                     expected_packet_id=self.highlight_pid,
                 )
                 p.set_facecolor(face)
-                p.set_alpha(alpha)
                 p.set_linewidth(lw)
                 p.set_edgecolor(edge)
 
@@ -1223,7 +1240,6 @@ class CrossRingNodeVisualizer:
         # 清空所有patch并移除映射
         for p in patches:
             p.set_facecolor("none")
-            p.set_alpha(1.0)
             p.set_linewidth(0)
             p.set_edgecolor("none")
             # 从patch_info_map中移除
@@ -1245,13 +1261,12 @@ class CrossRingNodeVisualizer:
                 packet_id = getattr(flit, "packet_id", None)
                 flit_id = getattr(flit, "flit_id", str(flit))
 
-                face, alpha, lw, edge = self._get_flit_style(
+                face, lw, edge = self._get_flit_style(
                     flit,
                     use_highlight=self.use_highlight,
                     expected_packet_id=self.highlight_pid,
                 )
                 p.set_facecolor(face)
-                p.set_alpha(alpha)
                 p.set_linewidth(lw)
                 p.set_edgecolor(edge)
 
@@ -1293,7 +1308,6 @@ class CrossRingNodeVisualizer:
         # 清空所有patch并移除映射
         for p in patches:
             p.set_facecolor("none")
-            p.set_alpha(1.0)
             p.set_linewidth(0)
             p.set_edgecolor("none")
             # 从patch_info_map中移除
@@ -1313,13 +1327,12 @@ class CrossRingNodeVisualizer:
                 packet_id = getattr(flit, "packet_id", None)
                 flit_id = getattr(flit, "flit_id", str(flit))
 
-                face, alpha, lw, edge = self._get_flit_style(
+                face, lw, edge = self._get_flit_style(
                     flit,
                     use_highlight=self.use_highlight,
                     expected_packet_id=self.highlight_pid,
                 )
                 p.set_facecolor(face)
-                p.set_alpha(alpha)
                 p.set_linewidth(lw)
                 p.set_edgecolor(edge)
 
