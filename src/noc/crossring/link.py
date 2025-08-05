@@ -69,29 +69,26 @@ class LinkBandwidthTracker:
 
     def record_slot_state(self, channel: str, slot: Optional["CrossRingSlot"]) -> None:
         """记录通过观测点的slot状态"""
-        if slot is None:
+        if slot is None or not getattr(slot, 'is_occupied', False) or slot.flit is None:
+            # 空slot或无效flit
             self.cycle_stats[channel]["empty"] += 1
         else:
-            # 检查slot是否真的包含有效的flit
-            if hasattr(slot, "is_occupied") and slot.is_occupied and slot.flit is not None:
-                # 有效的flit传输
-                self.cycle_stats[channel]["valid"] += 1
+            # 有效的flit传输
+            self.cycle_stats[channel]["valid"] += 1
 
-                # 统计ETag状态
-                if hasattr(slot, "etag_priority") and slot.etag_priority:
-                    etag_value = slot.etag_priority.value if hasattr(slot.etag_priority, "value") else str(slot.etag_priority)
-                    if etag_value in ["T0", "T1", "T2"]:
-                        self.cycle_stats[channel][etag_value] += 1
+            # 统计ETag状态 - 使用getattr避免hasattr开销
+            etag_priority = getattr(slot, 'etag_priority', None)
+            if etag_priority:
+                etag_value = getattr(etag_priority, 'value', str(etag_priority))
+                if etag_value in ["T0", "T1", "T2"]:
+                    self.cycle_stats[channel][etag_value] += 1
 
-                # 统计ITag状态
-                if hasattr(slot, "itag_reserved") and slot.itag_reserved:
-                    self.cycle_stats[channel]["ITag"] += 1
+            # 统计ITag状态 - 使用getattr避免hasattr开销
+            if getattr(slot, 'itag_reserved', False):
+                self.cycle_stats[channel]["ITag"] += 1
 
-                # 统计字节数 - 每个flit固定128字节
-                self.cycle_stats[channel]["bytes"] += 128  # 每个flit固定128字节
-            else:
-                # 空slot，即使slot对象存在但没有有效flit
-                self.cycle_stats[channel]["empty"] += 1
+            # 统计字节数 - 每个flit固定128字节
+            self.cycle_stats[channel]["bytes"] += 128
 
     def increment_cycle(self) -> None:
         """增加周期计数"""

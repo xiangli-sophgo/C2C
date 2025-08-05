@@ -81,7 +81,7 @@ def main():
     # 配置实时可视化
     model.setup_visualization(enable=True, update_interval=0.2, start_cycle=80)
     # 结果分析设置
-    model.setup_result_analysis(flow_distribution=1, bandwidth_analysis=1, latency_analysis=1, save_figures=0, save_dir=save_dir)
+    model.setup_result_analysis(flow_distribution_fig=1, bandwidth_analysis_fig=1, latency_analysis_fig=1, save_figures=0, save_dir=save_dir)
 
     # 4. 运行仿真 - 延长时间以观察flit流动
     print("▶️  开始仿真")

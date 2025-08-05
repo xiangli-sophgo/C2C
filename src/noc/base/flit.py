@@ -350,7 +350,15 @@ class BaseFlit(ABC):
 
         # 事务延迟
         if self.cmd_entry_cake0_cycle < np.inf and self.data_received_complete_cycle < np.inf:
-            latencies["transaction_latency"] = self.transaction_latency = self.data_received_complete_cycle - self.cmd_entry_cake0_cycle
+            # 写请求需要加上SN端tracker延迟释放时间
+            if self.req_type == "write":
+                # 获取SN_TRACKER_RELEASE_LATENCY配置 (ns)，转换为cycles
+                sn_tracker_release_latency_ns = getattr(getattr(self, 'config', None), 'tracker_config', {}).get('SN_TRACKER_RELEASE_LATENCY', 40) if hasattr(self, 'config') else 40
+                network_freq_ghz = getattr(getattr(self, 'config', None), 'basic_config', {}).get('NETWORK_FREQUENCY', 2.0) if hasattr(self, 'config') else 2.0
+                sn_tracker_release_latency_cycles = int(sn_tracker_release_latency_ns * network_freq_ghz)
+                latencies["transaction_latency"] = self.transaction_latency = self.data_received_complete_cycle + sn_tracker_release_latency_cycles - self.cmd_entry_cake0_cycle
+            else:
+                latencies["transaction_latency"] = self.transaction_latency = self.data_received_complete_cycle - self.cmd_entry_cake0_cycle
 
         return latencies
 

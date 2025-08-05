@@ -234,7 +234,14 @@ class ResultAnalyzer:
 
             # 事务延迟：data_received_complete_cycle - cmd_entry_cake0_cycle
             if cmd_entry_cake0_cycle < np.inf and data_received_complete_cycle < np.inf:
-                transaction_latency = data_received_complete_cycle - cmd_entry_cake0_cycle
+                if lifecycle.op_type == "write":
+                    # 写请求需要加上SN端tracker延迟释放时间 (40ns -> cycles)
+                    sn_tracker_release_latency_ns = 40  # ns
+                    network_freq_ghz = 2.0  # GHz (默认)
+                    sn_tracker_release_latency_cycles = int(sn_tracker_release_latency_ns * network_freq_ghz)
+                    transaction_latency = data_received_complete_cycle - cmd_entry_cake0_cycle + sn_tracker_release_latency_cycles
+                else:
+                    transaction_latency = data_received_complete_cycle - cmd_entry_cake0_cycle
 
             # 将cycle延迟转换为ns
             cmd_latency_ns = int(cmd_latency * cycle_time_ns) if cmd_latency < np.inf else 0

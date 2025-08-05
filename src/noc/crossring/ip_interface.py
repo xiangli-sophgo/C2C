@@ -235,12 +235,14 @@ class CrossRingIPInterface(BaseIPInterface):
                             # 响应从目标IP进入NoC的时间
                             flit.cmd_entry_noc_from_cake1_cycle = self.current_cycle
                         elif channel == "data":
-                            if flit.req_type == "read":
-                                # 读数据从目标IP进入NoC的时间
-                                flit.data_entry_noc_from_cake1_cycle = self.current_cycle
-                            elif flit.req_type == "write":
-                                # 写数据从源IP进入NoC的时间
-                                flit.data_entry_noc_from_cake0_cycle = self.current_cycle
+                            # 只有第一个data flit设置entry时间戳
+                            if flit.flit_id == 0:
+                                if flit.req_type == "read":
+                                    # 读数据从目标IP进入NoC的时间
+                                    flit.data_entry_noc_from_cake1_cycle = self.current_cycle
+                                elif flit.req_type == "write":
+                                    # 写数据从源IP进入NoC的时间
+                                    flit.data_entry_noc_from_cake0_cycle = self.current_cycle
 
                         # 更新RequestTracker状态：flit成功注入到网络
                         if hasattr(self.model, "request_tracker") and hasattr(flit, "packet_id"):
@@ -466,17 +468,21 @@ class CrossRingIPInterface(BaseIPInterface):
                     self.rn_tracker_pointer["read"] -= 1
                     self.rn_rdb_count += req.burst_length
 
-                    # 设置完成时间戳
+                    # 设置完成时间戳并同步第一个flit的entry时间
+                    # 找到真正的第一个data flit (flit_id=0)
+                    first_data_flit = next((f for f in self.rn_rdb[flit.packet_id] if f.flit_id == 0), None)
                     for f in self.rn_rdb[flit.packet_id]:
                         f.leave_db_cycle = self.current_cycle
                         f.sync_latency_record(req)
+                        if first_data_flit:
+                            f.sync_latency_record(first_data_flit)  # 同步第一个data flit的entry时间
                         f.data_received_complete_cycle = self.current_cycle
 
                     # 计算延迟
-                    first_flit = self.rn_rdb[flit.packet_id][0]
                     for f in self.rn_rdb[flit.packet_id]:
                         f.cmd_latency = f.cmd_received_by_cake1_cycle - f.cmd_entry_noc_from_cake0_cycle
-                        f.data_latency = f.data_received_complete_cycle - first_flit.data_entry_noc_from_cake1_cycle
+                        if first_data_flit:
+                            f.data_latency = f.data_received_complete_cycle - first_data_flit.data_entry_noc_from_cake1_cycle
                         f.transaction_latency = f.data_received_complete_cycle - f.cmd_entry_cake0_cycle
 
                     # **关键修复：通知RequestTracker读请求已完成（RN收到全部数据）**
@@ -496,18 +502,24 @@ class CrossRingIPInterface(BaseIPInterface):
             if len(self.sn_wdb[flit.packet_id]) == flit.burst_length:
                 req = self._find_sn_tracker_by_packet_id(flit.packet_id)
                 if req:
-                    # 设置延迟释放时间
-                    release_time = self.current_cycle + self.config.tracker_config.SN_TRACKER_RELEASE_LATENCY
+                    # 设置延迟释放时间 (将ns转换为cycles)
+                    network_freq_ghz = self.config.basic_config.NETWORK_FREQUENCY
+                    sn_tracker_release_latency_cycles = int(self.config.tracker_config.SN_TRACKER_RELEASE_LATENCY * network_freq_ghz)
+                    release_time = self.current_cycle + sn_tracker_release_latency_cycles
 
-                    # 设置完成时间戳
-                    first_flit = self.sn_wdb[flit.packet_id][0]
+                    # 设置完成时间戳并同步第一个flit的entry时间
+                    # 找到真正的第一个data flit (flit_id=0)
+                    first_data_flit = next((f for f in self.sn_wdb[flit.packet_id] if f.flit_id == 0), None)
                     for f in self.sn_wdb[flit.packet_id]:
                         f.leave_db_cycle = release_time
                         f.sync_latency_record(req)
+                        if first_data_flit:
+                            f.sync_latency_record(first_data_flit)  # 同步第一个data flit的entry时间
                         f.data_received_complete_cycle = self.current_cycle
                         f.cmd_latency = f.cmd_received_by_cake0_cycle - f.cmd_entry_noc_from_cake0_cycle
-                        f.data_latency = f.data_received_complete_cycle - first_flit.data_entry_noc_from_cake0_cycle
-                        f.transaction_latency = f.data_received_complete_cycle + self.config.tracker_config.SN_TRACKER_RELEASE_LATENCY - f.cmd_entry_cake0_cycle
+                        if first_data_flit:
+                            f.data_latency = f.data_received_complete_cycle - first_data_flit.data_entry_noc_from_cake0_cycle
+                        f.transaction_latency = f.data_received_complete_cycle + sn_tracker_release_latency_cycles - f.cmd_entry_cake0_cycle
 
                     # **关键修复：通知RequestTracker写请求已完成（SN收到全部数据）**
                     self._notify_request_completion(req)

@@ -91,6 +91,7 @@ class CrossRingNodeVisualizer:
         self.highlight_pid = None  # 被追踪的 packet_id
         self.highlight_color = "red"  # 追踪 flit 颜色
         self.grey_color = "lightgrey"  # 其它 flit 颜色
+        self.show_tags_mode = False  # 标签显示模式
 
         # 存储 patch 和 text
         self.iq_patches, self.iq_texts = {}, {}
@@ -421,9 +422,9 @@ class CrossRingNodeVisualizer:
 
                     # inner patch (dynamic flit) - no border when empty
                     inner = Rectangle(
-                        (slot_x + square * 0.12, slot_y + square * 0.12),
-                        square * 0.76,
-                        square * 0.76,
+                        (slot_x, slot_y),
+                        square,
+                        square,
                         edgecolor="none",
                         facecolor="none",
                         linewidth=0,
@@ -502,9 +503,9 @@ class CrossRingNodeVisualizer:
 
                     # inner patch (dynamic flit) - no border when empty
                     inner = Rectangle(
-                        (slot_x + square * 0.12, slot_y + square * 0.12),
-                        square * 0.76,
-                        square * 0.76,
+                        (slot_x, slot_y),
+                        square,
+                        square,
                         edgecolor="none",
                         facecolor="none",
                         linewidth=0,
@@ -572,8 +573,12 @@ class CrossRingNodeVisualizer:
         _ETAG_LW = {"T0": 1.2, "T1": 0.9, "T2": 0.6}
         _ETAG_EDGE = {"T0": "darkred", "T1": "darkblue", "T2": "black"}
 
-        # 获取基础颜色（不含透明度）
-        base_color = self._get_flit_color(flit, use_highlight, expected_packet_id, highlight_color)
+        # 标签模式下：使用统一的浅色背景，突出显示边框
+        if self.show_tags_mode:
+            base_color = "lightgray"
+        else:
+            # 获取基础颜色（不含透明度）
+            base_color = self._get_flit_color(flit, use_highlight, expected_packet_id, highlight_color)
 
         # 获取E-Tag优先级（兼容字典和对象格式）- 仅控制边框样式（边框保持完全不透明）
         if isinstance(flit, dict):
@@ -586,17 +591,22 @@ class CrossRingNodeVisualizer:
         edge_color = _ETAG_EDGE.get(etag, "black")  # 边框颜色保持不透明
 
         # 根据flit_id调整填充颜色透明度（转换为RGBA格式）
-        if isinstance(flit, dict):
-            flit_id = flit.get("flit_id", 0)
+        if self.show_tags_mode:
+            # 标签模式下使用固定的中等透明度，便于看清边框
+            alpha = 0.3
         else:
-            flit_id = getattr(flit, "flit_id", 0)
+            # 正常模式下根据flit_id调整透明度
+            if isinstance(flit, dict):
+                flit_id = flit.get("flit_id", 0)
+            else:
+                flit_id = getattr(flit, "flit_id", 0)
 
-        if flit_id is not None:
-            # 为同一packet内的不同flit分配不同透明度
-            # flit_id=0 -> 1.0倍透明度, flit_id=1 -> 0.8倍, flit_id=2 -> 0.6倍, 等等
-            alpha = max(0.4, 1.0 - (int(flit_id) * 0.2))
-        else:
-            alpha = 1.0  # 默认完全不透明
+            if flit_id is not None:
+                # 为同一packet内的不同flit分配不同透明度
+                # flit_id=0 -> 1.0倍透明度, flit_id=1 -> 0.8倍, flit_id=2 -> 0.6倍, 等等
+                alpha = max(0.4, 1.0 - (int(flit_id) * 0.2))
+            else:
+                alpha = 1.0  # 默认完全不透明
 
         # 将基础颜色转换为RGBA格式，嵌入透明度信息
         try:
@@ -704,6 +714,26 @@ class CrossRingNodeVisualizer:
         if not self.use_highlight:
             self.info_text.set_text("")
 
+        # 触发重绘
+        self.fig.canvas.draw_idle()
+    
+    def sync_tags_mode(self, show_tags_mode):
+        """同步标签显示模式"""
+        self.show_tags_mode = show_tags_mode
+        
+        # 更新所有patch的样式
+        for patch, (txt, flit) in self.patch_info_map.items():
+            # 重新计算并应用flit样式
+            if flit:
+                face, lw, edge = self._get_flit_style(
+                    flit,
+                    use_highlight=self.use_highlight,
+                    expected_packet_id=self.highlight_pid,
+                )
+                patch.set_facecolor(face)
+                patch.set_linewidth(lw)
+                patch.set_edgecolor(edge)
+        
         # 触发重绘
         self.fig.canvas.draw_idle()
 

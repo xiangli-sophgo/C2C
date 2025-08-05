@@ -91,6 +91,9 @@ class LinkStateVisualizer:
         # 高亮控制
         self.tracked_pid = None
         self.use_highlight = False
+        
+        # 标签显示模式
+        self.show_tags_mode = False
 
         # 播放控制状态
         self._is_paused = False
@@ -210,13 +213,13 @@ class LinkStateVisualizer:
         rsp_ax = self.fig.add_axes([0.12, 0.03, 0.05, 0.04])
         data_ax = self.fig.add_axes([0.19, 0.03, 0.05, 0.04])
 
-        self.req_btn = Button(req_ax, "REQ")
-        self.rsp_btn = Button(rsp_ax, "RSP")
-        self.data_btn = Button(data_ax, "DATA")
+        self.req_btn = Button(req_ax, "请求网络")
+        self.rsp_btn = Button(rsp_ax, "响应网络")
+        self.data_btn = Button(data_ax, "数据网络")
 
-        # 设置按钮字体为Times
+        # 设置按钮字体为支持中文的字体
         for btn in [self.req_btn, self.rsp_btn, self.data_btn]:
-            btn.label.set_fontfamily("serif")
+            btn.label.set_fontfamily("sans-serif")
 
         self.req_btn.on_clicked(lambda x: self._on_channel_select("req"))
         self.rsp_btn.on_clicked(lambda x: self._on_channel_select("rsp"))
@@ -224,17 +227,17 @@ class LinkStateVisualizer:
 
         # Clear Highlight 按钮
         clear_ax = self.fig.add_axes([0.28, 0.03, 0.07, 0.04])
-        self.clear_btn = Button(clear_ax, "Clear HL")
+        self.clear_btn = Button(clear_ax, "清除高亮")
         self.clear_btn.on_clicked(self._on_clear_highlight)
 
         # Show Tags 按钮
         tags_ax = self.fig.add_axes([0.37, 0.03, 0.07, 0.04])
-        self.tags_btn = Button(tags_ax, "Show Tags")
+        self.tags_btn = Button(tags_ax, "显示标签")
         self.tags_btn.on_clicked(self._on_toggle_tags)
 
-        # 设置其他按钮字体为Times
+        # 设置其他按钮字体为支持中文的字体
         for btn in [self.clear_btn, self.tags_btn]:
-            btn.label.set_fontfamily("serif")
+            btn.label.set_fontfamily("sans-serif")
 
     def _draw_static_elements(self):
         """绘制静态元素"""
@@ -564,7 +567,7 @@ class LinkStateVisualizer:
                     slot_y = center_y + perp_dy * side_offset * side_sign - slot_size / 2
 
                     # 创建slot rectangle（默认为空，虚线边框）
-                    slot = Rectangle((slot_x, slot_y), slot_size, slot_size, facecolor="none", edgecolor="gray", linewidth=0.8, linestyle="--", alpha=0.7)
+                    slot = Rectangle((slot_x, slot_y), slot_size, slot_size, facecolor="none", edgecolor="gray", linewidth=0.8, linestyle="--")
                     self.link_ax.add_patch(slot)
 
                     # 记录slot信息
@@ -659,7 +662,7 @@ class LinkStateVisualizer:
         for rect, (rect_link_ids, flit, rect_slot_idx) in self.rect_info_map.items():
             if flit:
                 # 重新计算flit样式
-                face_color, line_width, edge_color = self._get_flit_style(flit, use_highlight=self.use_highlight, expected_packet_id=self.tracked_pid, highlight_color="red")
+                face_color, line_width, edge_color = self._get_flit_style(flit, use_highlight=self.use_highlight, expected_packet_id=self.tracked_pid, highlight_color="red", show_tags_mode=self.show_tags_mode)
 
                 # 应用样式 - face_color已包含透明度信息，不再使用set_alpha
                 rect.set_facecolor(face_color)
@@ -672,7 +675,6 @@ class LinkStateVisualizer:
                 rect.set_edgecolor("gray")
                 rect.set_linewidth(0.8)
                 rect.set_linestyle("--")
-                rect.set_alpha(0.7)
 
     def _format_flit_info(self, flit):
         """Format flit information display - use flit's repr for detailed info"""
@@ -767,8 +769,6 @@ class LinkStateVisualizer:
             flit_info = self._format_flit_info(flit)
             self.node_vis.info_text.set_text(flit_info)
             self.node_vis.current_highlight_flit = flit
-
-        print(f"🖱️ 点击了link上的flit: packet_id={pid}")
 
     def _select_node(self, node_id):
         """选择节点并更新右侧详细视图"""
@@ -1028,8 +1028,23 @@ CrossRing可视化控制键:
 
     def _on_toggle_tags(self, event):
         """切换标签显示"""
-        # TODO
-        pass  # print("切换标签显示")
+        # 切换标签模式状态
+        self.show_tags_mode = not self.show_tags_mode
+        
+        # 更新按钮文本
+        if self.show_tags_mode:
+            self.tags_btn.label.set_text("隐藏标签")
+        else:
+            self.tags_btn.label.set_text("显示标签")
+        
+        # 同步节点可视化器的标签模式
+        if hasattr(self, "node_vis") and self.node_vis:
+            self.node_vis.sync_tags_mode(self.show_tags_mode)
+        
+        # 立即重新应用所有flit的样式
+        self._reapply_all_flit_styles()
+        
+        self.fig.canvas.draw_idle()
 
     def _on_highlight_callback(self, packet_id, flit_id):
         """高亮回调"""
@@ -1244,7 +1259,6 @@ CrossRing可视化控制键:
                 rect.set_edgecolor("gray")
                 rect.set_linewidth(0.8)
                 rect.set_linestyle("--")
-                rect.set_alpha(0.7)
                 # 清除flit数据
                 link_ids, _, slot_id = self.rect_info_map[rect]
                 self.rect_info_map[rect] = (link_ids, None, slot_id)
@@ -1362,7 +1376,7 @@ CrossRing可视化控制键:
 
                         # 获取flit样式并应用
                         face_color, line_width, edge_color = self._get_flit_style(
-                            slot, use_highlight=self.use_highlight, expected_packet_id=self.tracked_pid, highlight_color="red"
+                            slot, use_highlight=self.use_highlight, expected_packet_id=self.tracked_pid, highlight_color="red", show_tags_mode=self.show_tags_mode
                         )
                         rect.set_facecolor(face_color)
                         rect.set_edgecolor(edge_color)
@@ -1372,11 +1386,12 @@ CrossRing可视化控制键:
                 except (ValueError, IndexError):
                     continue
 
-    def _get_flit_style(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None):
+    def _get_flit_style(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None, show_tags_mode=False):
         """
         返回 (facecolor, linewidth, edgecolor)
         - facecolor 包含透明度信息的RGBA颜色（基于flit_id调整透明度）
         - linewidth / edgecolor 由 flit.ETag_priority 决定（tag相关边框属性，不透明）
+        - show_tags_mode: 标签模式下隐藏颜色，突出显示边框
         """
         import matplotlib.colors as mcolors
         
@@ -1384,23 +1399,40 @@ CrossRing可视化控制键:
         _ETAG_LW = {"T0": 2.0, "T1": 1.5, "T2": 1.0}
         _ETAG_EDGE = {"T0": "darkred", "T1": "darkblue", "T2": "black"}
 
-        # 获取基础颜色（不含透明度）
-        base_color = self._get_flit_color(flit, use_highlight, expected_packet_id, highlight_color)
+        # 标签模式下：使用统一的浅色背景，突出显示边框
+        if show_tags_mode:
+            base_color = "lightgray"
+        else:
+            # 获取基础颜色（不含透明度）
+            base_color = self._get_flit_color(flit, use_highlight, expected_packet_id, highlight_color)
 
         # 获取E-Tag优先级 - 仅控制边框样式（边框保持完全不透明）
-        # CrossRing flit使用etag_priority（小写），优先检查这个
-        etag = getattr(flit, "etag_priority", getattr(flit, "ETag_priority", "T2"))  # 缺省视为 T2
+        if isinstance(flit, dict):
+            # 字典格式：优先使用标准化的ETag_priority，然后尝试etag_priority
+            etag = flit.get("ETag_priority", flit.get("etag_priority", "T2"))
+        else:
+            # 对象格式：优先使用etag_priority（CrossRing flit的实际属性名），然后尝试ETag_priority
+            etag = getattr(flit, "etag_priority", getattr(flit, "ETag_priority", "T2"))
         line_width = _ETAG_LW.get(etag, 1.0)
         edge_color = _ETAG_EDGE.get(etag, "black")  # 边框颜色保持不透明
 
         # 根据flit_id调整填充颜色透明度（转换为RGBA格式）
-        flit_id = getattr(flit, "flit_id", 0)
-        if flit_id is not None:
-            # 为同一packet内的不同flit分配不同透明度
-            # flit_id=0 -> 1.0倍透明度, flit_id=1 -> 0.8倍, flit_id=2 -> 0.6倍, 等等
-            alpha = max(0.4, 1.0 - (int(flit_id) * 0.2))
+        if show_tags_mode:
+            # 标签模式下使用固定的中等透明度，便于看清边框
+            alpha = 0.3
         else:
-            alpha = 1.0  # 默认完全不透明
+            # 正常模式下根据flit_id调整透明度
+            if isinstance(flit, dict):
+                flit_id = flit.get("flit_id", 0)
+            else:
+                flit_id = getattr(flit, "flit_id", 0)
+                
+            if flit_id is not None:
+                # 为同一packet内的不同flit分配不同透明度
+                # flit_id=0 -> 1.0倍透明度, flit_id=1 -> 0.8倍, flit_id=2 -> 0.6倍, 等等
+                alpha = max(0.4, 1.0 - (int(flit_id) * 0.2))
+            else:
+                alpha = 1.0  # 默认完全不透明
 
         # 将基础颜色转换为RGBA格式，嵌入透明度信息
         try:
@@ -1415,16 +1447,20 @@ CrossRing可视化控制键:
 
     def _get_flit_color(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None):
         """获取flit颜色，支持多种PID格式"""
+        # 获取packet_id，兼容字典和对象格式
+        if isinstance(flit, dict):
+            flit_pid = flit.get("packet_id", None)
+        else:
+            flit_pid = getattr(flit, "packet_id", None)
+        
         # 高亮模式：目标 flit → 指定颜色，其余 → 灰
         if use_highlight and expected_packet_id is not None:
             hl_color = highlight_color or "red"
-            flit_pid = getattr(flit, "packet_id", None)
             return hl_color if str(flit_pid) == str(expected_packet_id) else "lightgrey"
 
         # 普通模式：根据packet_id使用调色板颜色
-        pid = getattr(flit, "packet_id", 0)
-        if pid is not None:
-            return self._colors[int(pid) % len(self._colors)]
+        if flit_pid is not None:
+            return self._colors[int(flit_pid) % len(self._colors)]
         else:
             return "lightblue"  # 默认颜色
 

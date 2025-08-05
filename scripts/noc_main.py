@@ -101,8 +101,8 @@ def create_5x4_config():
     config.latency_config.L2M_R_LATENCY = 12
     config.latency_config.L2M_W_LATENCY = 16
 
-    config.fifo_config.IQ_CH_DEPTH = 10
-    config.fifo_config.EQ_CH_DEPTH = 10
+    config.fifo_config.IQ_CH_DEPTH = 4
+    config.fifo_config.EQ_CH_DEPTH = 4
     config.fifo_config.IQ_OUT_FIFO_DEPTH = 8
     config.fifo_config.RB_OUT_FIFO_DEPTH = 8
     config.fifo_config.RB_IN_FIFO_DEPTH = 16
@@ -130,16 +130,16 @@ def main():
     traffic_file_path = str(Path(__file__).parent.parent / "traffic_data")
     traffic_chains = [
         [
-            "LLama2_AllReduce.txt",
-            # "test1.txt",
+            # "LLama2_AllReduce.txt",
+            "test1.txt",
             # "R_5x2.txt",
         ]
     ]
 
     # 2. 创建模型
-    # config = create_3x3_config()
+    config = create_3x3_config()
     # config = create_5x2_config()
-    config = create_5x4_config()
+    # config = create_5x4_config()
     model = CrossRingModel(config)
 
     save_dir = None
@@ -147,8 +147,8 @@ def main():
 
     # 3. 配置各种选项
     model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)
-    # model.setup_debug(trace_packets=[257], update_interval=0.0)
-    model.setup_visualization(enable=True, update_interval=0.5, start_cycle=3000)
+    # model.setup_debug(trace_packets=[8], update_interval=0.0)
+    # model.setup_visualization(enable=True, update_interval=0.5, start_cycle=500)
 
     model.setup_result_analysis(
         # 图片生成控制
@@ -157,8 +157,8 @@ def main():
         latency_analysis_fig=1,
         save_figures=0,
         # CSV文件导出控制
-        export_request_csv=0,
-        export_fifo_csv=0,
+        export_request_csv=1,
+        export_fifo_csv=1,
         export_link_csv=0,
         # 通用设置
         save_dir=save_dir,
@@ -166,7 +166,7 @@ def main():
 
     # 4. 运行仿真 - 减小仿真时间进行调试
     print("▶️  开始仿真")
-    model.run_simulation(max_time_ns=4000.0, progress_interval_ns=1000.0, results_analysis=True, verbose=1)
+    model.run_simulation(max_time_ns=12000.0, progress_interval_ns=1000.0, results_analysis=True, verbose=1)
 
 
 if __name__ == "__main__":

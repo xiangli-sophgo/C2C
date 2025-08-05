@@ -252,7 +252,7 @@ class BaseNoCModel(ABC):
         self._sync_global_clock()
 
         # 阶段0.1：TrafficScheduler处理请求注入（如果有配置）
-        if hasattr(self, "traffic_scheduler") and self.traffic_scheduler:
+        if getattr(self, "traffic_scheduler", None):
             ready_requests = self.traffic_scheduler.get_ready_requests(self.cycle)
             if ready_requests:
                 injected = self._inject_traffic_requests(ready_requests)
@@ -290,7 +290,7 @@ class BaseNoCModel(ABC):
         """时钟同步阶段：确保所有组件使用统一的时钟值"""
         # 同步所有IP接口的时钟
         for ip_interface in self.ip_interfaces.values():
-            if hasattr(ip_interface, "current_cycle"):
+            if hasattr(ip_interface, "current_cycle"):  # 保留hasattr，因为这是接口兼容性检查
                 ip_interface.current_cycle = self.cycle
 
     def run_simulation(

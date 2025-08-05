@@ -98,14 +98,9 @@ class PipelinedFIFO:
         if cycle is not None:
             self.current_cycle = cycle
             
-        # 优化：缓存采样间隔，避免每次getattr调用
-        if not hasattr(self, '_cached_sample_interval'):
-            self._cached_sample_interval = getattr(self, '_stats_sample_interval', 100)
-        
-        # 更新深度统计 - 使用缓存的采样间隔
-        if self.current_cycle % self._cached_sample_interval == 0:
-            current_depth = len(self.internal_queue) + (1 if self.output_valid else 0)
-            self.stats.update_depth_stats(current_depth, self.max_depth)
+        # 更新深度统计 - 每周期直接统计（累加统计无需采样）
+        current_depth = len(self.internal_queue) + (1 if self.output_valid else 0)
+        self.stats.update_depth_stats(current_depth, self.max_depth)
         
         # 优化：简化下周期输出有效性计算
         self.next_output_valid = (self.internal_queue and 
