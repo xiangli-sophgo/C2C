@@ -154,7 +154,7 @@ class ResultAnalyzer:
         for req_id, lifecycle in request_tracker.completed_requests.items():
             # 使用实际的时间戳
             # 时间转换：cycle -> ns
-            start_time = int(lifecycle.created_cycle * cycle_time_ns)
+            # 注意：start_time将在收集cmd_entry_cake0_cycle后设置
             end_time = int(lifecycle.completed_cycle * cycle_time_ns)
 
             # 提取source_type和dest_type
@@ -247,6 +247,13 @@ class ResultAnalyzer:
             cmd_latency_ns = int(cmd_latency * cycle_time_ns) if cmd_latency < np.inf else 0
             data_latency_ns = int(data_latency * cycle_time_ns) if data_latency < np.inf else 0
             transaction_latency_ns = int(transaction_latency * cycle_time_ns) if transaction_latency < np.inf else 0
+            
+            # 使用cmd_entry_cake0_cycle作为start_time（请求真正进入源IP的时间）
+            if cmd_entry_cake0_cycle < np.inf:
+                start_time = int(cmd_entry_cake0_cycle * cycle_time_ns)
+            else:
+                # 如果没有cmd_entry_cake0_cycle，回退到created_cycle
+                start_time = int(lifecycle.created_cycle * cycle_time_ns)
 
             # 计算RN和SN端口结束时间（按照旧版本逻辑区分读写操作）
             if lifecycle.op_type == "read":

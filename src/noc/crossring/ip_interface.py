@@ -248,11 +248,8 @@ class CrossRingIPInterface(BaseIPInterface):
                         if hasattr(self.model, "request_tracker") and hasattr(flit, "packet_id"):
                             if channel == "req":
                                 self.model.request_tracker.mark_request_injected(flit.packet_id, self.current_cycle)
-                                self.model.request_tracker.add_request_flit(flit.packet_id, flit)
-                            elif channel == "rsp":
-                                self.model.request_tracker.add_response_flit(flit.packet_id, flit)
-                            elif channel == "data":
-                                self.model.request_tracker.add_data_flit(flit.packet_id, flit)
+                                # request flit已经在inject_request时添加，这里不重复添加
+                            # response和data flit已经在创建时添加，这里不重复添加
 
                         # ✅ 写数据完成检查：如果是写请求的最后一个数据flit，释放RN tracker
                         # 注意：现在改为在datasend响应处理后，数据实际发送完成时才释放
@@ -721,14 +718,13 @@ class CrossRingIPInterface(BaseIPInterface):
             data_flit.source_type = req.destination_type
             data_flit.destination_type = req.source_type
             data_flit.is_last_flit = i == req.burst_length - 1
-            data_flit.flit_position = "L2H"
+            data_flit.flit_position = "IP_inject"  # 在源IP准备注入
             data_flit.current_node_id = self.node_id
 
             # 使用分通道的pending队列
             self.pending_by_channel["data"].append(data_flit)
 
-            # 注意：不在这里添加到RequestTracker，避免重复
-            # RequestTracker会在数据flit实际发送时统一管理
+            # 数据flit会在进入L2H时被添加到RequestTracker
 
     def _create_response(self, req: CrossRingFlit, rsp_type: str) -> None:
         """创建响应（统一的响应创建函数）
@@ -758,8 +754,11 @@ class CrossRingIPInterface(BaseIPInterface):
         rsp.sync_latency_record(req)
         rsp.source_type = req.destination_type
         rsp.destination_type = req.source_type
+        rsp.flit_position = "IP_inject"  # 在源IP准备注入
 
         self.pending_by_channel["rsp"].append(rsp)
+        
+        # 响应flit会在进入L2H时被添加到RequestTracker
 
     def _release_completed_sn_tracker(self, req: CrossRingFlit) -> None:
         """释放完成的SN tracker"""
@@ -1092,9 +1091,10 @@ class CrossRingIPInterface(BaseIPInterface):
                 self.model.request_tracker.start_request(
                     packet_id=packet_id, source=source, destination=destination, op_type=req_type, burst_size=burst_length, cycle=kwargs.get("inject_cycle", self.current_cycle)
                 )
+                # flit会在进入L2H时被添加到追踪器
 
             # 设置flit位置信息
-            flit.flit_position = "L2H"
+            flit.flit_position = "IP_inject"  # 在源IP准备注入
             flit.current_node_id = self.node_id
 
             # 请求总是添加到pending队列，资源检查在传输到L2H时进行
@@ -1304,6 +1304,16 @@ class CrossRingIPInterface(BaseIPInterface):
                 self.pending_by_channel[channel].popleft()
                 flit.flit_position = "L2H"
                 self.l2h_fifos[channel].write_input(flit)
+                
+                # 在进入L2H时添加到RequestTracker
+                if hasattr(self.model, "request_tracker") and hasattr(flit, "packet_id"):
+                    if channel == "req":
+                        self.model.request_tracker.add_request_flit(flit.packet_id, flit)
+                    elif channel == "rsp":
+                        self.model.request_tracker.add_response_flit(flit.packet_id, flit)
+                    elif channel == "data":
+                        self.model.request_tracker.add_data_flit(flit.packet_id, flit)
+                
                 # 更新请求状态
                 if channel == "req" and hasattr(flit, "packet_id") and flit.packet_id in self.active_requests:
                     self.active_requests[flit.packet_id]["stage"] = "l2h_fifo"
@@ -1336,7 +1346,7 @@ class CrossRingIPInterface(BaseIPInterface):
             channel = self._transfer_decisions["h2l_l_to_completion"]["channel"]
             flit = self.h2l_l_fifos[channel].read_output()
             if flit:
-                flit.flit_position = "IP"
+                flit.flit_position = "IP_eject"
                 if channel == "req":
                     self._handle_received_request(flit)
                 elif channel == "rsp":
@@ -1377,17 +1387,12 @@ class CrossRingIPInterface(BaseIPInterface):
                     if channel == "req" and hasattr(flit, "packet_id") and flit.packet_id in self.active_requests:
                         self.active_requests[flit.packet_id]["stage"] = "node_inject"
 
-                        # ✅ 修复：添加flit到RequestTracker
+                        # ✅ 修复：更新RequestTracker状态
                         if hasattr(self.model, "request_tracker"):
                             self.model.request_tracker.mark_request_injected(flit.packet_id, self.current_cycle)
-                            self.model.request_tracker.add_request_flit(flit.packet_id, flit)
+                            # request flit已经在inject_request时添加，这里不重复添加
 
-                    # 对于RSP和DATA也要追踪
-                    elif hasattr(flit, "packet_id") and hasattr(self.model, "request_tracker"):
-                        if channel == "rsp":
-                            self.model.request_tracker.add_response_flit(flit.packet_id, flit)
-                        elif channel == "data":
-                            self.model.request_tracker.add_data_flit(flit.packet_id, flit)
+                    # response和data flit已经在创建时添加到RequestTracker，这里不重复添加
 
                     return True
         return False

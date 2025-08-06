@@ -89,6 +89,9 @@ class CrossRingModel(BaseNoCModel):
         self.debug_enabled = False
         self.debug_packet_ids = set()  # 要跟踪的packet_id集合
         self.debug_sleep_time = 0.0  # 每步的睡眠时间
+        
+        # 等待统计
+        self.waiting_stats = {}  # {packet_id: {"start_cycle": int, "total_wait": int, "current_wait": int}}
 
         # FIFO统计收集器
         self.fifo_stats_collector = FIFOStatsCollector()
@@ -128,6 +131,49 @@ class CrossRingModel(BaseNoCModel):
         topology = CrossRingTopology(config)
         return topology
 
+    def _should_skip_waiting_flit(self, flit) -> bool:
+        """判断flit是否在等待状态，不需要打印"""
+        if hasattr(flit, 'departure_cycle') and hasattr(flit, 'flit_position'):
+            # L2H状态且还未到departure时间 = 等待状态
+            if flit.flit_position == "L2H" and flit.departure_cycle > self.cycle:
+                return True
+            # IP_eject状态且位置没有变化，也算等待状态
+            if flit.flit_position == "IP_eject":
+                # 检查flit是否有变化，如果没有变化就跳过
+                if hasattr(flit, '_last_stable_cycle'):
+                    if self.cycle - flit._last_stable_cycle > 2:  # 在IP_eject超过2个周期就跳过
+                        return True
+                else:
+                    flit._last_stable_cycle = self.cycle
+        return False
+
+    def _update_waiting_stats(self, packet_id: str, has_active_flit: bool, all_flits: list):
+        """更新等待统计（简化版）"""
+        waiting_flits = [f for f in all_flits if self._should_skip_waiting_flit(f)]
+        
+        # 初始化统计
+        if packet_id not in self.waiting_stats:
+            self.waiting_stats[packet_id] = {"start_cycle": 0, "total_wait": 0, "is_waiting": False, "resume_printed": False}
+        
+        stats = self.waiting_stats[packet_id]
+        
+        # 状态转换
+        if waiting_flits and not stats["is_waiting"]:
+            # 开始等待
+            stats["start_cycle"] = self.cycle
+            stats["is_waiting"] = True
+            stats["resume_printed"] = False
+        elif not waiting_flits and stats["is_waiting"]:
+            # 等待结束
+            wait_duration = self.cycle - stats["start_cycle"] 
+            stats["total_wait"] += wait_duration
+            stats["is_waiting"] = False
+            # 标记需要打印等待恢复信息
+            if wait_duration > 1:
+                stats["resume_printed"] = True
+                return wait_duration  # 返回等待时长供调用者打印
+        return 0
+
     def _print_debug_info(self):
         """打印调试信息"""
         if not self.debug_enabled or not hasattr(self, "request_tracker"):
@@ -136,8 +182,6 @@ class CrossRingModel(BaseNoCModel):
         # 检查所有要跟踪的packet_ids，使用base class的trace_packets
         trace_packets = self.trace_packets if self.trace_packets else self.debug_packet_ids
 
-        # 用于跟踪是否有任何信息需要打印
-        printed_info = False
         cycle_header_printed = False
         completed_packets = set()
         flits_to_print = []
@@ -148,6 +192,7 @@ class CrossRingModel(BaseNoCModel):
                 lifecycle = self.request_tracker.active_requests.get(packet_id)
                 if not lifecycle:
                     lifecycle = self.request_tracker.completed_requests.get(packet_id)
+                    
                 # 如果字符串形式找不到，尝试整数形式
                 if not lifecycle and isinstance(packet_id, str) and packet_id.isdigit():
                     int_packet_id = int(packet_id)
@@ -162,24 +207,45 @@ class CrossRingModel(BaseNoCModel):
                         lifecycle = self.request_tracker.completed_requests.get(str_packet_id)
 
                 if lifecycle:
-                    # 简化条件：只要有flit就打印，或者状态变化就打印
-                    total_flits = len(lifecycle.request_flits) + len(lifecycle.response_flits) + len(lifecycle.data_flits)
-                    should_print = total_flits > 0 or lifecycle.current_state != RequestState.CREATED or self.request_tracker.should_print_debug(packet_id)
-
-                    if should_print:
-                        # 收集本周期要打印的flit
-                        all_flits = lifecycle.request_flits + lifecycle.response_flits + lifecycle.data_flits
-                        flits_to_print.extend(all_flits)
-                        printed_info = True
+                    # 检查是否有flit需要处理
+                    all_flits = lifecycle.request_flits + lifecycle.response_flits + lifecycle.data_flits
+                    if all_flits or lifecycle.current_state == RequestState.COMPLETED:
+                        # 检查是否有非等待的flit，如果有新的DATA flit注入也要显示
+                        has_active_flit = any(not self._should_skip_waiting_flit(flit) for flit in all_flits)
+                        
+                        # 如果有新的DATA flit开始传输，强制显示
+                        for flit in all_flits:
+                            if hasattr(flit, 'flit_type') and flit.flit_type == 'data':
+                                if hasattr(flit, 'flit_position') and flit.flit_position not in ['IP_eject']:
+                                    has_active_flit = True
+                                    break
+                        
+                        # 有活跃flit就打印所有flit
+                        if has_active_flit:
+                            flits_to_print.extend(all_flits)
+                        
+                        # 简化的等待统计更新
+                        wait_duration = self._update_waiting_stats(packet_id, has_active_flit, all_flits)
+                        
+                        # 如果等待结束，打印恢复信息
+                        if wait_duration > 0:
+                            if not cycle_header_printed:
+                                print(f"周期{self.cycle}: ")
+                                cycle_header_printed = True
+                            print(f"  📊 请求{packet_id}: 等待{wait_duration}周期后恢复传输")
 
                     # 如果完成，标记为已完成
                     if lifecycle.current_state.value == "completed":
                         if not cycle_header_printed:
                             print(f"周期{self.cycle}: ")
                             cycle_header_printed = True
-                        print(f"✅ 请求{packet_id}已完成，停止跟踪")
+                        
+                        # 打印完成信息
+                        total_wait = self.waiting_stats.get(packet_id, {}).get("total_wait", 0)
+                        wait_info = f" (总等待: {total_wait}周期)" if total_wait > 0 else ""
+                        print(f"✅ 请求{packet_id}已完成，停止跟踪{wait_info}")
+                        
                         completed_packets.add(packet_id)
-                        printed_info = True
 
         # 如果有flit要打印，统一打印在一行
         if flits_to_print:
@@ -204,9 +270,8 @@ class CrossRingModel(BaseNoCModel):
             return
 
         # 只有在实际打印了信息时才执行sleep
-        if printed_info and self.debug_config["sleep_time"] > 0:
+        if (flits_to_print or completed_packets) and self.debug_config["sleep_time"] > 0:
             import time
-
             time.sleep(self.debug_config["sleep_time"])
 
     def _create_ip_interface(self, node_id: int, ip_type: str, key: str = None) -> bool:
