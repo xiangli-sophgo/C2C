@@ -160,11 +160,20 @@ def demo_animated():
     print("-" * 40)
 
     # 创建配置
-    config = SimpleNamespace(NUM_ROW=2, NUM_COL=2, IQ_OUT_FIFO_DEPTH=8, EQ_IN_FIFO_DEPTH=8, RB_IN_FIFO_DEPTH=4, RB_OUT_FIFO_DEPTH=4, IQ_CH_FIFO_DEPTH=4, EQ_CH_FIFO_DEPTH=4, SLICE_PER_LINK=8)
+    config = SimpleNamespace(
+        NUM_ROW=2, NUM_COL=2, 
+        IQ_OUT_FIFO_DEPTH=8, EQ_IN_FIFO_DEPTH=8, 
+        RB_IN_FIFO_DEPTH=4, RB_OUT_FIFO_DEPTH=4, 
+        IQ_CH_FIFO_DEPTH=4, EQ_CH_FIFO_DEPTH=4, 
+        SLICE_PER_LINK=8,
+        # 添加GPU配置支持
+        gpu_visualization=globals().get('GPU_MODE_ENABLED', False)
+    )
 
-    # 创建可视化器
+    # 创建可视化器 - 传递GPU标志
     demo_model = create_demo_crossring_model()
-    visualizer = LinkStateVisualizer(config, demo_model)
+    gpu_mode = globals().get('GPU_MODE_ENABLED', False)
+    visualizer = LinkStateVisualizer(config, demo_model, gpu_accelerated=gpu_mode)
 
     print("💡 动态演示内容:")
     print("- 实时更新节点FIFO状态")
@@ -237,21 +246,39 @@ def update_demo_model(model):
 
 def main():
     """主函数"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='CrossRing NoC实时可视化演示')
+    parser.add_argument('--gpu', action='store_true', 
+                       help='启用GPU加速实时可视化 (需要plotly和dash)')
+    parser.add_argument('--demo', choices=['static', 'animated'], default='animated',
+                       help='选择演示类型 (默认: animated)')
+    
+    args = parser.parse_args()
+    
     print("🎪 CrossRing Link State Visualizer 演示")
     print("=" * 50)
     print("基于原版Link_State_Visualizer完整重新实现")
+    
+    if args.gpu:
+        print("🚀 GPU加速模式已启用")
+        # 设置全局GPU标志，传递给可视化器
+        global GPU_MODE_ENABLED
+        GPU_MODE_ENABLED = True
+    else:
+        print("🖥️  CPU渲染模式")
+        GPU_MODE_ENABLED = False
+    
     print()
 
-    demos = {"1": ("静态演示", demo_static), "2": ("动态演示", demo_animated)}
+    demos = {
+        "static": ("静态演示", demo_static), 
+        "animated": ("动态演示", demo_animated)
+    }
 
-    choice = "2"
-
-    if choice not in demos:
-        print("无效选择，使用默认静态演示")
-        choice = "1"
-
-    name, demo_func = demos[choice]
-    print(f"\n🚀 启动 {name}...")
+    demo_name = args.demo
+    name, demo_func = demos[demo_name]
+    print(f"🚀 启动 {name}...")
 
     try:
         demo_func()
@@ -259,7 +286,6 @@ def main():
     except Exception as e:
         print(f"\n❌ 演示出错: {e}")
         import traceback
-
         traceback.print_exc()
 
 

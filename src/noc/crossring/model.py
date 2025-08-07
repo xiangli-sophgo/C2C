@@ -103,7 +103,6 @@ class CrossRingModel(BaseNoCModel):
         self._realtime_visualizer = None
         self._visualization_enabled = False
         self._visualization_initialized = False
-        self._visualization_frame_interval = 0.5  # 每帧间隔时间（秒）
         self._visualization_update_interval = 10  # 每多少个周期更新一次可视化
         self._visualization_start_cycle = 0  # 从哪个周期开始可视化
         self._paused = False  # 可视化暂停状态
@@ -434,7 +433,7 @@ class CrossRingModel(BaseNoCModel):
         # 调用父类方法设置TrafficScheduler
         super().setup_traffic_scheduler(traffic_chains, traffic_file_path)
 
-    def setup_visualization(self, enable=True, update_interval=1, start_cycle=0):
+    def setup_visualization(self, enable=True, update_interval=1, start_cycle=0, gpu_accelerated=False):
         """
         设置实时可视化
 
@@ -442,17 +441,22 @@ class CrossRingModel(BaseNoCModel):
             enable: 是否启用实时可视化
             update_interval: 可视化更新间隔（周期数）
             start_cycle: 从哪个周期开始可视化（0表示立即开始）
+            gpu_accelerated: 是否启用GPU加速渲染
         """
         update_interval = max(update_interval, 0.05)
         self._visualization_enabled = enable
         self._visualization_update_interval = update_interval
         self._visualization_start_cycle = start_cycle
+        self._visualization_gpu_accelerated = gpu_accelerated
         self._visualization_initialized = False
 
         if enable:
-            print("✅ 实时可视化已配置")
+            gpu_mode = "🚀 GPU加速" if gpu_accelerated else "🖥️ CPU"
+            print(f"✅ 实时可视化已配置 ({gpu_mode})")
             print(f"   开始周期: {start_cycle}")
             print(f"   更新间隔: 每 {update_interval} 个周期")
+            if gpu_accelerated:
+                print("   GPU模式: 使用WebGL加速渲染，需要plotly>=5.17.0")
             print("   提示: 可视化窗口将在仿真开始后自动打开")
             print("         可以点击节点查看详细信息，点击关闭窗口结束可视化")
         else:
@@ -1175,23 +1179,6 @@ class CrossRingModel(BaseNoCModel):
             }
         )
 
-    def setup_visualization(self, enable: bool = True, update_interval: int = 1, start_cycle: int = 0) -> None:
-        """
-        配置实时可视化
-
-        Args:
-            enable: 是否启用可视化
-            update_interval: 更新间隔（秒），用作plt.pause的参数
-            start_cycle: 开始可视化的周期
-        """
-        self._visualization_enabled = enable
-        self._visualization_frame_interval = update_interval
-        self._visualization_start_cycle = start_cycle
-
-        if enable:
-            print(f"✅ 可视化已启用: 更新间隔={update_interval}s, 开始周期={start_cycle}")
-        else:
-            print("❌ 可视化已禁用")
 
     def cleanup_visualization(self) -> None:
         """
@@ -1201,7 +1188,7 @@ class CrossRingModel(BaseNoCModel):
         """
         if self._visualization_enabled:
             self._visualization_enabled = False
-            self._visualization_frame_interval = 0.0  # 禁用时间间隔
+            self._visualization_update_interval = 0.0  # 禁用时间间隔
             self.debug_config["sleep_time"] = 0.0  # 同时禁用debug模式的延迟
             self.user_interrupted = False  # 重置中断标志，让仿真继续运行
 
@@ -1812,8 +1799,12 @@ class CrossRingModel(BaseNoCModel):
             from src.noc.visualization.link_state_visualizer import LinkStateVisualizer
             import matplotlib.pyplot as plt
 
-            # 创建可视化器
-            self._realtime_visualizer = LinkStateVisualizer(config=self.config, model=self)
+            # 创建可视化器，传递GPU加速参数
+            self._realtime_visualizer = LinkStateVisualizer(
+                config=self.config, 
+                model=self, 
+                gpu_accelerated=self._visualization_gpu_accelerated
+            )
 
             # 显示可视化窗口
             plt.ion()  # 开启交互模式
@@ -1833,36 +1824,44 @@ class CrossRingModel(BaseNoCModel):
             traceback.print_exc()
 
     def _update_visualization(self):
-        """更新可视化显示"""
+        """更新可视化显示 - 支持GPU加速"""
         if not self._realtime_visualizer or not self._visualization_enabled:
             return
 
         try:
-            # 更新可视化器状态
-            self._realtime_visualizer.update(self, cycle=self.cycle)
+            # NoC实时可视化更新 - 无论CPU还是GPU模式都统一调用update
+            # LinkStateVisualizer内部会根据gpu_accelerated标志选择渲染路径
+            self._realtime_visualizer.update(networks=self, cycle=self.cycle)
 
-            # 强制刷新显示
-            import matplotlib.pyplot as plt
-
-            # 检查matplotlib窗口是否关闭（用户点击X或按q）
-            if not plt.get_fignums():  # 如果没有打开的图形窗口
-                self.cleanup_visualization()
-                return
-
-            # 检查暂停状态
-            paused = getattr(self, "_paused", False)
-            if paused:
-                # 进入暂停等待循环，保持GUI响应
-                while getattr(self, "_paused", False) and plt.get_fignums():
-                    plt.pause(0.1)
-                    # 在暂停期间也检查窗口关闭
-                    if not plt.get_fignums():
-                        self.cleanup_visualization()
-                        return
+            # 刷新显示 - 区分GPU和CPU模式
+            gpu_enabled = getattr(self.config, 'gpu_visualization', False)
+            
+            if not gpu_enabled:
+                # CPU模式：检查matplotlib窗口
+                import matplotlib.pyplot as plt
+                
+                if not plt.get_fignums():  # 如果没有打开的图形窗口
+                    self.cleanup_visualization()
+                    return
+                    
+                # 检查暂停状态
+                paused = getattr(self, "_paused", False)
+                if paused:
+                    # 进入暂停等待循环，保持GUI响应
+                    while getattr(self, "_paused", False) and plt.get_fignums():
+                        plt.pause(0.1)
+                        # 在暂停期间也检查窗口关闭
+                        if not plt.get_fignums():
+                            self.cleanup_visualization()
+                            return
+                else:
+                    # 正常帧率控制 - 只有在可视化启用时才暂停
+                    if self._visualization_enabled and self._visualization_update_interval > 0:
+                        plt.pause(0.001)  # 最小暂停，让界面响应
             else:
-                # 正常帧率控制 - 只有在可视化启用时才暂停
-                if self._visualization_enabled and self._visualization_frame_interval > 0:
-                    plt.pause(self._visualization_frame_interval)
+                # GPU模式：不依赖matplotlib窗口管理
+                # 可以添加其他GPU特定的刷新逻辑
+                pass
 
         except KeyboardInterrupt:
             # 捕获Ctrl+C或其他键盘中断
@@ -1872,6 +1871,29 @@ class CrossRingModel(BaseNoCModel):
             print(f"⚠️  可视化更新失败 (周期 {self.cycle}): {e}")
             # 出错时也触发清理，避免卡住
             self.cleanup_visualization()
+
+    def _collect_node_states_optimized(self):
+        """优化的节点状态收集 - 为GPU渲染准备数据"""
+        states = {}
+        for node_id, node in self.nodes.items():
+            states[node_id] = {
+                'position': getattr(node, 'position', (node_id % self.config.NUM_COL, node_id // self.config.NUM_COL)),
+                'active_flits': len(getattr(node, 'get_active_flits', lambda: [])()),
+                'fifo_states': getattr(node, 'get_fifo_summary', lambda: {})(),
+                'crosspoint_state': getattr(node.crosspoint, 'get_state_summary', lambda: {})() if hasattr(node, 'crosspoint') else {}
+            }
+        return states
+
+    def _collect_link_states_optimized(self):
+        """优化的链路状态收集 - 为GPU渲染准备数据"""
+        states = {}
+        for link_id, link in self.links.items():
+            states[link_id] = {
+                'utilization': getattr(link, 'get_utilization', lambda: 0.0)(),
+                'active_transmissions': len(getattr(link, 'get_active_flits', lambda: [])()),
+                'direction': getattr(link, 'direction', 'unknown')
+            }
+        return states
 
     def __del__(self):
         """析构函数"""

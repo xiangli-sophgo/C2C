@@ -181,6 +181,7 @@ class CrossRingConfig(BaseNoCConfig):
             for idx in range(self.CHANNEL_SPEC[key]):
                 self.CH_NAME_LIST.append(f"{key}_{idx}")
 
+
         # 自动生成相关配置
         self._generate_derived_config()
         self._generate_ip_positions()
@@ -835,3 +836,4 @@ class CrossRingConfig(BaseNoCConfig):
             - 建议在模型初始化之前调用此方法
         """
         self.CH_NAME_LIST = ch_name_list.copy()
+

@@ -11,8 +11,9 @@ pyyaml>=6.0
 
 # Web interface and visualization
 streamlit>=1.28.0
-plotly>=5.0.0
+plotly>=5.17.0  # GPU WebGL rendering support
 seaborn>=0.11.0
+dash>=2.10.0    # Enhanced real-time web interfaces
 
 # Optional dependencies for development
 # Install with: pip install -r requirements.txt -r requirements-dev.txt

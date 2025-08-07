@@ -2,7 +2,6 @@
 import sys
 from pathlib import Path
 
-
 from src.noc.crossring.model import CrossRingModel
 from src.noc.crossring.config import CrossRingConfig
 
@@ -13,6 +12,8 @@ def create_3x3_config():
 
     # config.ip_config.DDR_BW_LIMIT = 64
     # config.ip_config.GDMA_BW_LIMIT = 20
+    config.ip_config.IP_H2L_H_FIFO_DEPTH = 4
+    config.ip_config.IP_H2L_L_FIFO_DEPTH = 4
 
     config.tracker_config.RN_R_TRACKER_OSTD = 128
     config.tracker_config.RN_W_TRACKER_OSTD = 32
@@ -140,6 +141,7 @@ def main():
     config = create_3x3_config()
     # config = create_5x2_config()
     # config = create_5x4_config()
+
     model = CrossRingModel(config)
 
     save_dir = None
@@ -147,8 +149,9 @@ def main():
 
     # 3. 配置各种选项
     model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)
-    model.setup_debug(trace_packets=[4], update_interval=0.0)
-    # model.setup_visualization(enable=True, update_interval=0.5, start_cycle=100)
+    model.setup_debug(trace_packets=[2], update_interval=0.0)
+
+    model.setup_visualization(enable=True, update_interval=0.3, start_cycle=50, gpu_accelerated=True)
 
     model.setup_result_analysis(
         # 图片生成控制
@@ -171,15 +174,17 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # 保持程序运行，让matplotlib图表持续显示
+
+    # 保持程序运行，让可视化图表持续显示
     try:
         import matplotlib.pyplot as plt
 
-        if plt.get_fignums():  # 如果有打开的图形
-            print("图表已显示，按Ctrl+C退出程序")
+        if plt.get_fignums():  # 如果有打开的图形窗口
+            print("📊 可视化图表已显示，按Ctrl+C退出程序")
+            print("💡 提示：如果启用了GPU加速，可视化会更流畅")
             plt.show(block=True)  # 阻塞显示，直到用户关闭所有图形窗口
     except KeyboardInterrupt:
-        print("\n程序已退出")
+        print("\n🛑 程序已退出")
     except Exception as e:
-        print(f"显示图表时出错: {e}")
+        print(f"❌ 显示图表时出错: {e}")
         pass

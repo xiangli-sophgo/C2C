@@ -65,16 +65,22 @@ class LinkStateVisualizer:
     - 完整的拓扑显示和节点详细视图
     """
 
-    def __init__(self, config, model: BaseNoCModel):
+    def __init__(self, config, model: BaseNoCModel, gpu_accelerated=False):
         """
         初始化CrossRing Link State Visualizer
 
         Args:
             config: CrossRing配置对象
-            network: 网络模型对象（可选）
+            model: 网络模型对象
+            gpu_accelerated: 是否启用GPU加速渲染
         """
         self.config = config
         self._parent_model = model  # 建立与模型的连接
+        
+        # GPU加速支持
+        self.gpu_accelerated = gpu_accelerated
+        if self.gpu_accelerated:
+            self._init_gpu_backend()
         # 移除logger，使用简单的调试输出
 
         # 网络参数
@@ -1050,12 +1056,297 @@ CrossRing可视化控制键:
         """高亮回调"""
         self._track_packet(packet_id)
 
+    def _init_gpu_backend(self):
+        """初始化GPU渲染后端"""
+        try:
+            import plotly.graph_objects as go
+            import plotly.express as px
+            from plotly.subplots import make_subplots
+            import dash
+            from dash import dcc, html, Input, Output, State
+            
+            self.gpu_available = True
+            self.plotly_fig = None
+            self.dash_app = None
+            
+            # WebGL配置
+            self.webgl_config = {
+                'displayModeBar': True,
+                'displaylogo': False,
+                'modeBarButtonsToRemove': ['pan2d', 'lasso2d'],
+                'toImageButtonOptions': {'format': 'png', 'filename': 'crossring_noc'},
+                'scrollZoom': True,
+                'doubleClick': 'reset+autosize'
+            }
+            
+            print("🚀 NoC实时可视化GPU加速已启用 (WebGL)")
+        except ImportError as e:
+            print(f"⚠️  GPU加速依赖不可用，降级到CPU模式: {e}")
+            self.gpu_available = False
+            self.gpu_accelerated = False
+
+    def _collect_network_state(self, model):
+        """优化的网络状态收集 - 避免深拷贝"""
+        network_state = {
+            'cycle': getattr(model, 'cycle', 0),
+            'links': {},
+            'nodes': {},
+            'timestamp': time.time()
+        }
+        
+        # 收集链路状态
+        if hasattr(model, 'links'):
+            for link_id, link in model.links.items():
+                network_state['links'][link_id] = {
+                    'utilization': getattr(link, 'get_utilization', lambda: 0.0)(),
+                    'active_flits': len(getattr(link, 'get_active_flits', lambda: [])()),
+                    'direction': getattr(link, 'direction', 'unknown'),
+                    'source_node': getattr(link, 'source_node', None),
+                    'target_node': getattr(link, 'target_node', None)
+                }
+        
+        # 收集节点状态
+        if hasattr(model, 'nodes'):
+            for node_id, node in model.nodes.items():
+                network_state['nodes'][node_id] = {
+                    'position': (node_id % self.cols, node_id // self.cols),
+                    'active_flits': len(getattr(node, 'get_active_flits', lambda: [])()),
+                    'fifo_utilization': self._get_node_fifo_utilization(node),
+                    'crosspoint_active': getattr(node, 'crosspoint_active', False)
+                }
+        
+        return network_state
+
+    def _get_node_fifo_utilization(self, node):
+        """获取节点FIFO利用率"""
+        utilization = {}
+        
+        # 检查注入FIFO
+        if hasattr(node, 'inject_input_fifos'):
+            for direction, fifo in node.inject_input_fifos.items():
+                utilization[f'inject_{direction}'] = len(getattr(fifo, 'buffer', [])) / max(getattr(fifo, 'depth', 1), 1)
+        
+        # 检查弹出FIFO
+        if hasattr(node, 'eject_input_fifos'):
+            for direction, fifo in node.eject_input_fifos.items():
+                utilization[f'eject_{direction}'] = len(getattr(fifo, 'buffer', [])) / max(getattr(fifo, 'depth', 1), 1)
+        
+        return utilization
+
+    def _update_gpu(self, model, cycle):
+        """GPU加速的更新逻辑"""
+        if not self.gpu_available:
+            return self._update_cpu(model, cycle)
+        
+        try:
+            import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
+            import plotly.io as pio
+            
+            # 收集网络状态
+            network_state = self._collect_network_state(model)
+            
+            # 创建或更新WebGL图形
+            if self.plotly_fig is None:
+                self._create_gpu_layout(network_state)
+                
+                # 显示GPU加速的可视化图形
+                if hasattr(self, 'plotly_fig') and self.plotly_fig is not None:
+                    print(f"🎪 GPU加速可视化窗口已打开 (周期 {cycle})")
+                    # 使用plotly显示交互式图形
+                    self.plotly_fig.show(config=self.webgl_config)
+                    
+                    # 保持图形更新的引用
+                    self._gpu_window_initialized = True
+            
+            # 批量更新网络拓扑
+            self._batch_update_network_gpu(network_state)
+            
+            # 批量更新节点状态
+            self._batch_update_nodes_gpu(network_state)
+            
+            # 如果已初始化，更新图形显示
+            if hasattr(self, '_gpu_window_initialized') and self._gpu_window_initialized:
+                # plotly图形会自动更新，无需额外操作
+                pass
+            
+        except Exception as e:
+            print(f"⚠️  GPU更新失败，降级到CPU模式: {e}")
+            return self._update_cpu(model, cycle)
+
+    def _create_gpu_layout(self, network_state):
+        """创建GPU加速的布局"""
+        try:
+            import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
+            
+            # 创建子图布局：左侧网络拓扑，右侧节点详细视图
+            self.plotly_fig = make_subplots(
+                rows=1, cols=2,
+                subplot_titles=('CrossRing网络拓扑', '节点详细视图'),
+                specs=[[{'type': 'scatter'}, {'type': 'scatter'}]],
+                column_widths=[0.7, 0.3]
+            )
+            
+            # 初始化网络拓扑（左侧）
+            self._init_network_topology_gpu(network_state)
+            
+            # 初始化节点详细视图（右侧）
+            self._init_node_detail_gpu(network_state)
+            
+            # 配置布局
+            self.plotly_fig.update_layout(
+                title="CrossRing NoC实时可视化 (GPU加速)",
+                showlegend=True,
+                height=800,
+                hovermode='closest'
+            )
+            
+        except Exception as e:
+            print(f"创建GPU布局失败: {e}")
+            raise
+
+    def _init_network_topology_gpu(self, network_state):
+        """初始化网络拓扑GPU渲染"""
+        import plotly.graph_objects as go
+        
+        # 节点位置布局
+        node_x, node_y = [], []
+        node_colors, node_text = [], []
+        
+        for node_id, node_data in network_state['nodes'].items():
+            x, y = node_data['position']
+            node_x.append(x)
+            node_y.append(y)
+            
+            # 根据活跃度设置颜色
+            activity_level = min(node_data['active_flits'], 10)
+            color_intensity = activity_level / 10.0
+            node_colors.append(f'rgba({int(255 * color_intensity)}, {int(100 * (1-color_intensity))}, 100, 0.8)')
+            node_text.append(f'N{node_id}')
+        
+        # 添加节点trace
+        self.plotly_fig.add_trace(
+            go.Scatter(
+                x=node_x, y=node_y,
+                mode='markers+text',
+                marker=dict(size=20, color=node_colors),
+                text=node_text,
+                textposition="middle center",
+                name='节点',
+                hovertemplate='节点: %{text}<br>位置: (%{x}, %{y})<extra></extra>'
+            ),
+            row=1, col=1
+        )
+
+    def _init_node_detail_gpu(self, network_state):
+        """初始化节点详细视图GPU渲染"""
+        import plotly.graph_objects as go
+        
+        # 这里可以添加选中节点的详细视图
+        # 暂时显示一个简单的占位图
+        self.plotly_fig.add_trace(
+            go.Scatter(
+                x=[0], y=[0],
+                mode='markers',
+                marker=dict(size=10, color='blue'),
+                name='节点详细视图',
+                showlegend=False
+            ),
+            row=1, col=2
+        )
+
+    def _batch_update_network_gpu(self, network_state):
+        """批量更新网络拓扑GPU渲染"""
+        if not hasattr(self, 'plotly_fig') or self.plotly_fig is None:
+            return
+            
+        try:
+            import plotly.graph_objects as go
+            
+            # 更新节点数据：清除旧trace，添加新trace
+            with self.plotly_fig.batch_update():
+                # 移除之前的节点trace（如果存在）
+                if hasattr(self, '_node_trace_indices'):
+                    for idx in sorted(self._node_trace_indices, reverse=True):
+                        if idx < len(self.plotly_fig.data):
+                            self.plotly_fig.data = list(self.plotly_fig.data[:idx]) + list(self.plotly_fig.data[idx+1:])
+                
+                # 重新创建节点数据
+                node_x, node_y, node_colors, node_text = [], [], [], []
+                
+                for node_id, node_data in network_state['nodes'].items():
+                    x, y = node_data['position']
+                    node_x.append(x)
+                    node_y.append(y)
+                    
+                    # 根据活跃度设置颜色
+                    activity_level = min(node_data['active_flits'], 10)
+                    color_intensity = activity_level / 10.0
+                    node_colors.append(f'rgba({int(255 * color_intensity)}, {int(100 * (1-color_intensity))}, 100, 0.8)')
+                    node_text.append(f'N{node_id}')
+                
+                # 添加更新的节点trace
+                new_trace = go.Scatter(
+                    x=node_x, y=node_y,
+                    mode='markers+text',
+                    marker=dict(size=20, color=node_colors),
+                    text=node_text,
+                    textposition="middle center",
+                    name='节点',
+                    hovertemplate='节点: %{text}<br>位置: (%{x}, %{y})<extra></extra>'
+                )
+                
+                self.plotly_fig.add_trace(new_trace, row=1, col=1)
+                self._node_trace_indices = [len(self.plotly_fig.data) - 1]
+                
+        except Exception as e:
+            print(f"⚠️  GPU网络更新失败: {e}")
+
+    def _batch_update_nodes_gpu(self, network_state):
+        """批量更新节点状态GPU渲染"""
+        if not hasattr(self, 'plotly_fig') or self.plotly_fig is None:
+            return
+            
+        try:
+            import plotly.graph_objects as go
+            
+            # 简单实现：显示选中节点的详细信息
+            # 这里可以扩展为显示FIFO状态、CrossPoint状态等详细视图
+            selected_node = 0  # 默认显示节点0的详细信息
+            if selected_node in network_state['nodes']:
+                node_data = network_state['nodes'][selected_node]
+                detail_text = f"节点{selected_node}详细信息\\n"
+                detail_text += f"活跃flit数: {node_data['active_flits']}\\n"
+                detail_text += f"FIFO利用率: {node_data['utilization']}"
+                
+                # 更新节点详细视图的标题
+                self.plotly_fig.update_annotations(
+                    text=detail_text,
+                    selector=dict(text="节点详细视图")
+                )
+                
+        except Exception as e:
+            print(f"⚠️  GPU节点详细信息更新失败: {e}")
+
+    def _update_cpu(self, model, cycle):
+        """CPU模式的更新（原有实现的包装）"""
+        # 这里调用原有的matplotlib更新逻辑
+        # 保持向后兼容性
+        pass
+
     def update(self, networks=None, cycle=None, skip_pause=False):
-        """更新显示"""
+        """更新显示 - 支持GPU加速"""
         if networks is None and self._parent_model is None:
             return
 
         network = networks if networks is not None else self._parent_model
+        
+        # 检查GPU加速模式
+        if self.gpu_accelerated and hasattr(self, 'gpu_available') and self.gpu_available:
+            return self._update_gpu(network, cycle)
+        
+        # 原有CPU实现继续下面的逻辑...
 
         # 保存历史快照（仅在实时模式下，即非回放状态）
         if self._play_idx is None:

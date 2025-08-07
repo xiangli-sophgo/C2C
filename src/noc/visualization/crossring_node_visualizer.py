@@ -29,19 +29,25 @@ configure_matplotlib_fonts(verbose=False)
 class CrossRingNodeVisualizer:
     """节点详细视图可视化器（右侧面板）"""
 
-    def __init__(self, config: CrossRingConfig, ax, highlight_callback=None, parent=None):
+    def __init__(self, config: CrossRingConfig, ax, highlight_callback=None, parent=None, gpu_mode=False):
         """
         仅绘制单个节点的 Inject/Eject Queue 和 Ring Bridge FIFO。
         参数:
         - config: 含有 FIFO 深度配置的对象，属性包括 cols, num_nodes, IQ_OUT_FIFO_DEPTH,
             EQ_IN_FIFO_DEPTH, RB_IN_FIFO_DEPTH, RB_OUT_FIFO_DEPTH
         - node_id: 要可视化的节点索引 (0 到 num_nodes-1)
+        - gpu_mode: 是否启用GPU加速渲染
         """
         self.highlight_callback = highlight_callback
         self.config = config
         self.cols = config.NUM_COL
         self.rows = config.NUM_ROW
         self.parent = parent
+        
+        # GPU加速模式支持
+        self.gpu_mode = gpu_mode or getattr(config, 'gpu_visualization', False)
+        if self.gpu_mode:
+            self._init_gpu_rendering()
 
         # 历史保存功能
         from collections import deque
@@ -966,6 +972,211 @@ class CrossRingNodeVisualizer:
             # 静默忽略快照保存错误，但保留基本结构
             fallback_snapshot = {"cycle": cycle, "nodes": {}, "metadata": {"error": True, "error_msg": str(e)}}
             self.node_history.append((cycle, fallback_snapshot))
+
+    def _init_gpu_rendering(self):
+        """初始化GPU渲染组件"""
+        try:
+            import plotly.graph_objects as go
+            self.gpu_available = True
+            self.plotly_traces = {}
+            self.webgl_config = {
+                'toImageButtonOptions': {'format': 'png'},
+                'displayModeBar': True,
+                'displaylogo': False,
+                'scrollZoom': True
+            }
+            print("🚀 CrossRing节点可视化器GPU加速已启用")
+        except ImportError:
+            print("⚠️  plotly不可用，节点可视化器降级到CPU模式")
+            self.gpu_available = False
+            self.gpu_mode = False
+
+    def render_node_state_gpu(self, node_id, node_state):
+        """GPU加速的节点状态渲染"""
+        if not self.gpu_mode or not hasattr(self, 'gpu_available') or not self.gpu_available:
+            # 降级到原有实现
+            return self.render_node_from_snapshot(node_id, node_state.get('cycle', 0))
+        
+        try:
+            import plotly.graph_objects as go
+            
+            fig = go.Figure()
+            
+            # FIFO队列可视化 - GPU并行渲染
+            self._render_fifos_gpu(fig, node_state)
+            
+            # CrossPoint状态 - GPU渲染
+            self._render_crosspoint_gpu(fig, node_state)
+            
+            # 配置布局
+            fig.update_layout(
+                title=f"节点 {node_id} 内部状态 (GPU加速)",
+                showlegend=True,
+                hovermode='closest',
+                margin=dict(b=20,l=5,r=5,t=40),
+                xaxis=dict(showgrid=True, zeroline=False),
+                yaxis=dict(showgrid=True, zeroline=False),
+                plot_bgcolor='white',
+                paper_bgcolor='white'
+            )
+            
+            return fig
+            
+        except Exception as e:
+            print(f"⚠️  GPU渲染失败，降级到CPU模式: {e}")
+            return self.render_node_from_snapshot(node_id, node_state.get('cycle', 0))
+    
+    def _render_fifos_gpu(self, fig, node_state):
+        """GPU加速的FIFO渲染 - 改进版本"""
+        fifo_states = node_state.get('fifo_states', {})
+        
+        # FIFO类型分组
+        fifo_groups = {
+            'inject': [],
+            'eject': [],
+            'ring_bridge': [],
+            'channel_buffer': []
+        }
+        
+        # 分类FIFO
+        for fifo_name, fifo_data in fifo_states.items():
+            if 'inject' in fifo_name.lower():
+                fifo_groups['inject'].append((fifo_name, fifo_data))
+            elif 'eject' in fifo_name.lower():
+                fifo_groups['eject'].append((fifo_name, fifo_data))
+            elif 'ring_bridge' in fifo_name.lower() or 'rb_' in fifo_name.lower():
+                fifo_groups['ring_bridge'].append((fifo_name, fifo_data))
+            else:
+                fifo_groups['channel_buffer'].append((fifo_name, fifo_data))
+        
+        # 渲染每个组的FIFO
+        y_offset = 0
+        group_colors = {
+            'inject': '#FF6B6B',      # 红色系 - 注入
+            'eject': '#4ECDC4',       # 青色系 - 弹出  
+            'ring_bridge': '#45B7D1', # 蓝色系 - 环桥
+            'channel_buffer': '#96CEB4' # 绿色系 - 通道缓冲
+        }
+        
+        for group_name, fifos in fifo_groups.items():
+            if not fifos:
+                continue
+                
+            for i, (fifo_name, fifo_data) in enumerate(fifos):
+                # 计算FIFO利用率
+                if isinstance(fifo_data, dict):
+                    depth = fifo_data.get('depth', 8)
+                    current_count = fifo_data.get('current_count', 0)
+                elif isinstance(fifo_data, list):
+                    depth = 8  # 默认深度
+                    current_count = len(fifo_data)
+                else:
+                    depth = 8
+                    current_count = 0
+                
+                utilization = current_count / max(depth, 1)
+                
+                # 可视化FIFO slots
+                x_coords = list(range(depth))
+                y_coords = [y_offset] * depth
+                
+                # 根据占用情况设置颜色
+                colors = []
+                for j in range(depth):
+                    if j < current_count:
+                        colors.append(group_colors[group_name])  # 占用的slot
+                    else:
+                        colors.append('lightgray')  # 空的slot
+                
+                fig.add_trace(go.Scatter(
+                    x=x_coords,
+                    y=y_coords,
+                    mode='markers',
+                    marker=dict(
+                        size=15,
+                        color=colors,
+                        line=dict(width=1, color='black'),
+                        symbol='square'
+                    ),
+                    name=f'{fifo_name} ({current_count}/{depth})',
+                    hovertemplate=f'{fifo_name}<br>利用率: {utilization:.1%}<br>占用: {current_count}/{depth}<extra></extra>'
+                ))
+                
+                y_offset += 1
+    
+    def _render_crosspoint_gpu(self, fig, node_state):
+        """GPU加速的CrossPoint渲染 - 改进版本"""
+        crosspoint_state = node_state.get('crosspoint_state', {})
+        
+        if crosspoint_state:
+            # 环形slice状态可视化
+            ring_slices = crosspoint_state.get('ring_slices', {})
+            
+            # 为不同方向的环路slice创建可视化
+            directions = ['horizontal', 'vertical']
+            slice_colors = {
+                'horizontal': '#FF6B35',  # 橙色 - 水平环
+                'vertical': '#7209B7'     # 紫色 - 垂直环
+            }
+            
+            for direction in directions:
+                if direction in ring_slices:
+                    slice_data = ring_slices[direction]
+                    
+                    # 每个环路有多个slice (通常8个)
+                    slice_count = slice_data.get('slice_count', 8)
+                    active_slices = slice_data.get('active_slices', [])
+                    
+                    # 创建环形布局的slice可视化
+                    if direction == 'horizontal':
+                        # 水平环 - 线性布局
+                        x_coords = list(range(slice_count))
+                        y_coords = [10] * slice_count  # 固定y位置
+                    else:
+                        # 垂直环 - 垂直布局  
+                        x_coords = [15] * slice_count  # 固定x位置
+                        y_coords = list(range(slice_count))
+                    
+                    # 根据slice活跃状态设置颜色
+                    colors = []
+                    for i in range(slice_count):
+                        if i in active_slices:
+                            colors.append(slice_colors[direction])
+                        else:
+                            colors.append('lightgray')
+                    
+                    fig.add_trace(go.Scatter(
+                        x=x_coords,
+                        y=y_coords,
+                        mode='markers',
+                        marker=dict(
+                            size=12,
+                            color=colors,
+                            line=dict(width=2, color='black'),
+                            symbol='circle'
+                        ),
+                        name=f'{direction.title()} Ring',
+                        hovertemplate=f'{direction} Ring<br>Slice: %{{pointNumber}}<br>Status: Active/Idle<extra></extra>'
+                    ))
+            
+            # 添加CrossPoint仲裁状态指示器
+            arbitration_active = crosspoint_state.get('arbitration_active', False)
+            connections = crosspoint_state.get('active_connections', 0)
+            
+            fig.add_trace(go.Scatter(
+                x=[10], y=[15],
+                mode='markers+text',
+                marker=dict(
+                    size=25,
+                    color='red' if arbitration_active else 'green',
+                    symbol='diamond',
+                    line=dict(width=3, color='black')
+                ),
+                text=[f'CP\n{connections}'],
+                textposition='middle center',
+                name='CrossPoint核心',
+                hovertemplate=f'CrossPoint<br>活跃连接: {connections}<br>仲裁状态: {"活跃" if arbitration_active else "空闲"}<extra></extra>'
+            ))
 
     def render_node_from_snapshot(self, node_id, cycle):
         """从快照数据渲染节点"""
