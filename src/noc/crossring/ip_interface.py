@@ -124,39 +124,53 @@ class CrossRingIPInterface(BaseIPInterface):
             #                = bw_limit_gbps / network_freq_ghz 字节/周期
             bytes_per_cycle = bw_limit_gbps / network_freq_ghz  # 字节/周期
             rate = bytes_per_cycle / flit_size  # flits/周期
-            self._setup_token_bucket(rate=rate, bucket_size=bw_limit_gbps)
+            self._setup_dual_token_buckets(rate=rate, bucket_size=bw_limit_gbps)
 
         elif self.ip_type.startswith("l2m"):
             # L2M通道限速
             bw_limit_gbps = self.config.ip_config.L2M_BW_LIMIT
             bytes_per_cycle = bw_limit_gbps / network_freq_ghz  # GB/周期
             rate = bytes_per_cycle * 1e9 / flit_size  # flits/周期
-            self._setup_token_bucket(rate=rate, bucket_size=bw_limit_gbps)
+            self._setup_dual_token_buckets(rate=rate, bucket_size=bw_limit_gbps)
 
         elif self.ip_type.startswith("gdma"):
             # GDMA通道限速
             bw_limit_gbps = self.config.ip_config.GDMA_BW_LIMIT
             bytes_per_cycle = bw_limit_gbps / network_freq_ghz  # GB/周期
             rate = bytes_per_cycle * 1e9 / flit_size  # flits/周期
-            self._setup_token_bucket(rate=rate, bucket_size=bw_limit_gbps)
+            self._setup_dual_token_buckets(rate=rate, bucket_size=bw_limit_gbps)
 
         elif self.ip_type.startswith("sdma"):
             # SDMA通道限速
             bw_limit_gbps = self.config.ip_config.SDMA_BW_LIMIT
             bytes_per_cycle = bw_limit_gbps / network_freq_ghz  # GB/周期
             rate = bytes_per_cycle * 1e9 / flit_size  # flits/周期
-            self._setup_token_bucket(rate=rate, bucket_size=bw_limit_gbps)
+            self._setup_dual_token_buckets(rate=rate, bucket_size=bw_limit_gbps)
 
         elif self.ip_type.startswith("cdma"):
             # CDMA通道限速
             bw_limit_gbps = self.config.ip_config.CDMA_BW_LIMIT
             bytes_per_cycle = bw_limit_gbps / network_freq_ghz  # GB/周期
             rate = bytes_per_cycle * 1e9 / flit_size  # flits/周期
-            self._setup_token_bucket(rate=rate, bucket_size=bw_limit_gbps)
+            self._setup_dual_token_buckets(rate=rate, bucket_size=bw_limit_gbps)
 
         else:
             # 默认不限速
-            self.token_bucket = None
+            self.tx_token_bucket = None
+            self.rx_token_bucket = None
+
+    def _setup_dual_token_buckets(self, rate: float, bucket_size: float) -> None:
+        """
+        设置双令牌桶用于TX和RX独立带宽限制
+
+        Args:
+            rate: 每周期生成的令牌数
+            bucket_size: 桶的最大容量
+        """
+        from src.noc.utils.token_bucket import TokenBucket
+
+        self.tx_token_bucket = TokenBucket(rate=rate, bucket_size=bucket_size)
+        self.rx_token_bucket = TokenBucket(rate=rate, bucket_size=bucket_size)
 
     def _check_and_reserve_resources(self, flit) -> bool:
         """检查并预占RN端资源"""
@@ -327,7 +341,6 @@ class CrossRingIPInterface(BaseIPInterface):
 
                     # ✅ 成功分配资源，标记为已处理
                     req._request_processed = True
-                    
 
                     self._create_read_packet(req)
                     self._release_completed_sn_tracker(req)
@@ -361,7 +374,7 @@ class CrossRingIPInterface(BaseIPInterface):
 
                     # ✅ 成功分配资源，标记为已处理
                     req._request_processed = True
-                    
+
                     self._create_response(req, "datasend")
                 else:
                     # 资源不足，发送negative响应
@@ -757,7 +770,7 @@ class CrossRingIPInterface(BaseIPInterface):
         rsp.flit_position = "IP_inject"  # 在源IP准备注入
 
         self.pending_by_channel["rsp"].append(rsp)
-        
+
         # 响应flit会在进入L2H时被添加到RequestTracker
 
     def _release_completed_sn_tracker(self, req: CrossRingFlit) -> None:
@@ -765,7 +778,6 @@ class CrossRingIPInterface(BaseIPInterface):
         if req in self.sn_tracker:
             self.sn_tracker.remove(req)
             self.sn_tracker_count[req.sn_tracker_type] += 1
-            
 
         # 对于写请求，释放WDB
         if req.req_type == "write":
@@ -778,13 +790,13 @@ class CrossRingIPInterface(BaseIPInterface):
         """处理等待队列中的请求 - 发送positive响应通知RN端资源可用"""
         # ✅ 修复：使用简单FIFO等待队列
         wait_queue = self.sn_req_wait[req_type]
-        
+
         if not wait_queue:
             return
-            
+
         # 从队列头部取出最早的等待请求
         waiting_req = wait_queue[0]  # peek，不移除
-        
+
         if req_type == "write":
             # 检查tracker和wdb资源
             if self.sn_tracker_count[tracker_type] > 0 and self.sn_wdb_count >= waiting_req.burst_length:
@@ -1037,7 +1049,9 @@ class CrossRingIPInterface(BaseIPInterface):
         except Exception as e:
             return False
 
-    def inject_request(self, source: NodeId, destination: NodeId, req_type: str, burst_length: int = 4, packet_id: str = None, source_type: str = None, destination_type: str = None, **kwargs) -> bool:
+    def inject_request(
+        self, source: NodeId, destination: NodeId, req_type: str, burst_length: int = 4, packet_id: str = None, source_type: str = None, destination_type: str = None, **kwargs
+    ) -> bool:
         """
         注入请求到IP接口，保证请求永不丢失
 
@@ -1150,14 +1164,16 @@ class CrossRingIPInterface(BaseIPInterface):
         self._transfer_decisions = {
             "pending_to_l2h": {"req": None, "rsp": None, "data": None},  # 每个通道独立决策
             "l2h_to_node": {"req": None, "rsp": None, "data": None},  # 每个通道独立决策
-            "network_to_h2l_h": {"channel": None, "flit": None},
-            "h2l_h_to_h2l_l": {"channel": None, "flit": None},
-            "h2l_l_to_completion": {"channel": None, "flit": None},
+            "network_to_h2l_h": {"req": None, "rsp": None, "data": None},  # 每个通道独立决策
+            "h2l_h_to_h2l_l": {"req": None, "rsp": None, "data": None},  # 每个通道独立决策
+            "h2l_l_to_completion": {"req": None, "rsp": None, "data": None},  # 每个通道独立决策
         }
 
         # 3. 刷新令牌桶
-        if self.token_bucket:
-            self.token_bucket.refill(current_cycle)
+        if self.tx_token_bucket:
+            self.tx_token_bucket.refill(current_cycle)
+        if self.rx_token_bucket:
+            self.rx_token_bucket.refill(current_cycle)
 
         # 4. 计算各阶段传输决策
         self._compute_pending_to_l2h_decision(current_cycle)
@@ -1186,12 +1202,12 @@ class CrossRingIPInterface(BaseIPInterface):
                 if l2h_ready:
                     if flit.departure_cycle <= current_cycle:
                         # 检查带宽限制（仅针对data通道）
-                        if self.token_bucket and channel == "data":
+                        if self.tx_token_bucket and channel == "data":
                             # 数据传输每个flit消耗1个令牌
                             tokens_needed = 1
 
                             # 尝试消耗令牌
-                            if not self.token_bucket.consume(tokens_needed):
+                            if not self.tx_token_bucket.consume(tokens_needed):
                                 continue  # 令牌不足时跳过此flit
 
                         # 对于req通道，检查RN端资源是否足够处理响应
@@ -1216,26 +1232,22 @@ class CrossRingIPInterface(BaseIPInterface):
 
     def _compute_network_to_h2l_h_decision(self, current_cycle: int) -> None:
         """计算network到h2l_h的传输决策"""
-        # 按优先级顺序检查：req > rsp > data
+        # 每个通道独立处理：req, rsp, data
         for channel in ["req", "rsp", "data"]:
             if self.h2l_h_fifos[channel].ready_signal():
                 flit = self._peek_from_topology_network(channel)
                 if flit:
-                    self._transfer_decisions["network_to_h2l_h"]["channel"] = channel
-                    self._transfer_decisions["network_to_h2l_h"]["flit"] = flit
-                    # 调试日志
-                    return
+                    self._transfer_decisions["network_to_h2l_h"][channel] = flit
+                    # 不要return，继续检查其他通道
 
     def _compute_h2l_h_to_h2l_l_decision(self, current_cycle: int) -> None:
         """计算h2l_h到h2l_l的传输决策（网络频率）"""
-        # 按优先级顺序检查：req > rsp > data
+        # 每个通道独立处理：req, rsp, data
         for channel in ["req", "rsp", "data"]:
             if self.h2l_h_fifos[channel].valid_signal() and self.h2l_l_fifos[channel].ready_signal():
                 flit = self.h2l_h_fifos[channel].peek_output()
                 if flit:
-                    self._transfer_decisions["h2l_h_to_h2l_l"]["channel"] = channel
-                    self._transfer_decisions["h2l_h_to_h2l_l"]["flit"] = flit
-                    return
+                    self._transfer_decisions["h2l_h_to_h2l_l"][channel] = flit
 
     def _compute_h2l_l_to_completion_decision(self, current_cycle: int) -> None:
         """计算h2l_l到completion的传输决策（IP频率）"""
@@ -1243,19 +1255,17 @@ class CrossRingIPInterface(BaseIPInterface):
         if current_cycle % self.clock_ratio != 0:
             return
 
-        # 按优先级顺序检查：req > rsp > data
+        # 每个通道独立处理：req, rsp, data
         for channel in ["req", "rsp", "data"]:
             if self.h2l_l_fifos[channel].valid_signal():
                 flit = self.h2l_l_fifos[channel].peek_output()
                 if flit:
                     # 带宽限制检查
-                    if self.token_bucket and channel == "data":
-                        if not self.token_bucket.consume(1):
+                    if self.rx_token_bucket and channel == "data":
+                        if not self.rx_token_bucket.consume(1):
                             continue
 
-                    self._transfer_decisions["h2l_l_to_completion"]["channel"] = channel
-                    self._transfer_decisions["h2l_l_to_completion"]["flit"] = flit
-                    return
+                    self._transfer_decisions["h2l_l_to_completion"][channel] = flit
 
     def _can_inject_to_node(self, flit, channel: str) -> bool:
         """检查是否可以注入到node"""
@@ -1304,7 +1314,7 @@ class CrossRingIPInterface(BaseIPInterface):
                 self.pending_by_channel[channel].popleft()
                 flit.flit_position = "L2H"
                 self.l2h_fifos[channel].write_input(flit)
-                
+
                 # 在进入L2H时添加到RequestTracker
                 if hasattr(self.model, "request_tracker") and hasattr(flit, "packet_id"):
                     if channel == "req":
@@ -1313,7 +1323,7 @@ class CrossRingIPInterface(BaseIPInterface):
                         self.model.request_tracker.add_response_flit(flit.packet_id, flit)
                     elif channel == "data":
                         self.model.request_tracker.add_data_flit(flit.packet_id, flit)
-                
+
                 # 更新请求状态
                 if channel == "req" and hasattr(flit, "packet_id") and flit.packet_id in self.active_requests:
                     self.active_requests[flit.packet_id]["stage"] = "l2h_fifo"
@@ -1325,34 +1335,38 @@ class CrossRingIPInterface(BaseIPInterface):
                 self.l2h_fifos[channel].read_output()
                 self._inject_to_topology_network(flit, channel)
 
-        # 3. 执行network到h2l_h的传输
-        if self._transfer_decisions["network_to_h2l_h"]["channel"]:
-            channel = self._transfer_decisions["network_to_h2l_h"]["channel"]
-            ejected_flit = self._eject_from_topology_network(channel)
-            if ejected_flit:
-                ejected_flit.flit_position = "H2L_H"
-                self.h2l_h_fifos[channel].write_input(ejected_flit)
+        # 3. 执行network到h2l_h的传输（每个通道独立）
+        for channel in ["req", "rsp", "data"]:
+            if self._transfer_decisions["network_to_h2l_h"][channel]:
+                ejected_flit = self._eject_from_topology_network(channel)
+                if ejected_flit:
+                    ejected_flit.flit_position = "H2L_H"
+                    self.h2l_h_fifos[channel].write_input(ejected_flit)
 
-        # 4. 执行h2l_h到h2l_l的传输
-        if self._transfer_decisions["h2l_h_to_h2l_l"]["channel"]:
-            channel = self._transfer_decisions["h2l_h_to_h2l_l"]["channel"]
-            flit = self.h2l_h_fifos[channel].read_output()
-            if flit:
-                flit.flit_position = "H2L_L"
-                self.h2l_l_fifos[channel].write_input(flit)
+        # 4. 执行h2l_h到h2l_l的传输（每个通道独立）
+        for channel in ["req", "rsp", "data"]:
+            if self._transfer_decisions["h2l_h_to_h2l_l"][channel]:
+                flit = self.h2l_h_fifos[channel].read_output()
+                if flit:
+                    flit.flit_position = "H2L_L"
+                    self.h2l_l_fifos[channel].write_input(flit)
 
-        # 5. 执行h2l_l到completion的传输
-        if self._transfer_decisions["h2l_l_to_completion"]["channel"]:
-            channel = self._transfer_decisions["h2l_l_to_completion"]["channel"]
-            flit = self.h2l_l_fifos[channel].read_output()
-            if flit:
-                flit.flit_position = "IP_eject"
-                if channel == "req":
-                    self._handle_received_request(flit)
-                elif channel == "rsp":
-                    self._handle_received_response(flit)
-                elif channel == "data":
-                    self._handle_received_data(flit)
+        # 5. 执行h2l_l到completion的传输（每个通道独立）
+        for channel in ["req", "rsp", "data"]:
+            if self._transfer_decisions["h2l_l_to_completion"][channel]:
+                flit_before_read = len(self.h2l_l_fifos[channel])
+                flit = self.h2l_l_fifos[channel].read_output()
+                flit_after_read = len(self.h2l_l_fifos[channel])
+
+                if flit:
+                    flit.flit_position = "IP_eject"
+
+                    if channel == "req":
+                        self._handle_received_request(flit)
+                    elif channel == "rsp":
+                        self._handle_received_response(flit)
+                    elif channel == "data":
+                        self._handle_received_data(flit)
 
     def _inject_to_node(self, flit, channel: str) -> bool:
         """将flit注入到node"""
