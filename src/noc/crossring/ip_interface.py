@@ -1049,9 +1049,7 @@ class CrossRingIPInterface(BaseIPInterface):
         except Exception as e:
             return False
 
-    def inject_request(
-        self, source: NodeId, destination: NodeId, req_type: str, burst_length: int = 4, packet_id: str = None, source_type: str = None, destination_type: str = None, **kwargs
-    ) -> bool:
+    def inject_request(self, source: NodeId, destination: NodeId, req_type: str, burst_length: int = 4, packet_id: str = None, source_type: str = None, destination_type: str = None, **kwargs) -> bool:
         """
         注入请求到IP接口，保证请求永不丢失
 

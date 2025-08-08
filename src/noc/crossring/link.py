@@ -18,10 +18,6 @@ from ..base.ip_interface import PipelinedFIFO
 from .config import CrossRingConfig
 from .flit import CrossRingFlit
 
-# 性能优化：使用常量避免重复的字符串赋值
-FLIT_POSITION_RING_SLICE = "Ring_slice"
-FLIT_POSITION_CROSSPOINT = "CrossPoint"
-FLIT_POSITION_FIFO = "FIFO"
 
 
 class PriorityLevel(Enum):
@@ -62,8 +58,9 @@ class LinkBandwidthTracker:
 
     def reset_stats(self) -> None:
         """重置统计数据"""
+        default_stats = {"empty": 0, "valid": 0, "T0": 0, "T1": 0, "T2": 0, "ITag": 0, "bytes": 0}
         for channel in ["req", "rsp", "data"]:
-            self.cycle_stats[channel] = {"empty": 0, "valid": 0, "T0": 0, "T1": 0, "T2": 0, "ITag": 0, "bytes": 0}
+            self.cycle_stats[channel] = default_stats.copy()
         self.total_cycles = 0
         self.observer_info.clear()
 
@@ -90,9 +87,6 @@ class LinkBandwidthTracker:
             # 统计字节数 - 每个flit固定128字节
             self.cycle_stats[channel]["bytes"] += 128
 
-    def increment_cycle(self) -> None:
-        """增加周期计数"""
-        self.total_cycles += 1
 
 
 @dataclass
@@ -152,10 +146,6 @@ class CrossRingSlot(LinkSlot):
         """检查slot是否可用(空闲且未被预约)"""
         return not self.is_occupied and not self.itag_reserved
 
-    @property
-    def is_reserved(self) -> bool:
-        """检查slot是否被I-Tag预约"""
-        return self.itag_reserved
 
     def assign_flit(self, flit: "CrossRingFlit") -> bool:
         """
@@ -261,7 +251,7 @@ class CrossRingSlot(LinkSlot):
             "channel": self.channel,
             "valid": self.valid,
             "occupied": self.is_occupied,
-            "available": self.is_available,
+            "available": not self.is_occupied and not self.itag_reserved,
             "wait_cycles": self.wait_cycles,
             "starvation_counter": self.starvation_counter,
             "itag_info": {
@@ -370,17 +360,6 @@ class RingSlice:
         """
         return self.current_slots.get(channel)
 
-    def peek_output(self, channel: str) -> Optional[CrossRingSlot]:
-        """
-        查看输出槽的内容（兼容接口）
-
-        Args:
-            channel: 通道类型
-
-        Returns:
-            当前slot
-        """
-        return self.peek_current_slot(channel)
 
     def is_ready_to_receive(self, channel: str) -> bool:
         """
@@ -423,7 +402,7 @@ class RingSlice:
             return False
 
         # 检查slot是否为空或被本节点预约
-        return not current_slot.is_occupied or (current_slot.is_reserved and current_slot.itag_reserver_id == reserver_node_id)
+        return not current_slot.is_occupied or (current_slot.itag_reserved and current_slot.itag_reserver_id == reserver_node_id)
 
     def inject_flit_to_slot(self, flit: CrossRingFlit, channel: str) -> bool:
         """
@@ -482,8 +461,8 @@ class RingSlice:
                 flit.current_slice_index = self.position
                 flit.current_position = self.position
                 # 性能优化：只在位置真正改变时更新
-                if flit.flit_position != FLIT_POSITION_RING_SLICE:
-                    flit.flit_position = FLIT_POSITION_RING_SLICE
+                if flit.flit_position != "Ring_slice":
+                    flit.flit_position = "Ring_slice"
                 # 设置link的源和目标节点信息
                 flit.link_source_node = getattr(self, "source_node_id", -1)
                 flit.link_dest_node = getattr(self, "dest_node_id", -1)
@@ -498,17 +477,6 @@ class RingSlice:
             else:
                 self.stats["empty_cycles"][channel] += 1
 
-    def peek_output_slot(self, channel: str) -> Optional[CrossRingSlot]:
-        """
-        查看输出槽的内容(不移除) - 兼容接口
-
-        Args:
-            channel: 通道类型
-
-        Returns:
-            输出槽的内容
-        """
-        return self.peek_current_slot(channel)
 
     def get_ring_slice_status(self) -> Dict[str, Any]:
         """
@@ -526,36 +494,15 @@ class RingSlice:
             "stats": self.stats.copy(),
         }
 
-    def get_comprehensive_stats(self) -> Dict[str, Any]:
-        """
-        获取综合统计信息
-
-        Returns:
-            综合统计信息
-        """
-        return {
-            "ring_slice_stats": self.stats.copy(),
-            "slot_status": {
-                channel: {"occupied": slot.is_occupied if slot else False, "slot_id": slot.slot_id if slot else None, "flit_id": slot.flit.packet_id if slot and slot.flit else None}
-                for channel, slot in self.current_slots.items()
-            },
-        }
 
     def reset_stats(self) -> None:
         """重置统计信息"""
+        reset_keys = ["slots_received", "slots_transmitted", "empty_cycles"]
         for channel in ["req", "rsp", "data"]:
-            self.stats["slots_received"][channel] = 0
-            self.stats["slots_transmitted"][channel] = 0
-            self.stats["empty_cycles"][channel] = 0
+            for key in reset_keys:
+                self.stats[key][channel] = 0
         self.stats["total_cycles"] = 0
 
-        # 重置PipelinedFIFO统计（如果存在reset方法）
-        for channel, fifo in self.internal_pipelines.items():
-            if hasattr(fifo, "reset_stats"):
-                fifo.reset_stats()
-            elif hasattr(fifo, "stats"):
-                # 手动重置FIFO统计
-                fifo.stats = fifo.stats.__class__()
 
 
 class CrossRingLink(BaseLink):
@@ -679,7 +626,7 @@ class CrossRingLink(BaseLink):
     def _collect_bandwidth_stats(self, cycle: int) -> None:
         """在链路末端观测点收集带宽统计数据"""
         # 增加周期计数
-        self.bandwidth_tracker.increment_cycle()
+        self.bandwidth_tracker.total_cycles += 1
 
         # 对每个通道的观测点slice进行统计
         for channel in ["data"]:
@@ -845,139 +792,13 @@ class CrossRingLink(BaseLink):
                 if current_slot:
                     slots.append(current_slot)
 
-                # 获取内部队列中的所有slots（使用PipelinedFIFO的接口）
-                if channel in ring_slice.internal_pipelines:
-                    pipeline = ring_slice.internal_pipelines[channel]
-                    # 获取内部队列中的所有slots
-                    internal_slots = list(pipeline.internal_queue)
-                    slots.extend(internal_slots)
         return slots
 
-    def check_all_slices_have_slots(self) -> Dict[str, Any]:
-        """
-        检查所有slice中是否有slot的完整报告
 
-        Returns:
-            检查结果字典，包含详细信息和统计
-        """
-        report = {"total_slices": 0, "slices_with_slots": 0, "slices_without_slots": 0, "channels": {}, "missing_slots": [], "slot_distribution": {}, "summary": ""}
 
-        for channel in ["req", "rsp", "data"]:
-            channel_report = {"total_slices": 0, "slices_with_slots": 0, "slices_without_slots": 0, "missing_slice_positions": [], "slot_details": []}
-
-            if channel in self.ring_slices:
-                slices = self.ring_slices[channel]
-                channel_report["total_slices"] = len(slices)
-
-                for i, ring_slice in enumerate(slices):
-                    has_slot = False
-                    slot_info = {"slice_id": ring_slice.slice_id, "position": i, "has_output_slot": False, "output_slot_id": None, "internal_queue_slots": 0, "total_slots": 0}
-
-                    # 检查输出寄存器中的slot
-                    if channel in ring_slice.internal_pipelines:
-                        pipeline = ring_slice.internal_pipelines[channel]
-
-                        # 检查输出寄存器
-                        if pipeline.output_valid and pipeline.output_register:
-                            slot_info["has_output_slot"] = True
-                            slot_info["output_slot_id"] = pipeline.output_register.slot_id
-                            has_slot = True
-                            slot_info["total_slots"] += 1
-
-                        # 检查内部队列
-                        internal_slots = list(pipeline.internal_queue)
-                        slot_info["internal_queue_slots"] = len(internal_slots)
-                        slot_info["total_slots"] += len(internal_slots)
-
-                        if internal_slots:
-                            has_slot = True
-
-                    if has_slot:
-                        channel_report["slices_with_slots"] += 1
-                    else:
-                        channel_report["slices_without_slots"] += 1
-                        channel_report["missing_slice_positions"].append(i)
-                        report["missing_slots"].append({"channel": channel, "slice_id": ring_slice.slice_id, "position": i})
-
-                    channel_report["slot_details"].append(slot_info)
-
-            report["channels"][channel] = channel_report
-            report["total_slices"] += channel_report["total_slices"]
-            report["slices_with_slots"] += channel_report["slices_with_slots"]
-            report["slices_without_slots"] += channel_report["slices_without_slots"]
-
-        # 生成汇总信息
-        if report["slices_without_slots"] == 0:
-            report["summary"] = f"✅ 所有{report['total_slices']}个slice都有slot"
-        else:
-            report["summary"] = f"❌ {report['slices_without_slots']}/{report['total_slices']}个slice缺少slot"
-
-        # 统计slot分布
-        for channel in ["req", "rsp", "data"]:
-            total_slots = sum(detail["total_slots"] for detail in report["channels"][channel]["slot_details"])
-            report["slot_distribution"][channel] = total_slots
-
-        return report
-
-    def print_slot_check_report(self) -> None:
-        """打印slot检查报告"""
-        report = self.check_all_slices_have_slots()
-
-        print(f"📊 链路 {self.link_id} Slot检查报告:")
-        print(f"   {report['summary']}")
-        print(f"   总Slice数: {report['total_slices']}, 有Slot: {report['slices_with_slots']}, 无Slot: {report['slices_without_slots']}")
-
-        # 按通道详细报告
-        for channel, channel_data in report["channels"].items():
-            print(f"   {channel}通道: {channel_data['slices_with_slots']}/{channel_data['total_slices']}个slice有slot")
-            if channel_data["missing_slice_positions"]:
-                print(f"     缺失位置: {channel_data['missing_slice_positions']}")
-
-        # Slot分布统计
-        print(f"   Slot分布: {report['slot_distribution']}")
-
-        # 如果有缺失，详细列出
-        if report["missing_slots"]:
-            print("   缺失详情:")
-            for missing in report["missing_slots"]:
-                print(f"     - {missing['channel']}通道 {missing['slice_id']} (位置{missing['position']})")
-
-    def verify_slot_continuity(self) -> Dict[str, bool]:
-        """
-        验证slot的连续性 - 检查环路中是否有断链
-
-        Returns:
-            每个通道的连续性检查结果
-        """
-        results = {}
-
-        for channel in ["req", "rsp", "data"]:
-            is_continuous = True
-
-            if channel in self.ring_slices:
-                slices = self.ring_slices[channel]
-
-                for i, ring_slice in enumerate(slices):
-                    # 检查每个slice是否有slot可以传输
-                    if not ring_slice.can_provide_output(channel):
-                        is_continuous = False
-                        print(f"❌ {channel}通道 slice[{i}] 无法提供输出")
-
-                    # 检查下游连接
-                    if ring_slice.downstream_slice:
-                        if not ring_slice.downstream_slice.can_accept_input(channel):
-                            is_continuous = False
-                            print(f"❌ {channel}通道 slice[{i}] 下游无法接受输入")
-
-            results[channel] = is_continuous
-
-        return results
 
     # ========== BaseLink抽象方法实现 ==========
 
-    def _get_link_direction(self) -> Direction:
-        """获取链路方向"""
-        return self.direction
 
     def _process_slot_transmission(self, cycle: int) -> None:
         """
