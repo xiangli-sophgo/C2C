@@ -1366,7 +1366,11 @@ class CrossRingModel(BaseNoCModel):
             if paused:
                 # 进入暂停等待循环，保持GUI响应
                 while getattr(self, "_paused", False) and plt.get_fignums():
-                    plt.pause(0.1)
+                    try:
+                        plt.pause(0.1)
+                    except Exception as e:
+                        print(f"警告：暂停时matplotlib错误: {e}")
+                        break  # 退出暂停循环
                     # 在暂停期间也检查窗口关闭
                     if not plt.get_fignums():
                         self.cleanup_visualization()
@@ -1374,7 +1378,11 @@ class CrossRingModel(BaseNoCModel):
             else:
                 # 正常帧率控制 - 只有在可视化启用时才暂停
                 if self._visualization_enabled and self._visualization_frame_interval > 0:
-                    plt.pause(self._visualization_frame_interval)
+                    try:
+                        plt.pause(self._visualization_frame_interval)
+                    except Exception as e:
+                        print(f"警告：可视化帧率控制时matplotlib错误: {e}")
+                        pass  # 忽略错误，继续仿真
 
         except KeyboardInterrupt:
             # 捕获Ctrl+C或其他键盘中断

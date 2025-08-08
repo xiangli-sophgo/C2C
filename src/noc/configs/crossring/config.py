@@ -554,10 +554,10 @@ class CrossRingConfig(BaseNoCConfig):
     @classmethod
     def from_yaml(cls, config_name: str) -> "CrossRingConfig":
         """
-        从YAML文件加载配置
+        从YAML文件加载配置，支持继承默认配置
 
         Args:
-            config_name: 配置文件名（不包含.yaml扩展名），如 "3x3", "5x2", "5x4"
+            config_name: 配置文件名（不包含.yaml扩展名），如 "3x3", "5x2", "5x4", "default"
 
         Returns:
             CrossRingConfig: 加载的配置实例
@@ -565,95 +565,102 @@ class CrossRingConfig(BaseNoCConfig):
         Example:
             config = CrossRingConfig.from_yaml("3x3")
         """
-        # 获取YAML文件路径
         config_dir = Path(__file__).parent
-        yaml_file = config_dir / f"{config_name}.yaml"
         
-        if not yaml_file.exists():
-            raise FileNotFoundError(f"配置文件不存在: {yaml_file}")
+        # 首先加载默认配置
+        default_file = config_dir / "default.yaml"
+        if default_file.exists():
+            with open(default_file, 'r', encoding='utf-8') as f:
+                default_data = yaml.safe_load(f)
+        else:
+            default_data = {}
             
-        # 加载YAML文件
-        with open(yaml_file, 'r', encoding='utf-8') as f:
-            yaml_data = yaml.safe_load(f)
+        # 如果请求的是默认配置，直接使用
+        if config_name == "default":
+            yaml_data = default_data
+        else:
+            # 加载具体配置文件
+            yaml_file = config_dir / f"{config_name}.yaml"
+            if not yaml_file.exists():
+                raise FileNotFoundError(f"配置文件不存在: {yaml_file}")
+                
+            with open(yaml_file, 'r', encoding='utf-8') as f:
+                specific_data = yaml.safe_load(f)
+                
+            # 合并配置：具体配置覆盖默认配置
+            yaml_data = cls._merge_configs(default_data, specific_data)
             
         # 创建基础配置实例
         topology = yaml_data.get('topology', {})
         config = cls(
-            num_row=topology.get('num_row', 4),
-            num_col=topology.get('num_col', 4)
+            num_row=topology.get('NUM_ROW', 4),
+            num_col=topology.get('NUM_COL', 4)
         )
         
         # 应用基础配置
         basic = yaml_data.get('basic', {})
-        if 'network_frequency' in basic:
-            config.basic_config.NETWORK_FREQUENCY = basic['network_frequency']
-            
-        # 应用tracker配置
-        tracker = yaml_data.get('tracker', {})
-        if 'rn_r_tracker_ostd' in tracker:
-            config.tracker_config.RN_R_TRACKER_OSTD = tracker['rn_r_tracker_ostd']
-        if 'rn_w_tracker_ostd' in tracker:
-            config.tracker_config.RN_W_TRACKER_OSTD = tracker['rn_w_tracker_ostd']
-        if 'sn_ddr_r_tracker_ostd' in tracker:
-            config.tracker_config.SN_DDR_R_TRACKER_OSTD = tracker['sn_ddr_r_tracker_ostd']
-        if 'sn_ddr_w_tracker_ostd' in tracker:
-            config.tracker_config.SN_DDR_W_TRACKER_OSTD = tracker['sn_ddr_w_tracker_ostd']
-        if 'sn_l2m_r_tracker_ostd' in tracker:
-            config.tracker_config.SN_L2M_R_TRACKER_OSTD = tracker['sn_l2m_r_tracker_ostd']
-        if 'sn_l2m_w_tracker_ostd' in tracker:
-            config.tracker_config.SN_L2M_W_TRACKER_OSTD = tracker['sn_l2m_w_tracker_ostd']
-        if 'sn_tracker_release_latency' in tracker:
-            config.tracker_config.SN_TRACKER_RELEASE_LATENCY = tracker['sn_tracker_release_latency']
-            
-        # 应用延迟配置
-        latency = yaml_data.get('latency', {})
-        if 'ddr_r_latency' in latency:
-            config.latency_config.DDR_R_LATENCY = latency['ddr_r_latency']
-        if 'ddr_w_latency' in latency:
-            config.latency_config.DDR_W_LATENCY = latency['ddr_w_latency']
-        if 'l2m_r_latency' in latency:
-            config.latency_config.L2M_R_LATENCY = latency['l2m_r_latency']
-        if 'l2m_w_latency' in latency:
-            config.latency_config.L2M_W_LATENCY = latency['l2m_w_latency']
+        for key, value in basic.items():
+            if hasattr(config.basic_config, key):
+                setattr(config.basic_config, key, value)
+                
+        # 应用IP配置
+        ip = yaml_data.get('ip', {})
+        for key, value in ip.items():
+            if hasattr(config.ip_config, key):
+                setattr(config.ip_config, key, value)
             
         # 应用FIFO配置
         fifo = yaml_data.get('fifo', {})
-        if 'iq_ch_depth' in fifo:
-            config.fifo_config.IQ_CH_DEPTH = fifo['iq_ch_depth']
-        if 'eq_ch_depth' in fifo:
-            config.fifo_config.EQ_CH_DEPTH = fifo['eq_ch_depth']
-        if 'iq_out_fifo_depth' in fifo:
-            config.fifo_config.IQ_OUT_FIFO_DEPTH = fifo['iq_out_fifo_depth']
-        if 'rb_out_fifo_depth' in fifo:
-            config.fifo_config.RB_OUT_FIFO_DEPTH = fifo['rb_out_fifo_depth']
-        if 'rb_in_fifo_depth' in fifo:
-            config.fifo_config.RB_IN_FIFO_DEPTH = fifo['rb_in_fifo_depth']
-        if 'eq_in_fifo_depth' in fifo:
-            config.fifo_config.EQ_IN_FIFO_DEPTH = fifo['eq_in_fifo_depth']
+        for key, value in fifo.items():
+            if hasattr(config.fifo_config, key):
+                setattr(config.fifo_config, key, value)
             
         # 应用Tag配置
         tag = yaml_data.get('tag', {})
-        if 'tl_etag_t2_ue_max' in tag:
-            config.tag_config.TL_ETAG_T2_UE_MAX = tag['tl_etag_t2_ue_max']
-        if 'tl_etag_t1_ue_max' in tag:
-            config.tag_config.TL_ETAG_T1_UE_MAX = tag['tl_etag_t1_ue_max']
-        if 'tr_etag_t2_ue_max' in tag:
-            config.tag_config.TR_ETAG_T2_UE_MAX = tag['tr_etag_t2_ue_max']
-        if 'tu_etag_t2_ue_max' in tag:
-            config.tag_config.TU_ETAG_T2_UE_MAX = tag['tu_etag_t2_ue_max']
-        if 'tu_etag_t1_ue_max' in tag:
-            config.tag_config.TU_ETAG_T1_UE_MAX = tag['tu_etag_t1_ue_max']
-        if 'td_etag_t2_ue_max' in tag:
-            config.tag_config.TD_ETAG_T2_UE_MAX = tag['td_etag_t2_ue_max']
-        if 'etag_bothside_upgrade' in tag:
-            config.tag_config.ETAG_BOTHSIDE_UPGRADE = tag['etag_bothside_upgrade']
-        if 'itag_trigger_th_h' in tag:
-            config.tag_config.ITAG_TRIGGER_TH_H = tag['itag_trigger_th_h']
+        for key, value in tag.items():
+            if hasattr(config.tag_config, key):
+                setattr(config.tag_config, key, value)
+                
+        # 应用Tracker配置
+        tracker = yaml_data.get('tracker', {})
+        for key, value in tracker.items():
+            if hasattr(config.tracker_config, key):
+                setattr(config.tracker_config, key, value)
+            
+        # 应用延迟配置
+        latency = yaml_data.get('latency', {})
+        for key, value in latency.items():
+            if hasattr(config.latency_config, key):
+                setattr(config.latency_config, key, value)
             
         # 验证配置
         config.validate_config()
         
         return config
+
+    @staticmethod
+    def _merge_configs(default_config: dict, specific_config: dict) -> dict:
+        """
+        深度合并配置字典，specific_config覆盖default_config
+        
+        Args:
+            default_config: 默认配置字典
+            specific_config: 具体配置字典
+            
+        Returns:
+            dict: 合并后的配置字典
+        """
+        merged = default_config.copy()
+        
+        for key, value in specific_config.items():
+            if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+                # 递归合并嵌套字典
+                merged[key] = CrossRingConfig._merge_configs(merged[key], value)
+            else:
+                # 直接覆盖
+                merged[key] = value
+                
+        return merged
 
     @classmethod
     def create_preset_config(cls, preset_name: str, **kwargs) -> "CrossRingConfig":

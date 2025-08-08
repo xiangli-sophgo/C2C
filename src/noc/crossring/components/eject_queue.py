@@ -47,12 +47,8 @@ class EjectQueue:
         # eject输入FIFO
         self.eject_input_fifos = self._create_eject_input_fifos()
 
-        # Eject轮询仲裁器状态
-        self.eject_arbitration_state = {
-            "req": {"current_source": 0, "current_ip": 0, "sources": [], "last_served_source": {}, "last_served_ip": {}},
-            "rsp": {"current_source": 0, "current_ip": 0, "sources": [], "last_served_source": {}, "last_served_ip": {}},
-            "data": {"current_source": 0, "current_ip": 0, "sources": [], "last_served_source": {}, "last_served_ip": {}},
-        }
+        # Eject轮询仲裁器状态：按IP通道独立轮询
+        self.eject_arbitration_state = {}  # 将在connect_ip时为每个IP通道创建独立的轮询状态
 
         # 性能统计
         self.stats = {"ejected_flits": {"req": 0, "rsp": 0, "data": 0}}
@@ -88,11 +84,16 @@ class EjectQueue:
                     f"ip_eject_channel_{channel}_{ip_id}_{self.node_id}", self.eq_ch_depth
                 )
 
-            # 更新eject仲裁状态中的IP列表
+            # 为每个IP的每个通道创建独立的轮询状态
             for channel in ["req", "rsp", "data"]:
-                arb_state = self.eject_arbitration_state[channel]
-                arb_state["current_ip"] = 0
-                arb_state["last_served_ip"] = {ip_id: 0 for ip_id in self.connected_ips}
+                ip_channel_key = f"{ip_id}_{channel}"
+                if ip_channel_key not in self.eject_arbitration_state:
+                    active_sources = self._get_active_eject_sources()
+                    self.eject_arbitration_state[ip_channel_key] = {
+                        "current_source": 0,
+                        "sources": active_sources.copy(),
+                        "last_served_source": {source: 0 for source in active_sources}
+                    }
             return True
         else:
             return False
@@ -127,61 +128,82 @@ class EjectQueue:
             inject_input_fifos: 注入方向FIFO
             ring_bridge: RingBridge实例
         """
-        # 首先初始化源列表（如果还没有初始化）
-        if not self.eject_arbitration_state["req"]["sources"]:
-            active_sources = self._get_active_eject_sources()
-            for channel in ["req", "rsp", "data"]:
-                arb_state = self.eject_arbitration_state[channel]
-                arb_state["sources"] = active_sources.copy()
-                arb_state["last_served_source"] = {source: 0 for source in active_sources}
-
         # 存储传输计划
         self._eject_transfer_plan = []
 
-        # 为每个通道计算eject仲裁
+        # 为每个IP通道计算eject仲裁
         for channel in ["req", "rsp", "data"]:
             self._compute_channel_eject_arbitration(channel, cycle, inject_input_fifos, ring_bridge)
 
     def _compute_channel_eject_arbitration(self, channel: str, cycle: int, inject_input_fifos: Dict, ring_bridge) -> None:
-        """计算单个通道的eject仲裁，支持不同IP的并行传输。"""
+        """计算单个通道的eject仲裁，为每个IP通道独立轮询。"""
         if not self.connected_ips:
             return
 
-        arb_state = self.eject_arbitration_state[channel]
-        sources = arb_state["sources"]
+        # 收集所有源的可用flit
+        available_flits = {}  # {source: [flit1, flit2, ...]}
+        active_sources = self._get_active_eject_sources()
         
-        # 记录每个IP是否已被占用（同一IP只能接收一个flit）
-        ip_used = set()
-        first_transfer_source_idx = None  # 记录第一个成功传输的源索引
-
-        # 轮询所有输入源
-        for source_attempt in range(len(sources)):
-            current_source_idx = (arb_state["current_source"] + source_attempt) % len(sources)
-            source = sources[current_source_idx]
-
-            # 获取来自当前源的flit (使用peek，不实际读取)
+        for source in active_sources:
             flit = self._peek_flit_from_eject_source(source, channel, inject_input_fifos, ring_bridge)
             if flit is not None:
-                # 找到flit，现在确定分配给哪个IP
                 target_ip = self._find_target_ip_for_flit(flit, channel, cycle)
-                if target_ip and target_ip not in ip_used:
-                    # 保存传输计划
-                    self._eject_transfer_plan.append((source, channel, flit, target_ip))
-                    arb_state["last_served_source"][source] = cycle
-                    ip_used.add(target_ip)  # 标记该IP已被占用
-                    
-                    # 记录第一个成功传输的源索引
-                    if first_transfer_source_idx is None:
-                        first_transfer_source_idx = current_source_idx
-                    
-                    # 继续检查其他源（不break），允许不同IP的并行传输
+                if target_ip:
+                    if source not in available_flits:
+                        available_flits[source] = []
+                    available_flits[source].append((flit, target_ip))
 
-        # 更新起始源索引，确保下次从不同源开始
-        if first_transfer_source_idx is not None:
-            arb_state["current_source"] = (first_transfer_source_idx + 1) % len(sources)
-        else:
-            # 没有成功传输，也要更新索引确保轮询
-            arb_state["current_source"] = (arb_state["current_source"] + 1) % len(sources)
+        # 为每个IP通道独立进行轮询仲裁
+        for ip_id in self.connected_ips:
+            ip_channel_key = f"{ip_id}_{channel}"
+            if ip_channel_key not in self.eject_arbitration_state:
+                continue
+                
+            arb_state = self.eject_arbitration_state[ip_channel_key]
+            sources = arb_state["sources"]
+            
+            # 检查目标为该IP的可用源
+            candidate_sources = []
+            for source in sources:
+                if source in available_flits:
+                    for flit, target_ip in available_flits[source]:
+                        if target_ip == ip_id:
+                            candidate_sources.append((source, flit))
+                            break  # 每个源只取一个flit
+            
+            if candidate_sources:
+                # 按轮询顺序选择源
+                selected_source = None
+                selected_flit = None
+                
+                for source_attempt in range(len(sources)):
+                    current_source_idx = (arb_state["current_source"] + source_attempt) % len(sources)
+                    current_source = sources[current_source_idx]
+                    
+                    # 检查当前源是否有候选flit
+                    for source, flit in candidate_sources:
+                        if source == current_source:
+                            selected_source = source
+                            selected_flit = flit
+                            break
+                    
+                    if selected_source:
+                        break
+                
+                if selected_source and selected_flit:
+                    # 保存传输计划
+                    self._eject_transfer_plan.append((selected_source, channel, selected_flit, ip_id))
+                    arb_state["last_served_source"][selected_source] = cycle
+                    
+                    # 从available_flits中移除已选择的flit，避免重复分配
+                    if selected_source in available_flits:
+                        available_flits[selected_source] = [(f, t) for f, t in available_flits[selected_source] 
+                                                          if f != selected_flit or t != ip_id]
+                        if not available_flits[selected_source]:
+                            del available_flits[selected_source]
+                
+                # 更新该IP通道的轮询指针
+                arb_state["current_source"] = (arb_state["current_source"] + 1) % len(sources)
 
     def execute_arbitration(self, cycle: int, inject_input_fifos: Dict, ring_bridge) -> None:
         """
@@ -310,19 +332,7 @@ class EjectQueue:
                     if eject_buffer.ready_signal():
                         return ip_id
 
-        # 如果没有匹配的IP，使用round-robin逻辑
-        arb_state = self.eject_arbitration_state[channel]
-        for ip_attempt in range(len(self.connected_ips)):
-            current_ip_idx = arb_state["current_ip"]
-            ip_id = self.connected_ips[current_ip_idx]
-
-            eject_buffer = self.ip_eject_channel_buffers[ip_id][channel]
-            if eject_buffer.ready_signal():
-                arb_state["current_ip"] = (current_ip_idx + 1) % len(self.connected_ips)
-                return ip_id
-
-            arb_state["current_ip"] = (current_ip_idx + 1) % len(self.connected_ips)
-
+        # 如果没有匹配的IP，返回None（轮询现在在更高层处理）
         return None
 
     def _assign_flit_to_ip(self, flit: CrossRingFlit, ip_id: str, channel: str, cycle: int) -> bool:
@@ -332,9 +342,7 @@ class EjectQueue:
             # 更新flit状态
             flit.flit_position = "EQ_CH"
 
-            # 更新IP仲裁状态
-            arb_state = self.eject_arbitration_state[channel]
-            arb_state["last_served_ip"][ip_id] = cycle
+            # IP仲裁状态更新现在在独立的IP通道轮询中处理
 
             # 释放E-Tag entry（如果flit有allocated_entry_info）
             if hasattr(flit, "allocated_entry_info") and self.parent_node:

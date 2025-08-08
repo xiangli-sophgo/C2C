@@ -31,8 +31,8 @@ def main():
 
     # 3. 配置各种选项
     model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)
-    # model.setup_debug(trace_packets=[153], update_interval=0.0)
-    # model.setup_visualization(enable=True, update_interval=0.5, start_cycle=100)
+    # model.setup_debug(trace_packets=[128], update_interval=0.0)
+    model.setup_visualization(enable=True, update_interval=0.5, start_cycle=200)
 
     model.setup_result_analysis(
         # 图片生成控制

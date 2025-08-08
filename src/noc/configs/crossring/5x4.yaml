@@ -1,40 +1,19 @@
-# CrossRing 5x4 拓扑配置
+# CrossRing 5x4 拓扑配置 - 只覆盖与默认值不同的参数
 topology:
-  num_row: 5
-  num_col: 4
-
-basic:
-  network_frequency: 2
-
-tracker:
-  rn_r_tracker_ostd: 64
-  rn_w_tracker_ostd: 64
-  sn_ddr_r_tracker_ostd: 64
-  sn_ddr_w_tracker_ostd: 64
-  sn_l2m_r_tracker_ostd: 64
-  sn_l2m_w_tracker_ostd: 64
-  sn_tracker_release_latency: 40
-
-latency:
-  ddr_r_latency: 40
-  ddr_w_latency: 0
-  l2m_r_latency: 12
-  l2m_w_latency: 16
+  NUM_ROW: 5
+  NUM_COL: 4
 
 fifo:
-  iq_ch_depth: 4
-  eq_ch_depth: 4
-  iq_out_fifo_depth: 8
-  rb_out_fifo_depth: 8
-  rb_in_fifo_depth: 16
-  eq_in_fifo_depth: 16
+  IQ_CH_DEPTH: 4
+  EQ_CH_DEPTH: 4
 
-tag:
-  tl_etag_t2_ue_max: 8
-  tl_etag_t1_ue_max: 15
-  tr_etag_t2_ue_max: 12
-  tu_etag_t2_ue_max: 8
-  tu_etag_t1_ue_max: 15
-  td_etag_t2_ue_max: 12
-  etag_bothside_upgrade: 0  # 默认值
-  itag_trigger_th_h: 80
+tracker:
+  RN_R_TRACKER_OSTD: 64
+  RN_W_TRACKER_OSTD: 64
+  SN_DDR_R_TRACKER_OSTD: 64
+  SN_DDR_W_TRACKER_OSTD: 64
+  SN_L2M_R_TRACKER_OSTD: 64
+  SN_L2M_W_TRACKER_OSTD: 64
+
+latency:
+  DDR_R_LATENCY: 40

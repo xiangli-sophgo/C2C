@@ -47,12 +47,15 @@ class InjectQueue:
         # 方向化的注入队列
         self.inject_input_fifos = self._create_direction_fifos()
 
-        # 注入仲裁状态 - 改为轮询通道-IP组合
-        self.inject_arbitration_state = {
-            "req": {"current_ip_index": 0},
-            "rsp": {"current_ip_index": 0}, 
-            "data": {"current_ip_index": 0},
-        }
+        # 注入仲裁状态 - 按通道和输出方向二维独立轮询IP
+        self.inject_arbitration_state = {}
+        for channel in ["req", "rsp", "data"]:
+            self.inject_arbitration_state[channel] = {}
+            for direction in ["TR", "TL", "TU", "TD", "EQ"]:
+                self.inject_arbitration_state[channel][direction] = {
+                    "current_ip_index": 0,
+                    "ip_list": []
+                }
 
         # 传输计划（两阶段执行用）
         self._inject_transfer_plan = []
@@ -96,6 +99,12 @@ class InjectQueue:
                 fifo._stats_sample_interval = sample_interval
                 self.ip_inject_channel_buffers[ip_id][channel] = fifo
 
+            # 为每个(channel, direction)组合添加该IP到轮询列表
+            for channel in ["req", "rsp", "data"]:
+                for direction in ["TR", "TL", "TU", "TD", "EQ"]:
+                    if ip_id not in self.inject_arbitration_state[channel][direction]["ip_list"]:
+                        self.inject_arbitration_state[channel][direction]["ip_list"].append(ip_id)
+
             return True
         else:
             return False
@@ -133,8 +142,7 @@ class InjectQueue:
 
     def compute_arbitration(self, cycle: int) -> None:
         """
-        计算阶段：确定要传输的flit但不执行传输。
-        使用轮询机制确保公平性，支持不同方向的并行传输。
+        计算阶段：按(channel, direction)二维独立轮询IP。
 
         Args:
             cycle: 当前周期
@@ -145,76 +153,64 @@ class InjectQueue:
         if not self.connected_ips:
             return
 
-        # 限制每个周期处理的最大传输数，避免饥饿
-        max_transfers_per_cycle = len(self.connected_ips) * 3  # 每个IP最多处理3个通道
-        transfers_planned = 0
+        # 记录已被占用的方向（全局限制：每个方向每周期只能有一个flit）
+        direction_used = set()
 
-        # 按通道轮询IP，确保每个通道内的公平性
-        channels = ["req", "rsp", "data"]
-        for channel in channels:
-            if transfers_planned >= max_transfers_per_cycle:
-                break
+        # 按(channel, direction)组合进行独立轮询
+        for channel in ["req", "rsp", "data"]:
+            for direction in ["TR", "TL", "TU", "TD", "EQ"]:
+                if direction in direction_used:
+                    continue  # 该方向已被占用
+
+                arb_state = self.inject_arbitration_state[channel][direction]
+                ip_list = arb_state["ip_list"]
                 
-            # 获取当前通道的轮询状态
-            arb_state = self.inject_arbitration_state[channel]
-            start_ip_index = arb_state["current_ip_index"]
-            
-            # 记录每个方向是否已被占用（同一方向只能有一个flit）
-            direction_used = set()
-            channel_has_transfer = False  # 标记当前通道是否有传输
-            
-            # 为当前通道轮询所有IP
-            for ip_offset in range(len(self.connected_ips)):
-                if transfers_planned >= max_transfers_per_cycle:
+                if not ip_list:
+                    continue  # 该(channel, direction)没有IP
+                
+                # 在该(channel, direction)内轮询IP
+                current_ip_index = arb_state["current_ip_index"]
+                selected_ip = None
+                selected_flit = None
+                
+                for ip_offset in range(len(ip_list)):
+                    ip_index = (current_ip_index + ip_offset) % len(ip_list)
+                    ip_id = ip_list[ip_index]
+                    
+                    if ip_id not in self.ip_inject_channel_buffers:
+                        continue
+
+                    # 检查该IP的channel buffer
+                    channel_buffer = self.ip_inject_channel_buffers[ip_id][channel]
+                    if not channel_buffer.valid_signal():
+                        continue
+
+                    flit = channel_buffer.peek_output()
+                    if flit is None:
+                        continue
+
+                    # 确定flit的目标方向
+                    target_direction = self._find_target_direction_for_flit(flit, channel)
+                    if target_direction != direction:
+                        continue  # 不是当前轮询的方向
+
+                    # 检查目标方向FIFO是否可用
+                    direction_fifo = self.inject_input_fifos[channel][direction]
+                    if not direction_fifo.ready_signal():
+                        continue
+
+                    # 找到了可传输的flit
+                    selected_ip = ip_id
+                    selected_flit = flit
                     break
-                    
-                # 计算实际的IP索引
-                ip_index = (start_ip_index + ip_offset) % len(self.connected_ips)
-                ip_id = self.connected_ips[ip_index]
+
+                if selected_ip and selected_flit:
+                    # 计划传输
+                    self._inject_transfer_plan.append((selected_ip, channel, selected_flit, direction))
+                    direction_used.add(direction)
                 
-                if ip_id not in self.ip_inject_channel_buffers:
-                    continue
-                    
-                channel_buffer = self.ip_inject_channel_buffers[ip_id][channel]
-                
-                if not channel_buffer.valid_signal():
-                    continue
-
-                # 获取flit并计算路由方向
-                flit = channel_buffer.peek_output()
-                if flit is None:
-                    continue
-
-                # 计算正确的路由方向
-                if self.topology and hasattr(self.topology, "routing_table"):
-                    correct_direction = self.topology.get_next_direction(self.node_id, flit.destination)
-                else:
-                    correct_direction = self._calculate_routing_direction_fallback(flit)
-                if correct_direction == "INVALID":
-                    continue
-
-                # 检查该方向是否已被占用
-                if correct_direction in direction_used:
-                    continue  # 该方向已有flit，跳过
-
-                # 检查目标inject_direction_fifo是否有空间
-                target_fifo = self.inject_input_fifos[channel][correct_direction]
-                if target_fifo.ready_signal():
-                    # 规划传输
-                    self._inject_transfer_plan.append((ip_id, channel, flit, correct_direction))
-                    transfers_planned += 1
-                    channel_has_transfer = True
-                    direction_used.add(correct_direction)  # 标记该方向已被占用
-                    
-                    # 如果是第一个成功的传输，更新起始索引
-                    if len(direction_used) == 1:
-                        arb_state["current_ip_index"] = (ip_index + 1) % len(self.connected_ips)
-                    
-                    # 继续检查其他IP（不break），允许不同方向的并行传输
-            
-            # 如果当前通道没有找到可传输的，更新索引确保轮询
-            if not channel_has_transfer:
-                arb_state["current_ip_index"] = (start_ip_index + 1) % len(self.connected_ips)
+                # 更新该(channel, direction)的轮询指针（无论是否找到flit都要更新）
+                arb_state["current_ip_index"] = (arb_state["current_ip_index"] + 1) % len(ip_list)
 
     def execute_arbitration(self, cycle: int) -> None:
         """
@@ -325,6 +321,31 @@ class InjectQueue:
                 return "TD" if dest_row > curr_row else "TU"
 
         return "EQ"
+
+    def _find_target_direction_for_flit(self, flit: CrossRingFlit, channel: str) -> str:
+        """
+        确定flit的目标传输方向。
+        
+        Args:
+            flit: 要路由的flit
+            channel: 通道类型
+            
+        Returns:
+            目标方向（"TR", "TL", "TU", "TD", "EQ"）
+        """
+        # 优先使用拓扑路由表
+        if self.topology and hasattr(self.topology, 'get_next_direction'):
+            try:
+                direction = self.topology.get_next_direction(
+                    self.coordinates, flit.destination, flit
+                )
+                if direction:
+                    return direction
+            except Exception:
+                pass  # 回退到默认路由
+        
+        # 使用回退路由计算
+        return self._calculate_routing_direction_fallback(flit)
 
     def _get_routing_strategy(self) -> str:
         """获取路由策略的辅助方法。"""

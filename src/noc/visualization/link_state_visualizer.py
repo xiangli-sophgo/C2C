@@ -287,13 +287,25 @@ class LinkStateVisualizer:
         # 设置坐标轴
         margin = 1.0
         if self.node_positions:
-            min_x = min(pos[0] for pos in self.node_positions.values()) - margin
-            max_x = max(pos[0] for pos in self.node_positions.values()) + margin
-            min_y = min(pos[1] for pos in self.node_positions.values()) - margin
-            max_y = max(pos[1] for pos in self.node_positions.values()) + margin
+            try:
+                min_x = min(pos[0] for pos in self.node_positions.values()) - margin
+                max_x = max(pos[0] for pos in self.node_positions.values()) + margin
+                min_y = min(pos[1] for pos in self.node_positions.values()) - margin
+                max_y = max(pos[1] for pos in self.node_positions.values()) + margin
 
-            self.link_ax.set_xlim(min_x, max_x)
-            self.link_ax.set_ylim(min_y, max_y)
+                # 验证坐标轴限制的有效性
+                if max_x > min_x and max_y > min_y:
+                    self.link_ax.set_xlim(min_x, max_x)
+                    self.link_ax.set_ylim(min_y, max_y)
+                else:
+                    # 使用默认限制
+                    self.link_ax.set_xlim(-2, 8)
+                    self.link_ax.set_ylim(-2, 6)
+            except Exception as e:
+                # 如果设置坐标轴限制失败，使用默认值
+                print(f"警告：设置坐标轴限制时出现错误: {e}")
+                self.link_ax.set_xlim(-2, 8)
+                self.link_ax.set_ylim(-2, 6)
 
         # 设置坐标轴比例为相等，确保正方形不被拉伸
         self.link_ax.set_aspect("equal")
@@ -584,7 +596,11 @@ class LinkStateVisualizer:
         self._reapply_all_flit_styles()
 
         # 触发重绘
-        self.fig.canvas.draw_idle()
+        try:
+            self.fig.canvas.draw_idle()
+        except Exception as e:
+            print(f"警告：matplotlib重绘时出现错误: {e}")
+            pass
 
     def _reapply_all_flit_styles(self):
         """重新应用所有flit的样式，用于高亮状态改变后"""
@@ -721,7 +737,11 @@ class LinkStateVisualizer:
 
         # 更新节点标题
         self._update_node_title()
-        self.fig.canvas.draw_idle()
+        try:
+            self.fig.canvas.draw_idle()
+        except Exception as e:
+            print(f"警告：节点选择时matplotlib绘图错误: {e}")
+            pass
 
     def _draw_selection_box(self):
         """绘制选中节点的红色虚线框"""
@@ -789,7 +809,11 @@ class LinkStateVisualizer:
             # 同时更新节点显示
             if hasattr(self, "node_vis") and self.node_vis and self._selected_node is not None:
                 self.node_vis.render_node_from_snapshot(self._selected_node, cycle)
-            self.fig.canvas.draw_idle()
+            try:
+                self.fig.canvas.draw_idle()
+            except Exception as e:
+                print(f"警告：matplotlib绘图错误: {e}")
+                pass
 
     def _replay_next(self):
         """回放下一帧（仅暂停时有效）"""
@@ -814,7 +838,11 @@ class LinkStateVisualizer:
             # 同时更新节点显示
             if hasattr(self, "node_vis") and self.node_vis and self._selected_node is not None:
                 self.node_vis.render_node_from_snapshot(self._selected_node, cycle)
-            self.fig.canvas.draw_idle()
+            try:
+                self.fig.canvas.draw_idle()
+            except Exception as e:
+                print(f"警告：matplotlib绘图错误: {e}")
+                pass
 
     def _toggle_pause(self):
         """切换暂停状态"""
@@ -830,7 +858,11 @@ class LinkStateVisualizer:
                     self._play_idx = len(self.history) - 1
                     cycle, snapshot_data = self.history[self._play_idx]
                     self._render_from_snapshot(snapshot_data)
-                    self.fig.canvas.draw_idle()
+                    try:
+                        self.fig.canvas.draw_idle()
+                    except Exception as e:
+                        print(f"警告：matplotlib绘图错误: {e}")
+                        pass
                 status = "暂停"
             else:
                 # 退出暂停：回到实时模式
@@ -915,7 +947,11 @@ CrossRing可视化控制键:
         if self._parent_model:
             self.update(self._parent_model)
 
-        self.fig.canvas.draw_idle()
+        try:
+            self.fig.canvas.draw_idle()
+        except Exception as e:
+            print(f"警告：matplotlib绘图错误: {e}")
+            pass
 
     def _update_network_title(self):
         """更新网络标题"""
@@ -943,7 +979,11 @@ CrossRing可视化控制键:
         # 立即重新应用所有flit的样式
         self._reapply_all_flit_styles()
 
-        self.fig.canvas.draw_idle()
+        try:
+            self.fig.canvas.draw_idle()
+        except Exception as e:
+            print(f"警告：matplotlib绘图错误: {e}")
+            pass
 
     def _on_toggle_tags(self, event):
         """切换标签显示"""
@@ -963,7 +1003,11 @@ CrossRing可视化控制键:
         # 立即重新应用所有flit的样式
         self._reapply_all_flit_styles()
         
-        self.fig.canvas.draw_idle()
+        try:
+            self.fig.canvas.draw_idle()
+        except Exception as e:
+            print(f"警告：matplotlib绘图错误: {e}")
+            pass
 
     def _on_highlight_callback(self, packet_id, flit_id):
         """高亮回调"""
@@ -1009,7 +1053,11 @@ CrossRing可视化控制键:
         self._update_status_display()
 
         if not skip_pause:
-            self.fig.canvas.draw_idle()
+            try:
+                self.fig.canvas.draw_idle()
+            except Exception as e:
+                print(f"警告：matplotlib绘图时出现错误: {e}")
+                pass  # 忽略绘图错误，继续执行
 
     def _save_history_snapshot(self, model, cycle):
         """保存历史快照 - 完整的链路网络状态"""
