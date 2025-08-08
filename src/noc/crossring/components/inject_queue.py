@@ -153,15 +153,9 @@ class InjectQueue:
         if not self.connected_ips:
             return
 
-        # 记录已被占用的方向（全局限制：每个方向每周期只能有一个flit）
-        direction_used = set()
-
         # 按(channel, direction)组合进行独立轮询
         for channel in ["req", "rsp", "data"]:
             for direction in ["TR", "TL", "TU", "TD", "EQ"]:
-                if direction in direction_used:
-                    continue  # 该方向已被占用
-
                 arb_state = self.inject_arbitration_state[channel][direction]
                 ip_list = arb_state["ip_list"]
                 
@@ -207,7 +201,6 @@ class InjectQueue:
                 if selected_ip and selected_flit:
                     # 计划传输
                     self._inject_transfer_plan.append((selected_ip, channel, selected_flit, direction))
-                    direction_used.add(direction)
                 
                 # 更新该(channel, direction)的轮询指针（无论是否找到flit都要更新）
                 arb_state["current_ip_index"] = (arb_state["current_ip_index"] + 1) % len(ip_list)
