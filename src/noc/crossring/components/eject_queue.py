@@ -36,7 +36,6 @@ class EjectQueue:
         self.eq_in_depth = config.fifo_config.EQ_IN_FIFO_DEPTH
         self.eq_ch_depth = config.fifo_config.EQ_CH_DEPTH
 
-        # 调试：验证FIFO深度配置
 
         # 连接的IP列表
         self.connected_ips = []
@@ -59,17 +58,13 @@ class EjectQueue:
 
     def _create_eject_input_fifos(self) -> Dict[str, Dict[str, PipelinedFIFO]]:
         """创建eject输入FIFO集合。"""
-        # 获取统计采样间隔
-        sample_interval = self.config.basic_config.FIFO_STATS_SAMPLE_INTERVAL
-        
         result = {}
         for channel in ["req", "rsp", "data"]:
             result[channel] = {}
             for direction in ["TU", "TD", "TR", "TL"]:
-                fifo = PipelinedFIFO(f"eject_in_{channel}_{direction}_{self.node_id}", depth=self.eq_in_depth)
-                # 设置统计采样间隔
-                fifo._stats_sample_interval = sample_interval
-                result[channel][direction] = fifo
+                result[channel][direction] = self._create_fifo(
+                    f"eject_in_{channel}_{direction}_{self.node_id}", self.eq_in_depth
+                )
         return result
 
     def connect_ip(self, ip_id: str) -> bool:
@@ -86,35 +81,22 @@ class EjectQueue:
             self.connected_ips.append(ip_id)
 
             # 为这个IP创建eject channel_buffer
-            # 获取统计采样间隔
-            sample_interval = self.config.basic_config.FIFO_STATS_SAMPLE_INTERVAL
-            
             self.ip_eject_channel_buffers[ip_id] = {}
             for channel in ["req", "rsp", "data"]:
-                fifo = PipelinedFIFO(f"ip_eject_channel_{channel}_{ip_id}_{self.node_id}", depth=self.eq_ch_depth)
-                # 设置统计采样间隔
-                fifo._stats_sample_interval = sample_interval
-                self.ip_eject_channel_buffers[ip_id][channel] = fifo
+                self.ip_eject_channel_buffers[ip_id][channel] = self._create_fifo(
+                    f"ip_eject_channel_{channel}_{ip_id}_{self.node_id}", self.eq_ch_depth
+                )
 
             # 更新eject仲裁状态中的IP列表
-            self._update_eject_arbitration_ips()
+            for channel in ["req", "rsp", "data"]:
+                arb_state = self.eject_arbitration_state[channel]
+                arb_state["current_ip"] = 0
+                arb_state["last_served_ip"] = {ip_id: 0 for ip_id in self.connected_ips}
             return True
         else:
             return False
 
-    def disconnect_ip(self, ip_id: str) -> None:
-        """断开IP连接。"""
-        if ip_id in self.connected_ips:
-            self.connected_ips.remove(ip_id)
-            del self.ip_eject_channel_buffers[ip_id]
-            self._update_eject_arbitration_ips()
 
-    def _update_eject_arbitration_ips(self) -> None:
-        """更新eject仲裁状态中的IP列表。"""
-        for channel in ["req", "rsp", "data"]:
-            arb_state = self.eject_arbitration_state[channel]
-            arb_state["current_ip"] = 0
-            arb_state["last_served_ip"] = {ip_id: 0 for ip_id in self.connected_ips}
 
     def _get_active_eject_sources(self) -> List[str]:
         """根据路由策略获取活跃的eject输入源。"""
@@ -134,14 +116,6 @@ class EjectQueue:
 
         return sources
 
-    def _initialize_eject_arbitration_sources(self) -> None:
-        """初始化eject仲裁的源列表。"""
-        active_sources = self._get_active_eject_sources()
-
-        for channel in ["req", "rsp", "data"]:
-            arb_state = self.eject_arbitration_state[channel]
-            arb_state["sources"] = active_sources.copy()
-            arb_state["last_served_source"] = {source: 0 for source in active_sources}
 
     def compute_arbitration(self, cycle: int, inject_input_fifos: Dict, ring_bridge) -> None:
         """
@@ -154,7 +128,11 @@ class EjectQueue:
         """
         # 首先初始化源列表（如果还没有初始化）
         if not self.eject_arbitration_state["req"]["sources"]:
-            self._initialize_eject_arbitration_sources()
+            active_sources = self._get_active_eject_sources()
+            for channel in ["req", "rsp", "data"]:
+                arb_state = self.eject_arbitration_state[channel]
+                arb_state["sources"] = active_sources.copy()
+                arb_state["last_served_source"] = {source: 0 for source in active_sources}
 
         # 存储传输计划
         self._eject_transfer_plan = []
@@ -196,10 +174,6 @@ class EjectQueue:
                         first_transfer_source_idx = current_source_idx
                     
                     # 继续检查其他源（不break），允许不同IP的并行传输
-                else:
-                    pass
-            else:
-                pass
 
         # 更新起始源索引，确保下次从不同源开始
         if first_transfer_source_idx is not None:
@@ -258,8 +232,6 @@ class EjectQueue:
             read_this_cycle = input_fifo.read_this_cycle
             if is_valid:
                 return input_fifo.peek_output()
-            elif channel == "data" and source == "TD" and self.node_id == 4 and queue_len >= input_fifo.max_depth:
-                return None
 
         return None
 
@@ -393,40 +365,46 @@ class EjectQueue:
         """IP从其eject channel buffer获取flit。"""
         if ip_id not in self.connected_ips:
             raise ValueError(f"IP {ip_id}未连接到节点{self.node_id}")
-            return None
 
         eject_buffer = self.ip_eject_channel_buffers[ip_id][channel]
         if eject_buffer.valid_signal():
             return eject_buffer.read_output()
         return None
 
-    def step_compute_phase(self, cycle: int) -> None:
-        """FIFO组合逻辑更新。"""
+    def _create_fifo(self, name: str, depth: int) -> PipelinedFIFO:
+        """创建FIFO的辅助方法。"""
+        fifo = PipelinedFIFO(name, depth=depth)
+        fifo._stats_sample_interval = self.config.basic_config.FIFO_STATS_SAMPLE_INTERVAL
+        return fifo
+
+    def _step_all_fifos(self, method_name: str, cycle: int = None) -> None:
+        """对所有FIFO执行指定方法的辅助函数。"""
         # 更新IP eject channel buffers
         for ip_id in self.connected_ips:
             for channel in ["req", "rsp", "data"]:
-                self.ip_eject_channel_buffers[ip_id][channel].step_compute_phase(cycle)
+                fifo = self.ip_eject_channel_buffers[ip_id][channel]
+                if cycle is not None:
+                    getattr(fifo, method_name)(cycle)
+                else:
+                    getattr(fifo, method_name)()
 
         # 更新eject input FIFOs
         for channel in ["req", "rsp", "data"]:
             for direction in ["TU", "TD", "TR", "TL"]:
-                self.eject_input_fifos[channel][direction].step_compute_phase(cycle)
+                fifo = self.eject_input_fifos[channel][direction]
+                if cycle is not None:
+                    getattr(fifo, method_name)(cycle)
+                else:
+                    getattr(fifo, method_name)()
+
+    def step_compute_phase(self, cycle: int) -> None:
+        """FIFO组合逻辑更新。"""
+        self._step_all_fifos("step_compute_phase", cycle)
 
     def step_update_phase(self) -> None:
         """FIFO时序逻辑更新。"""
-        # 更新IP eject channel buffers
-        for ip_id in self.connected_ips:
-            for channel in ["req", "rsp", "data"]:
-                self.ip_eject_channel_buffers[ip_id][channel].step_update_phase()
+        self._step_all_fifos("step_update_phase")
 
-        # 更新eject input FIFOs
-        for channel in ["req", "rsp", "data"]:
-            for direction in ["TU", "TD", "TR", "TL"]:
-                self.eject_input_fifos[channel][direction].step_update_phase()
-
-    def get_connected_ips(self) -> List[str]:
-        """获取连接的IP列表。"""
-        return self.connected_ips.copy()
 
     def get_stats(self) -> Dict:
         """获取统计信息。"""

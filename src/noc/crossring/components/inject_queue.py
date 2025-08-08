@@ -185,7 +185,10 @@ class InjectQueue:
                     continue
 
                 # 计算正确的路由方向
-                correct_direction = self._calculate_routing_direction(flit)
+                if self.topology and hasattr(self.topology, "routing_table"):
+                    correct_direction = self.topology.get_next_direction(self.node_id, flit.destination)
+                else:
+                    correct_direction = self._calculate_routing_direction_fallback(flit)
                 if correct_direction == "INVALID":
                     continue
 
@@ -232,52 +235,35 @@ class InjectQueue:
                 actual_flit.flit_position = f"IQ_{direction}"
                 actual_flit.current_node_id = self.node_id
 
-                # 更新仲裁状态 - 暂时注释掉，因为新的轮询机制不需要这个
-                # arb_state = self.inject_arbitration_state[channel]
-                # if "last_served" not in arb_state:
-                #     arb_state["last_served"] = {}
-                # arb_state["last_served"][direction] = cycle
+
+    def _step_all_fifos(self, method_name: str, cycle: int = None) -> None:
+        """对所有FIFO执行指定方法的辅助函数。"""
+        # 更新IP inject channel buffers
+        for ip_id in self.connected_ips:
+            for channel in ["req", "rsp", "data"]:
+                fifo = self.ip_inject_channel_buffers[ip_id][channel]
+                if cycle is not None:
+                    getattr(fifo, method_name)(cycle)
+                else:
+                    getattr(fifo, method_name)()
+
+        # 更新inject direction FIFOs
+        for channel in ["req", "rsp", "data"]:
+            for direction in ["TR", "TL", "TU", "TD", "EQ"]:
+                fifo = self.inject_input_fifos[channel][direction]
+                if cycle is not None:
+                    getattr(fifo, method_name)(cycle)
+                else:
+                    getattr(fifo, method_name)()
 
     def step_compute_phase(self, cycle: int) -> None:
         """FIFO组合逻辑更新。"""
-        # 更新IP inject channel buffers
-        for ip_id in self.connected_ips:
-            for channel in ["req", "rsp", "data"]:
-                self.ip_inject_channel_buffers[ip_id][channel].step_compute_phase(cycle)
-
-        # 更新inject direction FIFOs
-        for channel in ["req", "rsp", "data"]:
-            for direction in ["TR", "TL", "TU", "TD", "EQ"]:
-                self.inject_input_fifos[channel][direction].step_compute_phase(cycle)
+        self._step_all_fifos("step_compute_phase", cycle)
 
     def step_update_phase(self) -> None:
         """FIFO时序逻辑更新。"""
-        # 更新IP inject channel buffers
-        for ip_id in self.connected_ips:
-            for channel in ["req", "rsp", "data"]:
-                self.ip_inject_channel_buffers[ip_id][channel].step_update_phase()
+        self._step_all_fifos("step_update_phase")
 
-        # 更新inject direction FIFOs
-        for channel in ["req", "rsp", "data"]:
-            for direction in ["TR", "TL", "TU", "TD", "EQ"]:
-                self.inject_input_fifos[channel][direction].step_update_phase()
-
-    def _calculate_routing_direction(self, flit: CrossRingFlit) -> str:
-        """
-        使用预计算的路由表获取flit的路由方向。
-
-        Args:
-            flit: 要路由的flit
-
-        Returns:
-            路由方向（"TR", "TL", "TU", "TD", "EQ"）
-        """
-        # 如果有topology对象，使用路由表
-        if self.topology and hasattr(self.topology, "routing_table"):
-            return self.topology.get_next_direction(self.node_id, flit.destination)
-
-        # 回退到原始的路由计算方法
-        return self._calculate_routing_direction_fallback(flit)
 
     def _calculate_routing_direction_fallback(self, flit: CrossRingFlit) -> str:
         """
@@ -336,6 +322,13 @@ class InjectQueue:
                 return "TD" if dest_row > curr_row else "TU"
 
         return "EQ"
+
+    def _get_routing_strategy(self) -> str:
+        """获取路由策略的辅助方法。"""
+        routing_strategy = getattr(self.config, "ROUTING_STRATEGY", "XY")
+        if hasattr(routing_strategy, "value"):
+            routing_strategy = routing_strategy.value
+        return routing_strategy
 
     def get_inject_direction_status(self) -> Dict:
         """获取注入方向队列的状态。"""

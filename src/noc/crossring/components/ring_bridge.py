@@ -58,41 +58,37 @@ class RingBridge:
             "data": {"flit": None, "output_direction": None, "input_source": None},
         }
 
+    def _create_fifo(self, name: str, depth: int) -> PipelinedFIFO:
+        """创建FIFO的辅助方法。"""
+        fifo = PipelinedFIFO(name, depth=depth)
+        fifo._stats_sample_interval = self.config.basic_config.FIFO_STATS_SAMPLE_INTERVAL
+        return fifo
+
     def _create_input_fifos(self) -> Dict[str, Dict[str, PipelinedFIFO]]:
         """创建ring_bridge输入FIFO集合。"""
-        # 获取统计采样间隔
-        sample_interval = self.config.basic_config.FIFO_STATS_SAMPLE_INTERVAL
-        
         result = {}
         for channel in ["req", "rsp", "data"]:
             result[channel] = {}
             for direction in ["TR", "TL", "TU", "TD"]:
-                fifo = PipelinedFIFO(f"ring_bridge_in_{channel}_{direction}_{self.node_id}", depth=self.rb_in_depth)
-                # 设置统计采样间隔
-                fifo._stats_sample_interval = sample_interval
-                result[channel][direction] = fifo
+                result[channel][direction] = self._create_fifo(
+                    f"ring_bridge_in_{channel}_{direction}_{self.node_id}", self.rb_in_depth
+                )
         return result
 
     def _create_output_fifos(self) -> Dict[str, Dict[str, PipelinedFIFO]]:
         """创建ring_bridge输出FIFO集合。"""
-        # 获取统计采样间隔
-        sample_interval = self.config.basic_config.FIFO_STATS_SAMPLE_INTERVAL
-        
         result = {}
         for channel in ["req", "rsp", "data"]:
             result[channel] = {}
             for direction in ["EQ", "TR", "TL", "TU", "TD"]:
-                fifo = PipelinedFIFO(f"ring_bridge_out_{channel}_{direction}_{self.node_id}", depth=self.rb_out_depth)
-                # 设置统计采样间隔
-                fifo._stats_sample_interval = sample_interval
-                result[channel][direction] = fifo
+                result[channel][direction] = self._create_fifo(
+                    f"ring_bridge_out_{channel}_{direction}_{self.node_id}", self.rb_out_depth
+                )
         return result
 
     def _get_ring_bridge_config(self) -> Tuple[List[str], List[str]]:
         """根据路由策略获取ring_bridge的输入源和输出方向配置。"""
-        routing_strategy = getattr(self.config, "ROUTING_STRATEGY", "XY")
-        if hasattr(routing_strategy, "value"):
-            routing_strategy = routing_strategy.value
+        routing_strategy = self._get_routing_strategy()
 
         # 根据路由策略配置输入源和输出方向
         if routing_strategy == "XY":
@@ -106,6 +102,13 @@ class RingBridge:
             output_directions = ["EQ", "TU", "TD", "TR", "TL"]
 
         return input_sources, output_directions
+
+    def _get_routing_strategy(self) -> str:
+        """获取路由策略的辅助方法。"""
+        routing_strategy = getattr(self.config, "ROUTING_STRATEGY", "XY")
+        if hasattr(routing_strategy, "value"):
+            routing_strategy = routing_strategy.value
+        return routing_strategy
 
     def _initialize_ring_bridge_arbitration(self) -> None:
         """初始化ring_bridge仲裁的源和方向列表 - 输出端独立仲裁。"""
@@ -134,10 +137,7 @@ class RingBridge:
         """
         input_fifo = self.ring_bridge_input_fifos[channel][direction]
         if input_fifo.ready_signal():
-            success = input_fifo.write_input(flit)
-            if success:
-                pass
-            return success
+            return input_fifo.write_input(flit)
         else:
             return False
 
@@ -181,30 +181,6 @@ class RingBridge:
         for channel in ["req", "rsp", "data"]:
             self._compute_channel_ring_bridge_arbitration(channel, cycle, inject_input_fifos)
 
-    def _compute_iq_to_rb_transfers(self, cycle: int, inject_input_fifos: Dict) -> None:
-        """计算从IQ到RB内部FIFO的传输（两阶段执行模型第一阶段）。"""
-        input_sources, _ = self._get_ring_bridge_config()
-        
-        # 初始化传输决策
-        self.iq_to_rb_transfer_decisions = {"req": {}, "rsp": {}, "data": {}}
-        
-        for channel in ["req", "rsp", "data"]:
-            for input_source in input_sources:
-                if input_source.startswith("IQ_"):
-                    direction = input_source[3:]  # 从IQ_TD得到TD
-                    
-                    # 检查IQ FIFO是否有数据
-                    iq_fifo = inject_input_fifos[channel][direction]
-                    if iq_fifo.valid_signal():
-                        # 检查RB内部FIFO是否有空间
-                        rb_input_fifo = self.ring_bridge_input_fifos[channel][direction]
-                        if rb_input_fifo.ready_signal():
-                            # 记录传输决策（在update阶段执行）
-                            self.iq_to_rb_transfer_decisions[channel][direction] = True
-                        else:
-                            self.iq_to_rb_transfer_decisions[channel][direction] = False
-                    else:
-                        self.iq_to_rb_transfer_decisions[channel][direction] = False
 
     def _compute_channel_ring_bridge_arbitration(self, channel: str, cycle: int, inject_input_fifos: Dict) -> None:
         """计算单个通道的ring_bridge仲裁决策 - 输出端独立仲裁。"""
@@ -272,28 +248,6 @@ class RingBridge:
                 if decision["flit"] is not None:
                     self._execute_channel_ring_bridge_transfer(channel, decision, cycle, inject_input_fifos)
 
-    def _execute_iq_to_rb_transfers(self, cycle: int, inject_input_fifos: Dict) -> None:
-        """执行从IQ到RB内部FIFO的传输（两阶段执行模型第一阶段）。"""
-        if not hasattr(self, 'iq_to_rb_transfer_decisions'):
-            return
-            
-        for channel in ["req", "rsp", "data"]:
-            for direction, should_transfer in self.iq_to_rb_transfer_decisions[channel].items():
-                if should_transfer:
-                    # 从IQ FIFO读取flit
-                    iq_fifo = inject_input_fifos[channel][direction]
-                    if iq_fifo.valid_signal():
-                        flit = iq_fifo.read_output()
-                        if flit is not None:
-                            # 写入RB内部FIFO
-                            rb_input_fifo = self.ring_bridge_input_fifos[channel][direction]
-                            if rb_input_fifo.ready_signal():
-                                success = rb_input_fifo.write_input(flit)
-                                if success:
-                                    # 更新flit位置信息 - 简化为RB_direction，避免重复节点ID
-                                    flit.flit_position = f"RB_{direction}"
-                                    # 可选：打印调试信息
-                                    # print(f"🔄 周期{cycle}: 节点{self.node_id} IQ_{direction} -> RB_{direction} 传输成功")
 
     def _execute_channel_ring_bridge_transfer(self, channel: str, decision: dict, cycle: int, inject_input_fifos: Dict) -> None:
         """执行单个通道的ring_bridge传输。"""
@@ -338,11 +292,30 @@ class RingBridge:
                         entry_manager = crosspoint.etag_entry_managers[direction]
                         if entry_manager.release_entry(priority):
                             crosspoint.stats["entry_releases"][channel][priority] += 1
-                            # 可选：打印调试信息
-                            # print(f"🔓 RB释放entry: 节点{self.node_id} 方向{direction} {priority}级entry")
 
                     # 清除flit的entry信息（已经释放）
                     delattr(flit, "allocated_entry_info")
+
+    def _release_entry_if_exists(self, flit, channel: str) -> None:
+        """释放entry（如果存在）"""
+        if hasattr(flit, "allocated_entry_info") and flit.allocated_entry_info:
+            entry_info = flit.allocated_entry_info
+            direction = entry_info.get("direction")
+            priority = entry_info.get("priority")
+            
+            if direction and priority and self.parent_node:
+                # 根据方向找到对应的CrossPoint
+                crosspoint = (self.parent_node.vertical_crosspoint if direction in ["TU", "TD"] 
+                            else self.parent_node.horizontal_crosspoint)
+                
+                if (crosspoint and hasattr(crosspoint, 'etag_entry_managers') and
+                    direction in crosspoint.etag_entry_managers.get(channel, {})):
+                    entry_manager = crosspoint.etag_entry_managers[channel][direction]
+                    if entry_manager.release_entry(priority):
+                        crosspoint.stats["entry_releases"][channel][priority] += 1
+                        
+                # 清除flit的entry信息
+                delattr(flit, "allocated_entry_info")
 
     def _peek_flit_from_input_source(self, input_source: str, channel: str, inject_input_fifos: Dict) -> Optional[CrossRingFlit]:
         """从指定输入源查看flit（输出端独立仲裁用）。"""
@@ -382,9 +355,9 @@ class RingBridge:
             rb_fifo = self.ring_bridge_input_fifos[channel][direction]
             if rb_fifo.valid_signal():
                 flit = rb_fifo.read_output()
-                # 通知entry释放
+                # 释放entry
                 if flit and self.parent_node:
-                    self._notify_entry_release(flit, channel, direction)
+                    self._release_entry_if_exists(flit, channel)
                 return flit
 
         elif input_source.startswith("RB_"):
@@ -392,33 +365,13 @@ class RingBridge:
             rb_fifo = self.ring_bridge_input_fifos[channel][direction]
             if rb_fifo.valid_signal():
                 flit = rb_fifo.read_output()
-                # 通知entry释放
+                # 释放entry
                 if flit and self.parent_node:
-                    self._notify_entry_release(flit, channel, direction)
+                    self._release_entry_if_exists(flit, channel)
                 return flit
 
         return None
 
-    def _notify_entry_release(self, flit, channel: str, direction: str) -> None:
-        """通知entry释放"""
-        if hasattr(flit, "allocated_entry_info") and flit.allocated_entry_info:
-            alloc_info = flit.allocated_entry_info
-            alloc_direction = alloc_info.get("direction")
-            alloc_priority = alloc_info.get("priority")
-            
-            if alloc_direction and alloc_priority:
-                # 根据方向找到对应的CrossPoint
-                crosspoint = None
-                if direction in ["TU", "TD"]:
-                    crosspoint = self.parent_node.vertical_crosspoint
-                elif direction in ["TL", "TR"]:
-                    crosspoint = self.parent_node.horizontal_crosspoint
-                
-                if crosspoint and hasattr(crosspoint, 'etag_entry_managers'):
-                    if channel in crosspoint.etag_entry_managers and alloc_direction in crosspoint.etag_entry_managers[channel]:
-                        entry_manager = crosspoint.etag_entry_managers[channel][alloc_direction]
-                        if entry_manager.release_entry(alloc_priority):
-                            crosspoint.stats["entry_releases"][channel][alloc_priority] += 1
 
     def _determine_ring_bridge_output_direction(self, flit: CrossRingFlit) -> str:
         """确定flit在ring_bridge中的输出方向。"""
@@ -460,9 +413,6 @@ class RingBridge:
             if current_node == flit.path[-1]:
                 return "EQ"
 
-            # 删除调试信息
-            # if hasattr(flit, 'packet_id') and flit.packet_id == 1:
-            #     print(f"🎯 RB节点{current_node}: flit {flit.packet_id} 路径={flit.path}, path_index={getattr(flit, 'path_index', '?')}")
 
             # 查找当前节点在路径中的位置
             try:
@@ -481,9 +431,6 @@ class RingBridge:
 
                 # 根据下一跳计算方向
                 direction = self._calculate_direction_to_next_node(current_node, next_node)
-                # 删除debug输出
-                # if hasattr(flit, 'packet_id') and flit.packet_id == 1:
-                #     print(f"   -> 下一跳: 节点{next_node}, 方向: {direction}")
                 return direction
 
             except ValueError:
@@ -507,9 +454,7 @@ class RingBridge:
         next_col = next_node % num_col
 
         # 获取路由策略
-        routing_strategy = getattr(self.config, "ROUTING_STRATEGY", "XY")
-        if hasattr(routing_strategy, "value"):
-            routing_strategy = routing_strategy.value
+        routing_strategy = self._get_routing_strategy()
 
         # 计算方向
         if routing_strategy == "XY":
@@ -561,9 +506,7 @@ class RingBridge:
             return "EQ"
 
         # 获取路由策略
-        routing_strategy = getattr(self.config, "ROUTING_STRATEGY", "XY")
-        if hasattr(routing_strategy, "value"):
-            routing_strategy = routing_strategy.value
+        routing_strategy = self._get_routing_strategy()
 
         # 计算移动需求
         need_horizontal = dest_col != curr_col
@@ -608,23 +551,29 @@ class RingBridge:
 
         return False
 
-    def step_compute_phase(self, cycle: int) -> None:
-        """FIFO组合逻辑更新。"""
-        # 更新ring_bridge input/output FIFOs
+    def _step_all_fifos(self, method_name: str, cycle: int = None) -> None:
+        """对所有FIFO执行指定方法的辅助函数。"""
         for channel in ["req", "rsp", "data"]:
             for direction in ["TR", "TL", "TU", "TD"]:
-                self.ring_bridge_input_fifos[channel][direction].step_compute_phase(cycle)
+                fifo = self.ring_bridge_input_fifos[channel][direction]
+                if cycle is not None:
+                    getattr(fifo, method_name)(cycle)
+                else:
+                    getattr(fifo, method_name)()
             for direction in ["EQ", "TR", "TL", "TU", "TD"]:
-                self.ring_bridge_output_fifos[channel][direction].step_compute_phase(cycle)
+                fifo = self.ring_bridge_output_fifos[channel][direction]
+                if cycle is not None:
+                    getattr(fifo, method_name)(cycle)
+                else:
+                    getattr(fifo, method_name)()
+
+    def step_compute_phase(self, cycle: int) -> None:
+        """FIFO组合逻辑更新。"""
+        self._step_all_fifos("step_compute_phase", cycle)
 
     def step_update_phase(self) -> None:
         """FIFO时序逻辑更新。"""
-        # 更新ring_bridge input/output FIFOs
-        for channel in ["req", "rsp", "data"]:
-            for direction in ["TR", "TL", "TU", "TD"]:
-                self.ring_bridge_input_fifos[channel][direction].step_update_phase()
-            for direction in ["EQ", "TR", "TL", "TU", "TD"]:
-                self.ring_bridge_output_fifos[channel][direction].step_update_phase()
+        self._step_all_fifos("step_update_phase")
 
     def get_stats(self) -> Dict:
         """获取统计信息。"""
