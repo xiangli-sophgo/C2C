@@ -159,7 +159,7 @@ def main():
         # CSV文件导出控制
         export_request_csv=1,
         export_fifo_csv=1,
-        export_link_csv=0,
+        export_link_csv=1,
         # 通用设置
         save_dir=save_dir,
     )

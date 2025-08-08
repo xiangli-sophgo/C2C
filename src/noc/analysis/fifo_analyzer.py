@@ -37,11 +37,63 @@ class FIFOStatsCollector:
             fifo = info["fifo"]
             stats = fifo.get_statistics()  # 使用内置统计
             
-            # 添加标识信息
-            stats["节点ID"] = info["node_id"]
-            stats["FIFO名称"] = info["simplified_name"]
+            # 从FIFO名称中提取模块类型（IQ/RB/EQ）
+            simplified_name = info["simplified_name"]
+            if "IQ_" in simplified_name:
+                module = "IQ"
+                # 只保留方向：TR/TL/TU/TD/EQ
+                if "OUT_" in simplified_name:
+                    display_name = simplified_name.split("OUT_")[-1]
+                else:
+                    display_name = simplified_name.split("IQ_")[-1]
+            elif "RB_" in simplified_name:
+                module = "RB"
+                # 只保留方向：TR/TL/TU/TD/EQ
+                if "IN_" in simplified_name:
+                    display_name = simplified_name.split("IN_")[-1]
+                elif "OUT_" in simplified_name:
+                    display_name = simplified_name.split("OUT_")[-1]
+                else:
+                    display_name = simplified_name.split("RB_")[-1]
+            elif "EQ_" in simplified_name:
+                module = "EQ"
+                # 只保留方向：TR/TL/TU/TD
+                if "IN_" in simplified_name:
+                    display_name = simplified_name.split("IN_")[-1]
+                else:
+                    display_name = simplified_name.split("EQ_")[-1]
+            elif "IP_CH_" in simplified_name:
+                module = "IQ"
+                # IQ的channel buffer：IP_CH_RN/SN -> CH_RN/SN
+                display_name = "CH_" + simplified_name.split("IP_CH_")[-1]
+            elif "IP_EJECT_" in simplified_name:
+                module = "EQ" 
+                # EQ的channel buffer：IP_EJECT_RN/SN -> CH_RN/SN
+                display_name = "CH_" + simplified_name.split("IP_EJECT_")[-1]
+            elif "L2H" in simplified_name or "H2L" in simplified_name:
+                module = "IP"
+                # 简化名称：去掉data_前缀
+                display_name = simplified_name.replace("data_", "")
+            else:
+                module = "其他"
+                display_name = simplified_name.replace("data_", "")
             
-            collected_stats.append(stats)
+            # 计算最大使用率
+            max_utilization = (stats.get("峰值深度", 0) / stats.get("最大容量", 1)) * 100 if stats.get("最大容量", 1) > 0 else 0
+            
+            # 构建符合新格式的统计数据
+            formatted_stats = {
+                "节点ID": info["node_id"],
+                "模块": module,
+                "FIFO名称": display_name,
+                "最大深度": stats.get("最大容量", 0),
+                "平均使用率(%)": stats.get("利用率百分比", 0),
+                "最大使用率(%)": round(max_utilization, 2),
+                "平均深度": stats.get("平均深度", 0),
+                "最大使用深度": stats.get("峰值深度", 0)
+            }
+            
+            collected_stats.append(formatted_stats)
             
         return collected_stats
             
@@ -62,15 +114,11 @@ class FIFOStatsCollector:
             print("⚠️ 没有收集到FIFO统计数据")
             return filepath
             
-        # 定义CSV列标题（中文）- 移除延迟统计相关列
+        # 定义CSV列标题（中文）- 按用户要求的格式
         headers = [
-            "节点ID", "FIFO名称", "最大容量",
-            "当前深度", "峰值深度", "平均深度", "利用率百分比",
-            "空队列周期数", "满队列周期数",
-            "总写入尝试", "成功写入次数", "总读取尝试", "成功读取次数",
-            "写入效率", "读取效率", "写入阻塞次数", "读取阻塞次数",
-            "溢出尝试次数", "下溢尝试次数",
-            "高优先级写入", "总仿真周期", "活跃周期百分比"
+            "节点ID", "模块", "FIFO名称", 
+            "最大深度", "平均使用率(%)", "最大使用率(%)", 
+            "平均深度", "最大使用深度"
         ]
         
         # 写入CSV文件
@@ -78,12 +126,9 @@ class FIFOStatsCollector:
             writer = csv.DictWriter(csvfile, fieldnames=headers)
             writer.writeheader()
             
+            # 直接写入格式化后的统计数据
             for stats in collected_stats:
-                # 确保所有必需的字段都存在
-                row = {}
-                for header in headers:
-                    row[header] = stats.get(header, 0)
-                writer.writerow(row)
+                writer.writerow(stats)
                 
         # 输出信息统一在结果总结中显示，这里不重复输出
         
