@@ -743,11 +743,6 @@ class CrossRingModel(BaseNoCModel):
         # 调用基类的时钟同步
         super()._sync_global_clock()
 
-        # 额外同步CrossRing节点的时钟
-        for node in self.nodes.values():
-            if hasattr(node, "current_cycle"):
-                node.current_cycle = self.cycle
-
     def step(self) -> None:
         self.cycle += 1
 

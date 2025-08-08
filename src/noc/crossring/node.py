@@ -34,6 +34,7 @@ class CrossRingNode:
         self.coordinates = coordinates
         self.config = config
         self.topology = topology
+        self.current_cycle = 0  # 统一的周期管理
 
         # 初始化组件
         self.inject_queue = InjectQueue(node_id, coordinates, config, topology=topology)
@@ -120,6 +121,8 @@ class CrossRingNode:
         """
         计算阶段：只进行组合逻辑计算和决策，不修改任何状态。
         """
+        self.current_cycle = cycle  # 更新当前周期
+        
         # 1. 所有FIFO的组合逻辑计算
         self.inject_queue.step_compute_phase(cycle)
         self.eject_queue.step_compute_phase(cycle)
@@ -141,6 +144,8 @@ class CrossRingNode:
         """
         更新阶段：基于计算阶段的决策执行状态修改。
         """
+        # 不需要再次更新current_cycle，已经在compute阶段更新过
+        
         # 1. CrossPoint更新阶段（先写入数据到FIFO）
         self.horizontal_crosspoint.step_update_phase(cycle, self.inject_queue.inject_input_fifos, self.eject_queue.eject_input_fifos, self.ring_bridge)
         self.vertical_crosspoint.step_update_phase(cycle, self.inject_queue.inject_input_fifos, self.eject_queue.eject_input_fifos, self.ring_bridge)
@@ -151,9 +156,9 @@ class CrossRingNode:
         self.eject_queue.execute_arbitration(cycle, self.inject_queue.inject_input_fifos, self.ring_bridge)
 
         # 3. 更新所有FIFO的时序逻辑
-        self.inject_queue.step_update_phase()
-        self.eject_queue.step_update_phase()
-        self.ring_bridge.step_update_phase()
+        self.inject_queue.step_update_phase(cycle)
+        self.eject_queue.step_update_phase(cycle)
+        self.ring_bridge.step_update_phase(cycle)
 
     def get_inject_direction_status(self) -> Dict[str, Any]:
         """获取注入方向队列的状态。"""

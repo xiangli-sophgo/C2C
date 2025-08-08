@@ -12,6 +12,7 @@ from enum import Enum
 from dataclasses import dataclass, field
 
 from src.noc.crossring.components.ring_bridge import RingBridge
+from src.noc.base.ip_interface import PipelinedFIFO
 
 from ..link import PriorityLevel, CrossRingSlot, RingSlice
 from ..flit import CrossRingFlit
@@ -143,6 +144,7 @@ class CrossPoint:
         self.config = config
         self.coordinates = coordinates
         self.parent_node = parent_node
+        self.current_cycle = 0  # 统一的周期管理
 
         # 确定此CrossPoint管理的方向
         if direction == CrossPointDirection.HORIZONTAL:
@@ -162,11 +164,7 @@ class CrossPoint:
 
         # E-Tag机制核心状态 - 分层entry管理，按通道和方向分别管理
         # 结构: etag_entry_managers[channel][direction] = EntryAllocationTracker
-        self.etag_entry_managers: Dict[str, Dict[str, EntryAllocationTracker]] = {
-            "req": {},
-            "rsp": {},
-            "data": {}
-        }
+        self.etag_entry_managers: Dict[str, Dict[str, EntryAllocationTracker]] = {"req": {}, "rsp": {}, "data": {}}
         self._initialize_etag_entry_managers()
 
         # T0全局队列 - 每个通道独立的轮询队列
@@ -207,30 +205,30 @@ class CrossPoint:
 
         # 简化统计信息
         self._init_simple_stats()
-        
+
         # 性能优化：合并缓冲区状态
         self._buffer_state = {"has_ejected": False, "has_injected": False, "eject_targets": set(), "inject_sources": set()}
-    
+
     def _init_simple_stats(self) -> None:
         """初始化简化的统计结构"""
         channels = ["req", "rsp", "data"]
         priorities = ["T0", "T1", "T2"]
-        
+
         # 创建基础计数器
         self.stats = {}
-        for stat_name in ["flits_injected", "flits_ejected", "bypass_events", "itag_triggers", "itag_reservations", "itag_timeouts", "itag_releases"]:
+        for stat_name in ["flits_injected", "flits_ejected", "bypass_events", "itag_triggers", "itag_reservations", "itag_timeouts", "itag_releases", "itag_reservation_failures"]:
             self.stats[stat_name] = {ch: 0 for ch in channels}
-        
+
         # E-Tag升级统计
         self.stats["etag_upgrades"] = {ch: {"T1": 0, "T0": 0} for ch in channels}
-        
+
         # Entry分配统计
         self.stats["entry_allocations"] = {ch: {p: 0 for p in priorities} for ch in channels}
         self.stats["entry_releases"] = {ch: {p: 0 for p in priorities} for ch in channels}
-        
+
         # T0队列操作统计
         self.stats["t0_queue_operations"] = {ch: {"added": 0, "removed": 0, "arbitrations": 0} for ch in channels}
-    
+
     def _clear_buffers_if_needed(self) -> None:
         """根据状态清理缓冲区"""
         if self._buffer_state["has_ejected"]:
@@ -339,6 +337,8 @@ class CrossPoint:
             node_eject_fifos: 节点的eject_input_fifos
             ring_bridge: Ring Bridge实例（可选）
         """
+        self.current_cycle = cycle  # 更新当前周期
+
         # 清空上一周期的传输计划
         self.injection_transfer_plans.clear()
         self.ejection_transfer_plans.clear()
@@ -373,11 +373,11 @@ class CrossPoint:
                         if ring_bridge:
                             # 使用E-Tag机制判断是否可以下环到RB（同时检查FIFO空间）
                             can_eject_etag = self._can_eject_with_etag_mechanism(current_slot, channel, direction)
-                            
+
                             # 检查Ring Bridge输入FIFO是否有空间
                             rb_input_fifo = ring_bridge.ring_bridge_input_fifos[channel][direction]
                             can_eject_fifo = rb_input_fifo.ready_signal()
-                            
+
                             can_eject = can_eject_etag and can_eject_fifo
 
                             if can_eject:
@@ -419,7 +419,7 @@ class CrossPoint:
                             # 使用E-Tag机制判断是否可以下环（同时检查FIFO空间）
                             can_eject_etag = self._can_eject_with_etag_mechanism(current_slot, channel, direction)
                             can_eject_fifo = target_fifo.ready_signal()  # 检查FIFO是否有空间
-                            
+
                             can_eject = can_eject_etag and can_eject_fifo
 
                             if can_eject:
@@ -477,7 +477,9 @@ class CrossPoint:
                                 self.injection_transfer_plans.append({"type": "RB_injection", "direction": direction, "channel": channel, "priority": 1})  # 最高优先级
                             continue
                         else:
-                            # 无法上环，检查是否需要触发I-Tag预约
+                            # 无法上环，为Ring Bridge输出FIFO中的所有flit增加等待时间
+                            rb_output_fifo = ring_bridge.ring_bridge_output_fifos[channel][direction]
+                            self._increment_fifo_wait_cycles(rb_output_fifo, direction)
                             self._check_itag_for_flit(ring_bridge_flit, direction, channel, cycle)
 
                 # 2. 检查普通inject_input_fifos（仅水平CrossPoint处理）
@@ -501,7 +503,8 @@ class CrossPoint:
                                     self._buffer_state["inject_sources"].add("IQ")
                                     self.injection_transfer_plans.append({"type": "IQ_injection", "direction": direction, "channel": channel, "priority": 2})  # 普通优先级
                             else:
-                                # 无法上环，检查是否需要触发I-Tag预约
+                                # 无法上环，为整个FIFO中的所有flit增加等待时间
+                                self._increment_fifo_wait_cycles(direction_fifo, direction)
                                 self._check_itag_for_flit(flit, direction, channel, cycle)
 
         # ========== 第三部分：I-Tag检查（重要：在最后检查所有等待的flit） ==========
@@ -570,6 +573,8 @@ class CrossPoint:
             node_eject_fifos: 节点的eject_input_fifos
             ring_bridge: Ring Bridge实例（可选）
         """
+        # 不需要再次更新current_cycle，已经在compute阶段更新过
+
         # ========== 执行下环传输计划 ==========
         for plan in self.ejection_transfer_plans:
             if plan["type"] == "eject_to_ring_bridge":
@@ -671,12 +676,12 @@ class CrossPoint:
         if not self.parent_node or not hasattr(self.parent_node.config, "NUM_COL"):
             return False
         num_col = self.parent_node.config.NUM_COL
-        
+
         if dimension == "vertical":
             return (current_node // num_col) != (next_node // num_col)
         else:  # horizontal
             return (current_node % num_col) != (next_node % num_col)
-    
+
     def _needs_vertical_move(self, current_node: int, next_node: int) -> bool:
         """判断从当前节点到下一节点是否需要垂直移动"""
         return self._needs_dimension_move(current_node, next_node, "vertical")
@@ -695,33 +700,33 @@ class CrossPoint:
         # 在update阶段，如果slot已经有分配的entry信息，直接返回True
         if not is_compute_phase and hasattr(slot, "allocated_entry_info") and slot.allocated_entry_info:
             return True
-        
+
         if not is_compute_phase:
             return False
 
         # 获取flit的E-Tag优先级
         priority = slot.etag_priority if slot.etag_marked else PriorityLevel.T2
         entry_manager = self.etag_entry_managers[channel][direction]
-        priority_str = priority.value if hasattr(priority, 'value') else str(priority).split('.')[-1]
-        
+        priority_str = priority.value if hasattr(priority, "value") else str(priority).split(".")[-1]
+
         # 统一的entry分配处理
         if not entry_manager.can_allocate_entry(priority_str):
             return False
-            
+
         # T0级的特殊轮询检查
         if priority == PriorityLevel.T0 and entry_manager.has_dedicated_entries:
             if entry_manager.get_t0_dedicated_available() > 0:
                 if not self._is_first_in_t0_queue(slot, channel):
                     return False
-        
+
         # 执行分配
         success = entry_manager.allocate_entry(priority_str)
         if success:
             self.stats["entry_allocations"][channel][priority_str] += 1
             self._record_entry_allocation(slot, direction, priority_str)
-            
+
         return success
-    
+
     def _record_entry_allocation(self, slot: CrossRingSlot, direction: str, priority: str) -> None:
         """记录entry分配信息"""
         allocation_info = {"direction": direction, "priority": priority}
@@ -1003,7 +1008,6 @@ class CrossPoint:
                 self.itag_pending_counts[direction][channel] += 1
                 self.stats["itag_reservation_failures"][channel] += 1
 
-
     def _trigger_itag_reservation_for_flit(self, flit: CrossRingFlit, channel: str, ring_type: str, direction: str, departure_slice: RingSlice, cycle: int) -> bool:
         """
         为特定flit触发I-Tag预约
@@ -1166,6 +1170,8 @@ class CrossPoint:
         if not success:
             return False
 
+        # 等待时间统计已经在每周期的_increment_fifo_wait_cycles中累积，无需额外处理
+
         # 处理I-Tag释放（在注入后处理）
         if flit.itag_reserved:
             flit.itag_reserved = False
@@ -1183,6 +1189,21 @@ class CrossPoint:
                 self.itag_to_release_counts[direction][channel] += 1
 
         return True
+
+    def _increment_fifo_wait_cycles(self, fifo: PipelinedFIFO, direction: str) -> None:
+        """
+        为FIFO中的所有flit增加等待时间
+
+        Args:
+            fifo: 无法注入的FIFO
+            direction: 注入方向("TL"/"TR"/"TU"/"TD")
+        """
+        # 获取FIFO中的所有flit并增加等待时间
+        flits = fifo.get_all_flits()
+
+        for flit in flits:
+            if flit and hasattr(flit, "add_wait_cycles"):
+                flit.add_wait_cycles(direction, 1)  # 每个周期增加1个等待时间
 
     def _handle_successful_ejection(self, slot: CrossRingSlot, channel: str, direction: str) -> None:
         """
@@ -1214,7 +1235,6 @@ class CrossPoint:
         slot.valid = False
         slot.crosspoint_ejection_planned = False
 
-
     def get_crosspoint_status(self) -> Dict[str, Any]:
         """获取CrossPoint简化状态信息"""
         return {
@@ -1224,7 +1244,7 @@ class CrossPoint:
             "stats_summary": self._get_stats_summary(),
             "total_reservations": sum(sum(counts.values()) for counts in self.itag_reservation_counts.values()),
         }
-    
+
     def _get_stats_summary(self) -> Dict[str, int]:
         """获取统计数据摘要"""
         summary = {}

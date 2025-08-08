@@ -41,6 +41,10 @@ class CrossRingFlit(BaseFlit):
     injection_wait_start_cycle_v: int = -1  # 垂直环等待注入开始周期
     itag_reserved: bool = False  # 是否已预约I-Tag
     itag_timeout: bool = False  # 是否已超时
+    
+    # 真正的等待时间统计字段 - 从第一次尝试注入但被阻塞时开始计算
+    actual_wait_start_cycle_h: int = -1  # 水平环实际等待开始周期
+    actual_wait_start_cycle_v: int = -1  # 垂直环实际等待开始周期
 
     # 环路移动状态
     moving_direction: int = 1  # 1 (顺时针) | -1 (逆时针)
@@ -200,9 +204,10 @@ class CrossRingFlit(BaseFlit):
 
     def add_wait_cycles(self, direction: str, cycles: int) -> None:
         """添加等待周期"""
-        if direction == "horizontal":
+        # 支持CrossPoint方向格式转换
+        if direction in ["TL", "TR", "horizontal"]:
             self.wait_cycle_h += cycles
-        elif direction == "vertical":
+        elif direction in ["TU", "TD", "vertical"]:
             self.wait_cycle_v += cycles
 
     def reset_for_retry(self) -> None:
@@ -221,6 +226,10 @@ class CrossRingFlit(BaseFlit):
         self.injection_wait_start_cycle_v = -1
         self.itag_reserved = False
         self.itag_timeout = False
+        
+        # 重置实际等待时间统计
+        self.actual_wait_start_cycle_h = -1
+        self.actual_wait_start_cycle_v = -1
         
         self.clear_itag()
         self.station_position = -1

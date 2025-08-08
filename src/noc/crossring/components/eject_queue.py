@@ -31,6 +31,7 @@ class EjectQueue:
         self.coordinates = coordinates
         self.config = config
         self.parent_node = None  # 将在节点初始化时设置
+        self.current_cycle = 0  # 统一的周期管理
 
         # 获取FIFO配置
         self.eq_in_depth = config.fifo_config.EQ_IN_FIFO_DEPTH
@@ -399,10 +400,12 @@ class EjectQueue:
 
     def step_compute_phase(self, cycle: int) -> None:
         """FIFO组合逻辑更新。"""
+        self.current_cycle = cycle  # 更新当前周期
         self._step_all_fifos("step_compute_phase", cycle)
 
-    def step_update_phase(self) -> None:
+    def step_update_phase(self, cycle: int = 0) -> None:
         """FIFO时序逻辑更新。"""
+        # 不需要再次更新current_cycle，已经在compute阶段更新过
         self._step_all_fifos("step_update_phase")
 
 

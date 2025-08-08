@@ -19,7 +19,6 @@ from matplotlib.lines import Line2D
 from collections import defaultdict, deque
 import copy
 import threading
-from matplotlib.widgets import Button
 import time
 from types import SimpleNamespace
 from typing import Dict, List, Any, Optional, Tuple, Union
@@ -102,8 +101,6 @@ class LinkStateVisualizer:
         self._last_update_time = time.time()
 
         # 历史回放功能
-        from collections import deque
-
         self.history = deque(maxlen=50)  # 保存最近50个周期的历史
         self._play_idx = None  # 当前回放索引，None表示实时模式
 
@@ -259,12 +256,6 @@ class LinkStateVisualizer:
         spacing_x = base_spacing_x * spacing_factor
         spacing_y = base_spacing_y * spacing_factor
 
-        # 调试信息：显示间距调整情况
-        if slice_per_link != 8:  # 只在非默认值时显示
-            print(f"🔧 节点间距已根据SLICE_PER_LINK={slice_per_link}动态调整:")
-            print(f"   间距系数: {spacing_factor:.2f}")
-            print(f"   水平间距: {spacing_x:.2f} (基础: {base_spacing_x})")
-            print(f"   垂直间距: {spacing_y:.2f} (基础: {base_spacing_y})")
 
         for row in range(self.rows):
             for col in range(self.cols):
@@ -394,7 +385,6 @@ class LinkStateVisualizer:
         except (ValueError, IndexError):
             pass
 
-        # 如果转换失败，返回原ID
         return demo_link_id
 
     def _draw_link_frame(self, src, dest, link_id, slice_num=None):
@@ -579,69 +569,8 @@ class LinkStateVisualizer:
             if node_pair:
                 self.node_pair_slots[node_pair] = slot_positions_list
 
-    def _draw_selection_box(self):
-        """绘制选择框"""
-        if self._selected_node in self.node_positions:
-            node_pos = self.node_positions[self._selected_node]
-            self.click_box = Rectangle((node_pos[0] - 0.3, node_pos[1] - 0.3), 0.6, 0.6, facecolor="none", edgecolor="red", linewidth=1.2, linestyle="--")
-            self.link_ax.add_patch(self.click_box)
 
-    def _connect_events(self):
-        """连接事件"""
-        self.fig.canvas.mpl_connect("button_press_event", self._on_click)
-        self.fig.canvas.mpl_connect("key_press_event", self._on_key_press)
 
-    def _on_click(self, event):
-        """处理点击事件"""
-        if event.inaxes != self.link_ax:
-            return
-
-        # 检查是否点击了slot
-        for rect in self.rect_info_map:
-            contains, _ = rect.contains(event)
-            if contains:
-                link_ids, flit, slot_idx = self.rect_info_map[rect]
-                if flit:
-                    self._on_flit_click(flit)
-                return
-
-        # 检查是否点击了节点
-        for node_id, pos in self.node_positions.items():
-            dx = event.xdata - pos[0]
-            dy = event.ydata - pos[1]
-            distance = np.sqrt(dx * dx + dy * dy)
-
-            if distance <= 0.3:  # 节点半径
-                self._select_node(node_id)
-                break
-
-    def _select_node(self, node_id):
-        """选择节点"""
-        if node_id == self._selected_node:
-            return
-
-        self._selected_node = node_id
-
-        # 更新选择框
-        if hasattr(self, "click_box"):
-            self.click_box.remove()
-        self._draw_selection_box()
-
-        # 更新右侧详细视图 - 使用快照数据
-        if self._play_idx is not None and self._play_idx < len(self.history):
-            # 回放模式：使用当前回放周期的数据
-            replay_cycle, _ = self.history[self._play_idx]
-            self.node_vis.render_node_from_snapshot(node_id, replay_cycle)
-        elif self.history:
-            # 实时模式：使用最新快照数据
-            latest_cycle, _ = self.history[-1]
-            self.node_vis.render_node_from_snapshot(node_id, latest_cycle)
-
-        # 更新节点标题
-        self._update_node_title()
-
-        self.fig.canvas.draw_idle()
-        # print(f"选中节点: {node_id}")  # 删除debug输出
 
     def _track_packet(self, packet_id):
         """追踪包"""
@@ -719,10 +648,8 @@ class LinkStateVisualizer:
         """连接各种事件处理器"""
         # 连接键盘事件
         self.fig.canvas.mpl_connect("key_press_event", self._on_key_press)
-
         # 连接鼠标点击事件（用于节点选择等）
         self.fig.canvas.mpl_connect("button_press_event", self._on_mouse_click)
-
         # 连接窗口关闭事件
         self.fig.canvas.mpl_connect("close_event", self._on_window_close)
 
@@ -933,19 +860,16 @@ class LinkStateVisualizer:
             else:
                 new_interval = min(5.0, current_interval * 1.25)
             self._parent_model._visualization_frame_interval = new_interval
-            pass  # print(f"速度调整: 帧间隔 {new_interval}s")
 
     def _set_max_speed(self):
         """设置最大速度"""
         if hasattr(self, "_parent_model") and self._parent_model:
             self._parent_model._visualization_frame_interval = 0.05
-            pass  # print("设置为最大速度")
 
     def _set_slow_speed(self):
         """设置慢速"""
         if hasattr(self, "_parent_model") and self._parent_model:
             self._parent_model._visualization_frame_interval = 2.0
-            pass  # print("设置为慢速")
 
     def _show_help(self):
         """显示键盘快捷键帮助"""
@@ -983,7 +907,6 @@ CrossRing可视化控制键:
     def _on_channel_select(self, channel):
         """通道选择回调"""
         self.current_channel = channel
-        pass  # print(f"切换到通道: {channel}")
 
         # 更新标题
         self._update_network_title()
@@ -997,15 +920,11 @@ CrossRing可视化控制键:
     def _update_network_title(self):
         """更新网络标题"""
         channel_name = {"req": "请求网络", "rsp": "响应网络", "data": "数据网络"}.get(self.current_channel, f"{self.current_channel.upper()}网络")
-
         self.link_ax.set_title(channel_name, fontsize=14, family="sans-serif", pad=-10)
-
-        # 移除重复的主标题，只保留axis标题
 
     def _update_node_title(self):
         """更新节点标题"""
-        node_title = f"节点 {self._selected_node}"
-        self.node_ax.set_title(node_title, fontsize=14, family="sans-serif", pad=-50)
+        self.node_ax.set_title(f"节点 {self._selected_node}", fontsize=14, family="sans-serif", pad=-50)
 
     def _on_clear_highlight(self, event):
         """清除高亮回调"""
@@ -1427,12 +1346,7 @@ CrossRing可视化控制键:
             else:
                 flit_id = getattr(flit, "flit_id", 0)
                 
-            if flit_id is not None:
-                # 为同一packet内的不同flit分配不同透明度
-                # flit_id=0 -> 1.0倍透明度, flit_id=1 -> 0.8倍, flit_id=2 -> 0.6倍, 等等
-                alpha = max(0.4, 1.0 - (int(flit_id) * 0.2))
-            else:
-                alpha = 1.0  # 默认完全不透明
+            alpha = max(0.4, 1.0 - (int(flit_id) * 0.2)) if flit_id is not None else 1.0
 
         # 将基础颜色转换为RGBA格式，嵌入透明度信息
         try:
@@ -1455,14 +1369,10 @@ CrossRing可视化控制键:
         
         # 高亮模式：目标 flit → 指定颜色，其余 → 灰
         if use_highlight and expected_packet_id is not None:
-            hl_color = highlight_color or "red"
-            return hl_color if str(flit_pid) == str(expected_packet_id) else "lightgrey"
+            return (highlight_color or "red") if str(flit_pid) == str(expected_packet_id) else "lightgrey"
 
         # 普通模式：根据packet_id使用调色板颜色
-        if flit_pid is not None:
-            return self._colors[int(flit_pid) % len(self._colors)]
-        else:
-            return "lightblue"  # 默认颜色
+        return self._colors[int(flit_pid) % len(self._colors)] if flit_pid is not None else "lightblue"
 
     def set_network(self, network):
         """设置网络模型"""

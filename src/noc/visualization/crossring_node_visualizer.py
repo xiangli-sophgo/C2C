@@ -219,13 +219,10 @@ class CrossRingNodeVisualizer:
         )
 
         # ---------------- compute sizes via fifo specs ---------------- #
-        def make_specs(c):
-            """
-            Build a list of (orient, h_group, v_group, depth) for each fifo lane.
-            Each spec tuple is (orient, h_group, v_group, depth), unused group is None.
-            """
+        def build_specs(orientations, h_pos, v_pos, depths):
+            """Build specs for module size calculation"""
             specs = []
-            for ori, hp, vp, d in zip(c["orientations"], c["h_pos"], c["v_pos"], c["depths"]):
+            for ori, hp, vp, d in zip(orientations, h_pos, v_pos, depths):
                 if ori[0].upper() == "H":
                     v_group = {"left": "L", "right": "R"}.get(vp, "M")
                     h_group = {"top": "T", "bottom": "B"}.get(hp, "M")
@@ -236,9 +233,9 @@ class CrossRingNodeVisualizer:
                     specs.append(("V", h_group, v_group, d))
             return specs
 
-        w_iq, h_iq = self._calc_module_size(make_specs(iq_config))
-        w_eq, h_eq = self._calc_module_size(make_specs(eq_config))
-        w_rb, h_rb = self._calc_module_size(make_specs(rb_config))
+        w_iq, h_iq = self._calc_module_size(build_specs(**{k: iq_config[k] for k in ["orientations", "h_pos", "v_pos", "depths"]}))
+        w_eq, h_eq = self._calc_module_size(build_specs(**{k: eq_config[k] for k in ["orientations", "h_pos", "v_pos", "depths"]}))
+        w_rb, h_rb = self._calc_module_size(build_specs(**{k: rb_config[k] for k in ["orientations", "h_pos", "v_pos", "depths"]}))
         h_rb = max(h_iq, h_rb)
         w_rb = max(w_eq, w_rb)
         self.inject_module_size = (w_iq, h_rb)
@@ -519,46 +516,21 @@ class CrossRingNodeVisualizer:
             else:
                 raise ValueError(f"Unknown orientation: {orient}")
 
-    def _calc_fifo_position(self, base_x, base_y, module_size, index, total_lanes, orientation, h_pos, v_pos):
-        """计算FIFO位置"""
-        module_w, module_h = module_size
 
-        # 简化的位置计算
-        if orientation == "vertical":
-            if v_pos == "left":
-                x = base_x - module_w / 3
-            elif v_pos == "right":
-                x = base_x + module_w / 3
-            else:  # mid
-                x = base_x
-
-            if h_pos == "top":
-                y = base_y + module_h / 4
-            elif h_pos == "bottom":
-                y = base_y - module_h / 4
-            else:  # mid
-                y = base_y
-
-        else:  # horizontal
-            if h_pos == "top":
-                y = base_y + module_h / 4
-            elif h_pos == "bottom":
-                y = base_y - module_h / 4
-            else:  # mid
-                y = base_y
-
-            if v_pos == "left":
-                x = base_x - module_w / 4
-            elif v_pos == "right":
-                x = base_x + module_w / 4
-            else:  # mid
-                x = base_x
-
-        # 添加一些偏移避免重叠
-        x += (index % 3 - 1) * 0.3
-        y += (index // 3 - 1) * 0.3
-
-        return x, y
+    def _get_flit_attributes(self, flit):
+        """提取flit属性的通用方法，兼容字典和对象格式"""
+        if isinstance(flit, dict):
+            return {
+                "packet_id": flit.get("packet_id"),
+                "flit_id": flit.get("flit_id", 0),
+                "etag": flit.get("ETag_priority", flit.get("etag_priority", "T2"))
+            }
+        else:
+            return {
+                "packet_id": getattr(flit, "packet_id", None),
+                "flit_id": getattr(flit, "flit_id", 0),
+                "etag": getattr(flit, "etag_priority", getattr(flit, "ETag_priority", "T2"))
+            }
 
     def _get_flit_style(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None):
         """
@@ -568,81 +540,46 @@ class CrossRingNodeVisualizer:
         """
         import matplotlib.colors as mcolors
         
-        # E-Tag样式映射 - 仅控制边框属性，不影响填充透明度
-        # 为node中的小方格调整更合适的线宽
+        # E-Tag样式映射
         _ETAG_LW = {"T0": 1.2, "T1": 0.9, "T2": 0.6}
         _ETAG_EDGE = {"T0": "darkred", "T1": "darkblue", "T2": "black"}
 
-        # 标签模式下：使用统一的浅色背景，突出显示边框
+        # 提取flit属性
+        attrs = self._get_flit_attributes(flit)
+        packet_id = attrs["packet_id"]
+        flit_id = attrs["flit_id"]
+        etag = attrs["etag"]
+
+        # 获取基础颜色
         if self.show_tags_mode:
             base_color = "lightgray"
-        else:
-            # 获取基础颜色（不含透明度）
-            base_color = self._get_flit_color(flit, use_highlight, expected_packet_id, highlight_color)
-
-        # 获取E-Tag优先级（兼容字典和对象格式）- 仅控制边框样式（边框保持完全不透明）
-        if isinstance(flit, dict):
-            # 字典格式：优先使用标准化的ETag_priority，然后尝试etag_priority
-            etag = flit.get("ETag_priority", flit.get("etag_priority", "T2"))
-        else:
-            # 对象格式：优先使用etag_priority（CrossRing flit的实际属性名），然后尝试ETag_priority
-            etag = getattr(flit, "etag_priority", getattr(flit, "ETag_priority", "T2"))
-        line_width = _ETAG_LW.get(etag, 1.0)
-        edge_color = _ETAG_EDGE.get(etag, "black")  # 边框颜色保持不透明
-
-        # 根据flit_id调整填充颜色透明度（转换为RGBA格式）
-        if self.show_tags_mode:
-            # 标签模式下使用固定的中等透明度，便于看清边框
-            alpha = 0.3
-        else:
-            # 正常模式下根据flit_id调整透明度
-            if isinstance(flit, dict):
-                flit_id = flit.get("flit_id", 0)
-            else:
-                flit_id = getattr(flit, "flit_id", 0)
-
-            if flit_id is not None:
-                # 为同一packet内的不同flit分配不同透明度
-                # flit_id=0 -> 1.0倍透明度, flit_id=1 -> 0.8倍, flit_id=2 -> 0.6倍, 等等
-                alpha = max(0.4, 1.0 - (int(flit_id) * 0.2))
-            else:
-                alpha = 1.0  # 默认完全不透明
-
-        # 将基础颜色转换为RGBA格式，嵌入透明度信息
-        try:
-            # 转换颜色为RGBA元组
-            rgba = mcolors.to_rgba(base_color, alpha=alpha)
-            face_color_with_alpha = rgba
-        except:
-            # 如果转换失败，使用默认颜色
-            face_color_with_alpha = (0.5, 0.5, 1.0, alpha)  # 浅蓝色
-
-        return face_color_with_alpha, line_width, edge_color
-
-    def _get_flit_color(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None):
-        """获取flit颜色，支持字典和对象两种格式的flit数据"""
-        # 兼容字典和对象两种格式获取packet_id
-        if isinstance(flit, dict):
-            flit_pid = flit.get("packet_id")
-        else:
-            flit_pid = getattr(flit, "packet_id", None)
-
-        # 高亮模式：目标 flit → 指定颜色，其余 → 灰
-        if use_highlight and expected_packet_id is not None:
+        elif use_highlight and expected_packet_id is not None:
             hl_color = highlight_color or "red"
-            return hl_color if str(flit_pid) == str(expected_packet_id) else "lightgrey"
-
-        # 普通模式：根据packet_id使用调色板颜色
-        if flit_pid is not None:
+            base_color = hl_color if str(packet_id) == str(expected_packet_id) else "lightgrey"
+        elif packet_id is not None:
             try:
-                # 使用与父类相同的颜色映射
-                color_index = int(flit_pid) % len(self.parent._colors)
-                selected_color = self.parent._colors[color_index]
-                return selected_color
-            except Exception as e:
-                return "lightblue"
+                color_index = int(packet_id) % len(self.parent._colors)
+                base_color = self.parent._colors[color_index]
+            except:
+                base_color = "lightblue"
         else:
-            return "lightblue"  # 默认颜色
+            base_color = "lightblue"
+
+        # 计算透明度
+        if self.show_tags_mode:
+            alpha = 0.3
+        elif flit_id is not None:
+            alpha = max(0.4, 1.0 - (int(flit_id) * 0.2))
+        else:
+            alpha = 1.0
+
+        # 转换为RGBA格式
+        try:
+            face_color_with_alpha = mcolors.to_rgba(base_color, alpha=alpha)
+        except:
+            face_color_with_alpha = (0.5, 0.5, 1.0, alpha)
+
+        return face_color_with_alpha, _ETAG_LW.get(etag, 1.0), _ETAG_EDGE.get(etag, "black")
 
     def _on_click(self, event):
         """处理点击事件"""
@@ -652,13 +589,9 @@ class CrossRingNodeVisualizer:
             contains, _ = patch.contains(event)
             if contains:
                 # 只有在高亮模式下才允许切换文本可见性
-                # 兼容字典和对象两种格式
-                if isinstance(flit, dict):
-                    pid = flit.get("packet_id", None)
-                    fid = flit.get("flit_id", None)
-                else:
-                    pid = getattr(flit, "packet_id", None)
-                    fid = getattr(flit, "flit_id", None)
+                attrs = self._get_flit_attributes(flit)
+                pid = attrs["packet_id"]
+                fid = attrs["flit_id"]
                 if self.use_highlight and pid == self.highlight_pid:
                     vis = not txt.get_visible()
                     txt.set_visible(vis)
@@ -688,11 +621,8 @@ class CrossRingNodeVisualizer:
 
         # 更新所有patch的颜色和文本可见性
         for patch, (txt, flit) in self.patch_info_map.items():
-            # 兼容字典和对象两种格式
-            if isinstance(flit, dict):
-                pid = flit.get("packet_id", None)
-            else:
-                pid = getattr(flit, "packet_id", None)
+            attrs = self._get_flit_attributes(flit)
+            pid = attrs["packet_id"]
 
             # 重新计算并应用flit样式（包括颜色）
             if flit:
@@ -997,29 +927,18 @@ class CrossRingNodeVisualizer:
 
     def _clear_all_components(self, current_channel):
         """清空所有组件的显示"""
-        # 清空IQ的所有lanes
-        for lane_name, patches in self.iq_patches.items():
-            if patches:
-                self._clear_fifo_patches(patches, self.iq_texts.get(lane_name, []))
-
-        # 清空EQ的所有lanes
-        for lane_name, patches in self.eq_patches.items():
-            if patches:
-                self._clear_fifo_patches(patches, self.eq_texts.get(lane_name, []))
-
-        # 清空RB的所有lanes
-        for lane_name, patches in self.rb_patches.items():
-            if patches:
-                self._clear_fifo_patches(patches, self.rb_texts.get(lane_name, []))
-
-        # 清空CrossPoint
-        for lane_name, patches in self.cph_patches.items():
-            if patches:
-                self._clear_fifo_patches(patches, self.cph_texts.get(lane_name, []))
-
-        for lane_name, patches in self.cpv_patches.items():
-            if patches:
-                self._clear_fifo_patches(patches, self.cpv_texts.get(lane_name, []))
+        # 统一清空所有组件
+        for component_dict in [
+            (self.iq_patches, self.iq_texts),
+            (self.eq_patches, self.eq_texts),
+            (self.rb_patches, self.rb_texts),
+            (self.cph_patches, self.cph_texts),
+            (self.cpv_patches, self.cpv_texts)
+        ]:
+            patches_dict, texts_dict = component_dict
+            for lane_name, patches in patches_dict.items():
+                if patches:
+                    self._clear_and_render_patches(patches, texts_dict.get(lane_name, []), [])
 
     def _render_from_snapshot_data(self, node_id, node_data, current_channel):
         """直接从快照数据渲染节点组件"""
@@ -1168,33 +1087,13 @@ class CrossRingNodeVisualizer:
                 elif channel_type == "EQ_Ch":
                     self._render_fifo_patches(self.eq_patches, self.eq_texts, lane_name, flit_list)
 
-    def _clear_fifo_patches(self, patches, texts):
-        """清空FIFO patch的显示"""
-        for p in patches:
-            p.set_facecolor("none")
-            p.set_linewidth(0)
-            p.set_edgecolor("none")
-            # 从patch_info_map中移除
-            if hasattr(self, "patch_info_map") and p in self.patch_info_map:
-                del self.patch_info_map[p]
-
-        for t in texts:
-            t.set_visible(False)
-
-    def _render_fifo_patches(self, patch_dict, text_dict, lane_name, flit_list):
-        """渲染FIFO类型patch的flit数据"""
-        if lane_name not in patch_dict or lane_name not in text_dict:
-            return
-
-        patches = patch_dict[lane_name]
-        texts = text_dict[lane_name]
-
+    def _clear_and_render_patches(self, patches, texts, flit_list):
+        """清空并渲染patch的通用方法"""
         # 清空所有patch并移除映射
         for p in patches:
             p.set_facecolor("none")
             p.set_linewidth(0)
             p.set_edgecolor("none")
-            # 从patch_info_map中移除
             if p in self.patch_info_map:
                 del self.patch_info_map[p]
 
@@ -1210,13 +1109,10 @@ class CrossRingNodeVisualizer:
             t = texts[idx]
 
             if flit:
-                # 兼容字典和对象两种格式
-                if isinstance(flit, dict):
-                    packet_id = flit.get("packet_id", None)
-                    flit_id = flit.get("flit_id", str(flit))
-                else:
-                    packet_id = getattr(flit, "packet_id", None)
-                    flit_id = getattr(flit, "flit_id", str(flit))
+                # 使用统一的属性提取方法
+                attrs = self._get_flit_attributes(flit)
+                packet_id = attrs["packet_id"]
+                flit_id = attrs["flit_id"]
 
                 face, lw, edge = self._get_flit_style(
                     flit,
@@ -1232,84 +1128,15 @@ class CrossRingNodeVisualizer:
                 t.set_visible(self.use_highlight and packet_id == self.highlight_pid)
                 self.patch_info_map[p] = (t, flit)
 
-                if self.use_highlight and getattr(flit, "packet_id", None) == self.highlight_pid:
+                if self.use_highlight and packet_id == self.highlight_pid:
                     self.current_highlight_flit = flit
-            else:
-                if p in self.patch_info_map:
-                    self.patch_info_map.pop(p, None)
 
-    def _render_crosspoint_patches(self, patch_dict, text_dict, direction, slice_data):
-        """渲染CrossPoint类型patch的slice数据"""
-        if direction not in patch_dict or direction not in text_dict:
-            print(f"🚫 调试: CrossPoint {direction}方向 patches或texts未找到")
+    def _render_fifo_patches(self, patch_dict, text_dict, lane_name, flit_list):
+        """渲染FIFO类型patch的flit数据"""
+        if lane_name not in patch_dict or lane_name not in text_dict:
             return
+        self._clear_and_render_patches(patch_dict[lane_name], text_dict[lane_name], flit_list)
 
-        patches = patch_dict[direction]
-        texts = text_dict[direction]
-
-        # CrossPoint数据结构: [arrival_slots, departure_slots]
-        if not isinstance(slice_data, list) or len(slice_data) < 2:
-            print(f"🚫 调试: CrossPoint {direction}方向 slice_data格式错误: {slice_data}")
-            return
-
-        arrival_slots = slice_data[0] if slice_data[0] else []
-        departure_slots = slice_data[1] if slice_data[1] else []
-
-        # TR和TU方向需要颠倒顺序：departure在前，arrival在后
-        if direction in ["TR", "TU"]:
-            all_slots = departure_slots + arrival_slots
-        else:
-            # TL和TD方向保持原顺序：arrival在前，departure在后
-            all_slots = arrival_slots + departure_slots
-
-        print(f"🎯 调试: CrossPoint {direction}方向 arrival_slots={len(arrival_slots)} departure_slots={len(departure_slots)} all_slots={len(all_slots)}")
-        for i, flit in enumerate(all_slots):
-            if flit:
-                print(f"   - slot[{i}]: pid={getattr(flit, 'packet_id', 'N/A')} fid={getattr(flit, 'flit_id', 'N/A')}")
-
-        # 清空所有patch并移除映射
-        for p in patches:
-            p.set_facecolor("none")
-            p.set_linewidth(0)
-            p.set_edgecolor("none")
-            # 从patch_info_map中移除
-            if p in self.patch_info_map:
-                del self.patch_info_map[p]
-
-        for t in texts:
-            t.set_visible(False)
-
-        # 渲染slot数据
-        for idx, flit in enumerate(all_slots):
-            if idx >= len(patches):
-                break
-
-            p = patches[idx]
-            t = texts[idx]
-
-            if flit:
-                packet_id = getattr(flit, "packet_id", None)
-                flit_id = getattr(flit, "flit_id", str(flit))
-
-                face, lw, edge = self._get_flit_style(
-                    flit,
-                    use_highlight=self.use_highlight,
-                    expected_packet_id=self.highlight_pid,
-                )
-                p.set_facecolor(face)
-                p.set_linewidth(lw)
-                p.set_edgecolor(edge)
-
-                info = f"{packet_id}-{flit_id}"
-                t.set_text(info)
-                t.set_visible(self.use_highlight and packet_id == self.highlight_pid)
-                self.patch_info_map[p] = (t, flit)
-
-                if self.use_highlight and getattr(flit, "packet_id", None) == self.highlight_pid:
-                    self.current_highlight_flit = flit
-            else:
-                if p in self.patch_info_map:
-                    self.patch_info_map.pop(p, None)
 
     def _render_crosspoint_patches_split(self, patch_dict, text_dict, direction, slice_data):
         """渲染CrossPoint类型patch的slice数据 - 拆分版本"""
@@ -1335,47 +1162,9 @@ class CrossRingNodeVisualizer:
 
     def _render_single_slot(self, patches, texts, slot_data):
         """渲染单个slot的数据"""
-        # 清空所有patch并移除映射
-        for p in patches:
-            p.set_facecolor("none")
-            p.set_linewidth(0)
-            p.set_edgecolor("none")
-            # 从patch_info_map中移除
-            if p in self.patch_info_map:
-                del self.patch_info_map[p]
-
-        for t in texts:
-            t.set_visible(False)
-
-        # 只渲染第一个slot（因为每个lane现在只有1个深度）
-        if slot_data and len(patches) > 0:
-            flit = slot_data[0] if slot_data else None
-            p = patches[0]
-            t = texts[0]
-
-            if flit:
-                packet_id = getattr(flit, "packet_id", None)
-                flit_id = getattr(flit, "flit_id", str(flit))
-
-                face, lw, edge = self._get_flit_style(
-                    flit,
-                    use_highlight=self.use_highlight,
-                    expected_packet_id=self.highlight_pid,
-                )
-                p.set_facecolor(face)
-                p.set_linewidth(lw)
-                p.set_edgecolor(edge)
-
-                info = f"{packet_id}-{flit_id}"
-                t.set_text(info)
-                t.set_visible(self.use_highlight and packet_id == self.highlight_pid)
-                self.patch_info_map[p] = (t, flit)
-
-                if self.use_highlight and getattr(flit, "packet_id", None) == self.highlight_pid:
-                    self.current_highlight_flit = flit
-            else:
-                if p in self.patch_info_map:
-                    self.patch_info_map.pop(p, None)
+        # 只取第一个slot（因为每个lane现在只有1个深度）
+        flit_list = [slot_data[0]] if slot_data else []
+        self._clear_and_render_patches(patches, texts, flit_list)
 
     def _show_no_data_message(self, node_id, message):
         """显示无数据消息"""
