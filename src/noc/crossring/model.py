@@ -30,15 +30,6 @@ from src.noc.analysis.result_analyzer import ResultAnalyzer
 from src.noc.analysis.fifo_analyzer import FIFOStatsCollector
 
 
-class RingDirection(Enum):
-    """CrossRing方向枚举（简化版本）"""
-
-    TL = "TL"  # Turn Left
-    TR = "TR"  # Turn Right
-    TU = "TU"  # Turn Up
-    TD = "TD"  # Turn Down
-
-
 class CrossRingModel(BaseNoCModel):
     """
     CrossRing主模型类。
@@ -89,7 +80,7 @@ class CrossRingModel(BaseNoCModel):
         self.debug_enabled = False
         self.debug_packet_ids = set()  # 要跟踪的packet_id集合
         self.debug_sleep_time = 0.0  # 每步的睡眠时间
-        
+
         # 等待统计
         self.waiting_stats = {}  # {packet_id: {"start_cycle": int, "total_wait": int, "current_wait": int}}
 
@@ -133,14 +124,14 @@ class CrossRingModel(BaseNoCModel):
 
     def _should_skip_waiting_flit(self, flit) -> bool:
         """判断flit是否在等待状态，不需要打印"""
-        if hasattr(flit, 'departure_cycle') and hasattr(flit, 'flit_position'):
+        if hasattr(flit, "departure_cycle") and hasattr(flit, "flit_position"):
             # L2H状态且还未到departure时间 = 等待状态
             if flit.flit_position == "L2H" and flit.departure_cycle > self.cycle:
                 return True
             # IP_eject状态且位置没有变化，也算等待状态
             if flit.flit_position == "IP_eject":
                 # 检查flit是否有变化，如果没有变化就跳过
-                if hasattr(flit, '_last_stable_cycle'):
+                if hasattr(flit, "_last_stable_cycle"):
                     if self.cycle - flit._last_stable_cycle > 2:  # 在IP_eject超过2个周期就跳过
                         return True
                 else:
@@ -150,13 +141,13 @@ class CrossRingModel(BaseNoCModel):
     def _update_waiting_stats(self, packet_id: str, has_active_flit: bool, all_flits: list):
         """更新等待统计（简化版）"""
         waiting_flits = [f for f in all_flits if self._should_skip_waiting_flit(f)]
-        
+
         # 初始化统计
         if packet_id not in self.waiting_stats:
             self.waiting_stats[packet_id] = {"start_cycle": 0, "total_wait": 0, "is_waiting": False, "resume_printed": False}
-        
+
         stats = self.waiting_stats[packet_id]
-        
+
         # 状态转换
         if waiting_flits and not stats["is_waiting"]:
             # 开始等待
@@ -165,7 +156,7 @@ class CrossRingModel(BaseNoCModel):
             stats["resume_printed"] = False
         elif not waiting_flits and stats["is_waiting"]:
             # 等待结束
-            wait_duration = self.cycle - stats["start_cycle"] 
+            wait_duration = self.cycle - stats["start_cycle"]
             stats["total_wait"] += wait_duration
             stats["is_waiting"] = False
             # 标记需要打印等待恢复信息
@@ -179,100 +170,92 @@ class CrossRingModel(BaseNoCModel):
         if not self.debug_enabled or not hasattr(self, "request_tracker"):
             return
 
-        # 检查所有要跟踪的packet_ids，使用base class的trace_packets
         trace_packets = self.trace_packets if self.trace_packets else self.debug_packet_ids
-
         cycle_header_printed = False
         completed_packets = set()
         flits_to_print = []
 
         for packet_id in list(trace_packets):
             if self._should_debug_packet(packet_id):
-                # 获取lifecycle - 支持整数和字符串形式的packet_id
-                lifecycle = self.request_tracker.active_requests.get(packet_id)
-                if not lifecycle:
-                    lifecycle = self.request_tracker.completed_requests.get(packet_id)
-                    
-                # 如果字符串形式找不到，尝试整数形式
-                if not lifecycle and isinstance(packet_id, str) and packet_id.isdigit():
-                    int_packet_id = int(packet_id)
-                    lifecycle = self.request_tracker.active_requests.get(int_packet_id)
-                    if not lifecycle:
-                        lifecycle = self.request_tracker.completed_requests.get(int_packet_id)
-                # 如果整数形式找不到，尝试字符串形式
-                elif not lifecycle and isinstance(packet_id, int):
-                    str_packet_id = str(packet_id)
-                    lifecycle = self.request_tracker.active_requests.get(str_packet_id)
-                    if not lifecycle:
-                        lifecycle = self.request_tracker.completed_requests.get(str_packet_id)
-
+                lifecycle = self._get_packet_lifecycle(packet_id)
                 if lifecycle:
-                    # 检查是否有flit需要处理
                     all_flits = lifecycle.request_flits + lifecycle.response_flits + lifecycle.data_flits
+
                     if all_flits or lifecycle.current_state == RequestState.COMPLETED:
-                        # 检查是否有非等待的flit，如果有新的DATA flit注入也要显示
-                        has_active_flit = any(not self._should_skip_waiting_flit(flit) for flit in all_flits)
-                        
-                        # 如果有新的DATA flit开始传输，强制显示
+                        # 收集活跃的flits
+                        active_flits = [flit for flit in all_flits if not self._should_skip_waiting_flit(flit)]
+
+                        # 检查新的DATA flit
                         for flit in all_flits:
-                            if hasattr(flit, 'flit_type') and flit.flit_type == 'data':
-                                if hasattr(flit, 'flit_position') and flit.flit_position not in ['IP_eject']:
-                                    has_active_flit = True
-                                    break
-                        
-                        # 有活跃flit就打印所有flit
-                        if has_active_flit:
+                            if hasattr(flit, "flit_type") and flit.flit_type == "data" and hasattr(flit, "flit_position") and flit.flit_position not in ["IP_eject"]:
+                                if flit not in active_flits:
+                                    active_flits.append(flit)
+
+                        if active_flits:
                             flits_to_print.extend(all_flits)
-                        
-                        # 简化的等待统计更新
-                        wait_duration = self._update_waiting_stats(packet_id, has_active_flit, all_flits)
-                        
-                        # 如果等待结束，打印恢复信息
+
+                        # 处理等待统计
+                        wait_duration = self._update_waiting_stats(packet_id, bool(active_flits), all_flits)
                         if wait_duration > 0:
                             if not cycle_header_printed:
                                 print(f"周期{self.cycle}: ")
                                 cycle_header_printed = True
                             print(f"  📊 请求{packet_id}: 等待{wait_duration}周期后恢复传输")
 
-                    # 如果完成，标记为已完成
+                    # 处理完成状态
                     if lifecycle.current_state.value == "completed":
                         if not cycle_header_printed:
                             print(f"周期{self.cycle}: ")
                             cycle_header_printed = True
-                        
-                        # 打印完成信息
+
                         total_wait = self.waiting_stats.get(packet_id, {}).get("total_wait", 0)
                         wait_info = f" (总等待: {total_wait}周期)" if total_wait > 0 else ""
                         print(f"✅ 请求{packet_id}已完成，停止跟踪{wait_info}")
-                        
                         completed_packets.add(packet_id)
 
-        # 如果有flit要打印，统一打印在一行
+        # 打印结果
         if flits_to_print:
             if not cycle_header_printed:
                 print(f"周期{self.cycle}: ")
-                cycle_header_printed = True
             print(f" ", end="")
             for flit in flits_to_print:
                 print(f"{flit}", end=" | ")
             print("")
 
-        # 从跟踪列表中移除已完成的请求
+        # 清理已完成的packets
         for packet_id in completed_packets:
             self.debug_packet_ids.discard(packet_id)
             self.trace_packets.discard(packet_id)
 
-        # 检查是否所有跟踪的请求都已完成
-        remaining_packets = len(self.trace_packets) + len(self.debug_packet_ids)
-        if remaining_packets == 0 and self.debug_enabled:
+        if len(self.trace_packets) + len(self.debug_packet_ids) == 0 and self.debug_enabled:
             print(f"🎯 所有跟踪请求已完成，自动关闭debug模式")
             self.disable_debug()
-            return
 
-        # 只有在实际打印了信息时才执行sleep
+        # debug sleep
         if (flits_to_print or completed_packets) and self.debug_config["sleep_time"] > 0:
             import time
+
             time.sleep(self.debug_config["sleep_time"])
+
+    def _get_packet_lifecycle(self, packet_id):
+        """获取packet的lifecycle，支持整数和字符串形式"""
+        # 直接查找
+        lifecycle = self.request_tracker.active_requests.get(packet_id) or self.request_tracker.completed_requests.get(packet_id)
+
+        if lifecycle:
+            return lifecycle
+
+        # 字符串 -> 整数转换
+        if isinstance(packet_id, str) and packet_id.isdigit():
+            int_packet_id = int(packet_id)
+            return self.request_tracker.active_requests.get(int_packet_id) or self.request_tracker.completed_requests.get(int_packet_id)
+
+        # 整数 -> 字符串转换
+        elif isinstance(packet_id, int):
+            str_packet_id = str(packet_id)
+            return self.request_tracker.active_requests.get(str_packet_id) or self.request_tracker.completed_requests.get(str_packet_id)
+
+        return None
 
     def _create_ip_interface(self, node_id: int, ip_type: str, key: str = None) -> bool:
         """
@@ -434,30 +417,8 @@ class CrossRingModel(BaseNoCModel):
         # 调用父类方法设置TrafficScheduler
         super().setup_traffic_scheduler(traffic_chains, traffic_file_path)
 
-    def setup_visualization(self, enable=True, update_interval=1, start_cycle=0):
-        """
-        设置实时可视化
-
-        Args:
-            enable: 是否启用实时可视化
-            update_interval: 可视化更新间隔（周期数）
-            start_cycle: 从哪个周期开始可视化（0表示立即开始）
-        """
-        update_interval = max(update_interval, 0.05)
-        self._visualization_enabled = enable
-        self._visualization_update_interval = update_interval
-        self._visualization_start_cycle = start_cycle
-        self._visualization_initialized = False
-
-        if enable:
-            print("✅ 实时可视化已配置")
-            print(f"   开始周期: {start_cycle}")
-            print(f"   更新间隔: 每 {update_interval} 个周期")
-            print("   提示: 可视化窗口将在仿真开始后自动打开")
-            print("         可以点击节点查看详细信息，点击关闭窗口结束可视化")
-        else:
-            self._realtime_visualizer = None
-            print("📊 实时可视化已禁用")
+        # 重新注册IP接口的FIFO（因为IP接口是在traffic setup时创建的）
+        self._register_ip_fifos_for_statistics()
 
     def _setup_topology_network(self) -> None:
         """设置拓扑网络（BaseNoCModel抽象方法的实现）"""
@@ -552,131 +513,64 @@ class CrossRingModel(BaseNoCModel):
 
     def _connect_slices_to_crosspoints(self) -> None:
         """连接RingSlice到CrossPoint"""
-        # 连接CrossPoint slices（简化输出）
         connected_count = 0
         for node_id, node in self.nodes.items():
-            # 处理每个方向
-            for direction_str in ["TR", "TL", "TU", "TD"]:
-                # 确定CrossPoint方向
-                crosspoint_direction = "horizontal" if direction_str in ["TR", "TL"] else "vertical"
+            for direction_str in self.DIRECTIONS:
+                crosspoint_direction = self._get_crosspoint_direction(direction_str)
                 crosspoint = node.get_crosspoint(crosspoint_direction)
 
                 if not crosspoint:
                     continue
 
-                # 获取该方向的出链路（departure）
-                out_link = None
-                # 获取该方向的邻居节点
+                # 获取出链路
                 connections = self._get_ring_connections(node_id)
                 neighbor_id = connections.get(direction_str)
+                out_link = None
 
                 if neighbor_id is not None:
-                    if neighbor_id == node_id:
-                        # 自环链路
-                        reverse_direction = self.REVERSE_DIRECTION_MAP.get(direction_str, direction_str)
-                        out_link_id = f"link_{node_id}_{direction_str}_{reverse_direction}_{neighbor_id}"
-                    else:
-                        # 普通链路
-                        out_link_id = f"link_{node_id}_{direction_str}_{neighbor_id}"
-
+                    out_link_id = self._create_link_id(node_id, direction_str, neighbor_id)
                     out_link = self.links.get(out_link_id)
                     if out_link:
                         connected_count += 1
 
-                # 连接slice
-                for channel in ["req", "rsp", "data"]:  # 处理所有三个通道
-                    # 连接departure slice（出链路的第一个slice）
+                # 连接所有通道的slices
+                for channel in self.CHANNELS:
+                    # 连接departure slice
                     if out_link and out_link.ring_slices[channel]:
                         departure_slice = out_link.ring_slices[channel][0]
                         crosspoint.connect_slice(direction_str, "departure", departure_slice, channel)
 
-                    # 连接arrival slice - 需要根据CrossPoint连接规则
-                    arrival_slice = None
-
-                    if direction_str == "TR":
-                        # TR arrival slice来自其他节点的TR链路，如果没有则来自本节点TL自环
-                        found = False
-                        for link_id, link in self.links.items():
-                            if link.dest_node == node_id and "TR" in link_id and link.source_node != node_id:
-                                if link.ring_slices[channel]:
-                                    arrival_slice = link.ring_slices[channel][-1]  # 其他节点TR链路的最后slice
-                                    found = True
-                                break
-
-                        # 如果没有找到其他节点的TR链路，使用本节点TL_TR自环
-                        if not found:
-                            self_tl_link_id = f"link_{node_id}_TL_TR_{node_id}"
-                            self_tl_link = self.links.get(self_tl_link_id)
-                            if self_tl_link and self_tl_link.ring_slices[channel] and len(self_tl_link.ring_slices[channel]) > 1:
-                                arrival_slice = self_tl_link.ring_slices[channel][1]  # 自环的第1个slice
-
-                    elif direction_str == "TL":
-                        # TL arrival slice来自其他节点的TL链路，如果没有则来自本节点TR自环
-                        found = False
-                        for link_id, link in self.links.items():
-                            if link.dest_node == node_id and "TL" in link_id and link.source_node != node_id:
-                                if link.ring_slices[channel]:
-                                    arrival_slice = link.ring_slices[channel][-1]  # 其他节点TL链路的最后slice
-                                    found = True
-                                break
-
-                        # 如果没有找到其他节点的TL链路，使用本节点TR_TL自环
-                        if not found:
-                            self_tr_link_id = f"link_{node_id}_TR_TL_{node_id}"
-                            self_tr_link = self.links.get(self_tr_link_id)
-                            if self_tr_link and self_tr_link.ring_slices[channel] and len(self_tr_link.ring_slices[channel]) > 1:
-                                arrival_slice = self_tr_link.ring_slices[channel][1]  # 自环的第1个slice
-
-                    elif direction_str == "TU":
-                        # TU arrival slice来自其他节点的TU链路，如果没有则来自本节点TD自环
-                        found = False
-                        for link_id, link in self.links.items():
-                            if link.dest_node == node_id and "TU" in link_id and link.source_node != node_id:
-                                if link.ring_slices[channel]:
-                                    arrival_slice = link.ring_slices[channel][-1]  # 其他节点TU链路的最后slice
-                                    found = True
-                                break
-
-                        # 如果没有找到其他节点的TU链路，使用本节点TD_TU自环
-                        if not found:
-                            self_td_link_id = f"link_{node_id}_TD_TU_{node_id}"
-                            self_td_link = self.links.get(self_td_link_id)
-                            if self_td_link and self_td_link.ring_slices[channel] and len(self_td_link.ring_slices[channel]) > 1:
-                                arrival_slice = self_td_link.ring_slices[channel][1]  # 自环的第1个slice
-
-                    elif direction_str == "TD":
-                        # TD arrival slice来自其他节点的TD链路，如果没有则来自本节点TU自环
-                        found = False
-                        for link_id, link in self.links.items():
-                            if link.dest_node == node_id and "TD" in link_id and link.source_node != node_id:
-                                if link.ring_slices[channel]:
-                                    arrival_slice = link.ring_slices[channel][-1]  # 其他节点TD链路的最后slice
-                                    found = True
-                                break
-
-                        # 如果没有找到其他节点的TD链路，使用本节点TU_TD自环
-                        if not found:
-                            self_tu_link_id = f"link_{node_id}_TU_TD_{node_id}"
-                            self_tu_link = self.links.get(self_tu_link_id)
-                            if self_tu_link and self_tu_link.ring_slices[channel] and len(self_tu_link.ring_slices[channel]) > 1:
-                                arrival_slice = self_tu_link.ring_slices[channel][1]  # 自环的第1个slice
-
+                    # 连接arrival slice
+                    arrival_slice = self._find_arrival_slice(node_id, direction_str, channel)
                     if arrival_slice:
                         crosspoint.connect_slice(direction_str, "arrival", arrival_slice, channel)
 
-    def _get_node_links(self, node_id: int) -> Dict[str, Any]:
-        """获取节点的所有链接"""
-        node_links = {}
+    def _create_link_id(self, node_id: int, direction_str: str, neighbor_id: int) -> str:
+        """创建链路ID"""
+        if neighbor_id == node_id:
+            # 自环链路
+            reverse_direction = self.REVERSE_DIRECTION_MAP.get(direction_str, direction_str)
+            return f"link_{node_id}_{direction_str}_{reverse_direction}_{neighbor_id}"
+        else:
+            # 普通链路
+            return f"link_{node_id}_{direction_str}_{neighbor_id}"
 
+    def _find_arrival_slice(self, node_id: int, direction_str: str, channel: str) -> Any:
+        """查找arrival slice - 统一的查找逻辑"""
+        # 首先查找来自其他节点的同方向链路
         for link_id, link in self.links.items():
-            if link.source_node == node_id:
-                # 从链接ID中提取方向
-                parts = link_id.split("_")
-                if len(parts) >= 3:
-                    direction_str = parts[2]
-                    node_links[direction_str] = link
+            if link.dest_node == node_id and direction_str in link_id and link.source_node != node_id and link.ring_slices[channel]:
+                return link.ring_slices[channel][-1]  # 其他节点链路的最后slice
 
-        return node_links
+        # 如果没找到，使用本节点的反向自环链路
+        reverse_direction = self.REVERSE_DIRECTION_MAP.get(direction_str, direction_str)
+        self_loop_link_id = f"link_{node_id}_{reverse_direction}_{direction_str}_{node_id}"
+
+        self_loop_link = self.links.get(self_loop_link_id)
+        if self_loop_link and self_loop_link.ring_slices[channel] and len(self_loop_link.ring_slices[channel]) > 1:
+            return self_loop_link.ring_slices[channel][1]  # 自环的第1个slice
+
+        return None
 
     def _connect_ring_slices(self) -> None:
         """连接链路的RingSlice形成传输链"""
@@ -778,138 +672,21 @@ class CrossRingModel(BaseNoCModel):
 
         # 链路间slice连接完成
 
-    def _print_all_connections(self) -> None:
-        """打印所有链路连接和CrossPoint连接信息"""
-        print("\n" + "=" * 80)
-        print("🔗 CrossRing 连接信息调试")
-        print("=" * 80)
-
-        # 1. 打印所有链路信息
-        print("\n📋 链路列表:")
-        for link_id, link in sorted(self.links.items()):
-            slice_count = len(link.ring_slices.get("req", []))
-            print(f"  {link_id}: {link.source_node}->{link.dest_node}, {slice_count} slices")
-
-        # 2. 打印链路间slice连接
-        print("\n🔗 链路间slice连接:")
-        for link_id, link in sorted(self.links.items()):
-            for channel in ["req"]:  # 只显示req通道
-                slices = link.ring_slices.get(channel, [])
-                if slices:
-                    last_slice = slices[-1]
-                    if hasattr(last_slice, "downstream_slice") and last_slice.downstream_slice:
-                        downstream_info = f"slice_0"  # 简化显示
-                        # 找到downstream slice属于哪个链路
-                        for dst_link_id, dst_link in self.links.items():
-                            dst_slices = dst_link.ring_slices.get(channel, [])
-                            if dst_slices and dst_slices[0] == last_slice.downstream_slice:
-                                downstream_info = f"{dst_link_id}:0"
-                                break
-                        print(f"  {link_id}:{len(slices)-1} -> {downstream_info}")
-
-        # 3. 打印CrossPoint slice连接
-        # print("\n🎯 CrossPoint slice连接:")
-        for node_id, node in sorted(self.nodes.items()):
-            # print(f"\n  节点{node_id} (坐标{node.coordinates}):")
-
-            # 水平CrossPoint
-            h_cp = node.get_crosspoint("horizontal")
-            if h_cp:
-                # print(f"    水平CrossPoint:")
-                for direction in ["TR", "TL"]:
-                    for slice_type in ["arrival", "departure"]:
-                        slice_obj = h_cp.slices.get(direction, {}).get(slice_type)
-                        if slice_obj:
-                            # 找到这个slice属于哪个链路
-                            slice_info = "unknown"
-                            for link_id, link in self.links.items():
-                                for ch in ["req"]:
-                                    slices = link.ring_slices.get(ch, [])
-                                    for i, s in enumerate(slices):
-                                        if s == slice_obj:
-                                            slice_info = f"{link_id}:{i}"
-                                            break
-                            # print(f"      {direction} {slice_type}: {slice_info}")
-                        # else:
-                        # print(f"      {direction} {slice_type}: None")
-
-            # 垂直CrossPoint
-            v_cp = node.get_crosspoint("vertical")
-            if v_cp:
-                # print(f"    垂直CrossPoint:")
-                for direction in ["TU", "TD"]:
-                    for slice_type in ["arrival", "departure"]:
-                        slice_obj = v_cp.slices.get(direction, {}).get(slice_type)
-                        if slice_obj:
-                            # 找到这个slice属于哪个链路
-                            slice_info = "unknown"
-                            for link_id, link in self.links.items():
-                                for ch in ["req"]:
-                                    slices = link.ring_slices.get(ch, [])
-                                    for i, s in enumerate(slices):
-                                        if s == slice_obj:
-                                            slice_info = f"{link_id}:{i}"
-                                            break
-                            # print(f"      {direction} {slice_type}: {slice_info}")
-                        # else:
-                        # print(f"      {direction} {slice_type}: None")
-
-        print("\n" + "=" * 80)
-
     # 方向反转映射常量
+    # 网络连接配置常量
     REVERSE_DIRECTION_MAP = {"TR": "TL", "TL": "TR", "TU": "TD", "TD": "TU"}
+    DIRECTIONS = ["TR", "TL", "TU", "TD"]
+    CHANNELS = ["req", "rsp", "data"]
+    HORIZONTAL_DIRECTIONS = ["TR", "TL"]
+    VERTICAL_DIRECTIONS = ["TU", "TD"]
 
     def _get_node_coordinates(self, node_id: NodeId) -> Tuple[int, int]:
         """获取节点坐标（使用topology实例）"""
         return self.topology.get_node_position(node_id)
 
-    def _get_next_node_in_direction(self, node_id: NodeId, direction: RingDirection) -> NodeId:
-        """
-        获取指定方向的下一个节点（CrossRing特定实现）
-
-        在CrossRing中，边界节点连接到自己，而不是环绕连接
-
-        Args:
-            node_id: 当前节点ID
-            direction: 移动方向
-
-        Returns:
-            下一个节点的ID
-        """
-        x, y = self._get_node_coordinates(node_id)
-
-        if direction == RingDirection.TL:
-            # 向左：如果已经在最左边，连接到自己
-            if x == 0:
-                next_x = x  # 连接到自己
-            else:
-                next_x = x - 1
-            next_y = y
-        elif direction == RingDirection.TR:
-            # 向右：如果已经在最右边，连接到自己
-            if x == self.config.NUM_COL - 1:
-                next_x = x  # 连接到自己
-            else:
-                next_x = x + 1
-            next_y = y
-        elif direction == RingDirection.TU:
-            # 向上：如果已经在最上边，连接到自己
-            if y == 0:
-                next_y = y  # 连接到自己
-            else:
-                next_y = y - 1
-            next_x = x
-        elif direction == RingDirection.TD:
-            # 向下：如果已经在最下边，连接到自己
-            if y == self.config.NUM_ROW - 1:
-                next_y = y  # 连接到自己
-            else:
-                next_y = y + 1
-            next_x = x
-        else:
-            raise ValueError(f"不支持的方向: {direction}")
-
-        return next_y * self.config.NUM_COL + next_x
+    def _get_crosspoint_direction(self, direction_str: str) -> str:
+        """根据方向字符串获取CrossPoint类型"""
+        return "horizontal" if direction_str in self.HORIZONTAL_DIRECTIONS else "vertical"
 
     def _get_ring_connections(self, node_id: NodeId) -> Dict[str, NodeId]:
         """获取节点的环形连接信息"""
@@ -1181,15 +958,18 @@ class CrossRingModel(BaseNoCModel):
 
         Args:
             enable: 是否启用可视化
-            update_interval: 更新间隔（秒），用作plt.pause的参数
+            update_interval: 更新间隔（周期数/秒）
             start_cycle: 开始可视化的周期
         """
         self._visualization_enabled = enable
-        self._visualization_frame_interval = update_interval
+        self._visualization_update_interval = max(update_interval, 0.05) if enable else update_interval
+        self._visualization_frame_interval = update_interval  # 兼容性
         self._visualization_start_cycle = start_cycle
+        self._visualization_initialized = False
 
         if enable:
-            print(f"✅ 可视化已启用: 更新间隔={update_interval}s, 开始周期={start_cycle}")
+            print(f"✅ 可视化已启用: 更新间隔={update_interval}, 开始周期={start_cycle}")
+            print("   提示: 可视化窗口将在仿真开始后自动打开")
         else:
             print("❌ 可视化已禁用")
 
@@ -1233,129 +1013,72 @@ class CrossRingModel(BaseNoCModel):
                     + f"SN({ip_status['sn_active']}), 重试({ip_status['read_retries']}R+{ip_status['write_retries']}W)"
                 )
 
-    def _find_ip_interface(self, node_id: NodeId, req_type: str = None, ip_type: str = None) -> Optional[CrossRingIPInterface]:
+    # IP类型偏好配置
+    IP_TYPE_PREFERENCES = {"request": ["gdma", "sdma", "cdma"], "response": ["ddr", "l2m"]}  # RN端偏好DMA类  # SN端偏好存储类
+
+    def _find_ip_interface(self, node_id: NodeId, req_type: str = None, ip_type: str = None, preference_type: str = None) -> Optional[CrossRingIPInterface]:
         """
-        CrossRing特定的IP接口查找方法 (重写base版本)
+        统一的IP接口查找方法
 
         Args:
             node_id: 节点ID
-            req_type: 请求类型 (可选，此处未使用)
-            ip_type: IP类型 (可选)
+            req_type: 请求类型 (可选)
+            ip_type: 指定IP类型 (可选)
+            preference_type: 偏好类型 ('request'或'response', 可选)
 
         Returns:
             找到的IP接口，未找到返回None
         """
+        # 精确匹配指定IP类型
         if ip_type:
-            # 使用多维字典结构查找
-            if node_id in self.ip_interfaces and ip_type in self.ip_interfaces[node_id]:
-                return self.ip_interfaces[node_id][ip_type]
+            return self._find_exact_ip_interface(node_id, ip_type)
 
-            # 精确匹配失败，报错
-            raise ValueError(f"未找到指定IP接口: 节点{node_id}的{ip_type}")
-            return None
-        else:
-            # 获取该节点所有IP接口
-            if node_id in self.ip_interfaces:
-                node_interfaces = list(self.ip_interfaces[node_id].values())
-                if node_interfaces:
-                    return node_interfaces[0]
+        # 根据偏好类型查找
+        if preference_type and preference_type in self.IP_TYPE_PREFERENCES:
+            preferred_types = self.IP_TYPE_PREFERENCES[preference_type]
+            return self._find_preferred_ip_interface(node_id, preferred_types, preference_type)
 
-            raise ValueError(f"节点{node_id}没有任何IP接口")
-            return None
+        # 返回任意可用接口
+        return self._find_any_ip_interface(node_id)
+
+    def _find_exact_ip_interface(self, node_id: NodeId, ip_type: str) -> Optional[CrossRingIPInterface]:
+        """查找精确匹配的IP接口"""
+        if node_id in self.ip_interfaces and ip_type in self.ip_interfaces[node_id]:
+            return self.ip_interfaces[node_id][ip_type]
+
+        raise ValueError(f"未找到指定IP接口: 节点{node_id}的{ip_type}")
+
+    def _find_preferred_ip_interface(self, node_id: NodeId, preferred_types: list, context: str) -> Optional[CrossRingIPInterface]:
+        """根据偏好类型查找IP接口"""
+        all_ips = [ip for key, ip in self._ip_registry.items() if ip.node_id == node_id]
+        if not all_ips:
+            raise ValueError(f"节点{node_id}没有任何IP接口可用于{context}")
+
+        # 查找偏好类型的接口
+        for preferred_type in preferred_types:
+            preferred_ips = [ip for ip in all_ips if ip.ip_type.startswith(preferred_type) or ip.ip_type == preferred_type]
+            if preferred_ips:
+                return preferred_ips[0]
+
+        # 没有偏好类型时使用任意接口
+        return all_ips[0]
+
+    def _find_any_ip_interface(self, node_id: NodeId) -> Optional[CrossRingIPInterface]:
+        """查找任意可用的IP接口"""
+        if node_id in self.ip_interfaces:
+            node_interfaces = list(self.ip_interfaces[node_id].values())
+            if node_interfaces:
+                return node_interfaces[0]
+
+        raise ValueError(f"节点{node_id}没有任何IP接口")
 
     def _find_ip_interface_for_request(self, node_id: NodeId, req_type: str, ip_type: str = None) -> Optional[CrossRingIPInterface]:
         """为请求查找合适的IP接口（优先DMA类）"""
-        if ip_type:
-            return self._find_ip_interface(node_id, req_type, ip_type)
-
-        # 无指定IP类型时，优先选择DMA类IP (RN端)
-        all_ips = [ip for key, ip in self._ip_registry.items() if ip.node_id == node_id]
-        if not all_ips:
-            raise ValueError(f"节点{node_id}没有任何IP接口可用于请求")
-            return None
-
-        preferred_ips = [ip for ip in all_ips if ip.ip_type.startswith(("gdma", "sdma", "cdma"))]
-        if preferred_ips:
-            return preferred_ips[0]
-
-        # 没有DMA类IP时报警告但仍可使用其他IP
-        return all_ips[0]
+        return self._find_ip_interface(node_id, req_type, ip_type, "request")
 
     def _find_ip_interface_for_response(self, node_id: NodeId, req_type: str, ip_type: str = None) -> Optional[CrossRingIPInterface]:
         """为响应查找合适的IP接口（优先存储类）"""
-        if ip_type:
-            return self._find_ip_interface(node_id, req_type, ip_type)
-
-        # 无指定IP类型时，优先选择存储类IP (SN端)
-        all_ips = [ip for key, ip in self._ip_registry.items() if ip.node_id == node_id]
-        if not all_ips:
-            raise ValueError(f"节点{node_id}没有任何IP接口可用于响应")
-            return None
-
-        preferred_ips = [ip for ip in all_ips if ip.ip_type in ["ddr", "l2m"]]
-        if preferred_ips:
-            return preferred_ips[0]
-
-        # 没有存储类IP时报警告但仍可使用其他IP
-        return all_ips[0]
-
-    def run_file_simulation(
-        self, traffic_file_path: str, max_cycles: int = 10000, warmup_cycles: int = 1000, stats_start_cycle: int = 1000, cycle_accurate: bool = False, max_requests: int = None
-    ) -> Dict[str, Any]:
-        """
-        运行基于文件的仿真
-
-        Args:
-            traffic_file_path: 流量文件路径
-            max_cycles: 最大仿真周期
-            warmup_cycles: 热身周期
-            stats_start_cycle: 统计开始周期
-            cycle_accurate: 是否按照cycle精确注入
-            max_requests: 最大请求数限制
-
-        Returns:
-            包含仿真结果和分析的字典
-        """
-
-        # 设置TrafficScheduler
-        import os
-
-        traffic_filename = os.path.basename(traffic_file_path)
-        traffic_dir = os.path.dirname(traffic_file_path)
-
-        try:
-            self.setup_traffic_scheduler([[traffic_filename]], traffic_dir)
-            traffic_status = self.get_traffic_status()
-
-            if not traffic_status.get("has_pending", False):
-                return {"success": False, "message": "No requests loaded from file"}
-
-            loaded_count = traffic_status.get("active_traffics", 0)
-
-        except Exception as e:
-            raise RuntimeError(f"设置TrafficScheduler失败: {e}")
-            return {"success": False, "message": f"Failed to setup TrafficScheduler: {e}"}
-
-        # 运行仿真（TrafficScheduler会自动在合适的周期注入请求）
-        results = self.run_simulation(max_cycles=max_cycles, warmup_cycles=warmup_cycles, stats_start_cycle=stats_start_cycle)
-
-        # 分析结果
-        analysis = self.analyze_simulation_results(results)
-        report = self.generate_simulation_report(results, analysis)
-
-        # 获取最终的traffic统计
-        final_traffic_status = self.get_traffic_status()
-
-        return {
-            "success": True,
-            "traffic_file": traffic_file_path,
-            "loaded_requests": loaded_count,
-            "simulation_results": results,
-            "analysis": analysis,
-            "report": report,
-            "traffic_status": final_traffic_status,
-            "cycle_accurate": cycle_accurate,
-        }
+        return self._find_ip_interface(node_id, req_type, ip_type, "response")
 
     def analyze_simulation_results(self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output", verbose: bool = True) -> Dict[str, Any]:
         """
@@ -1425,214 +1148,6 @@ class CrossRingModel(BaseNoCModel):
 
         return analysis_results
 
-    def _generate_and_display_charts(self, analysis_results: Dict[str, Any]) -> None:
-        """生成并显示图表（不保存到文件）"""
-        import matplotlib.pyplot as plt
-
-        try:
-            # 生成带宽分析图表
-            if self._viz_config.get("bandwidth_analysis", False):
-                self._show_bandwidth_chart(analysis_results)
-
-            # 生成流量分布图表
-            if self._viz_config.get("flow_distribution", False):
-                self._show_flow_distribution_chart(analysis_results)
-
-        except Exception as e:
-            import traceback
-
-            traceback.print_exc()
-
-    def _show_bandwidth_chart(self, analysis_results: Dict[str, Any]) -> None:
-        """显示带宽分析图表"""
-        import matplotlib.pyplot as plt
-
-        if "带宽指标" not in analysis_results:
-            return
-
-        bandwidth_data = analysis_results["带宽指标"]
-
-        # 创建带宽图表
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        # 绘制总体带宽
-        if "总体带宽" in bandwidth_data:
-            overall_bw = bandwidth_data["总体带宽"]
-            non_weighted = overall_bw.get("非加权带宽_GB/s", 0)
-            weighted = overall_bw.get("加权带宽_GB/s", 0)
-
-            categories = ["非加权带宽", "加权带宽"]
-            values = [non_weighted, weighted]
-
-            ax.bar(categories, values, color=["skyblue", "lightcoral"])
-            ax.set_ylabel("带宽 (GB/s)")
-            ax.set_title("CrossRing总体带宽分析")
-
-            # 添加数值标签
-            for i, v in enumerate(values):
-                ax.text(i, v + max(values) * 0.01, f"{v:.2f}", ha="center", va="bottom")
-
-        plt.tight_layout()
-        plt.show()
-        print("📊 带宽分析图表已显示")
-
-    def _show_flow_distribution_chart(self, analysis_results: Dict[str, Any]) -> None:
-        """显示流量分布图表，包含节点IP带宽和链路带宽"""
-        try:
-            from src.noc.analysis.result_analyzer import ResultAnalyzer
-
-            # 重新生成请求度量数据（因为分析结果中没有直接存储）
-            analyzer = ResultAnalyzer()
-            metrics = analyzer.convert_tracker_to_request_info(self.request_tracker, self.config)
-
-            if not metrics:
-                self._show_simple_latency_chart(analysis_results)
-                return
-
-            # 使用ResultAnalyzer绘制真正的流量分布图（包含链路带宽）
-            # 显示模式，不保存到文件
-            chart_path = analyzer.plot_traffic_distribution(model=self, metrics=metrics, save_dir="", mode="total", save_figures=False, verbose=True)  # 不保存  # 不保存，直接显示
-
-        except Exception as e:
-            import traceback
-
-            # 回退到简单的延迟图表
-            self._show_simple_latency_chart(analysis_results)
-
-    def _show_simple_latency_chart(self, analysis_results: Dict[str, Any]) -> None:
-        """显示简单的延迟分布图表（回退方案）"""
-        import matplotlib.pyplot as plt
-
-        if "延迟指标" not in analysis_results:
-            return
-
-        latency_data = analysis_results["延迟指标"]
-
-        # 创建延迟分布图表
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        if "总体延迟" in latency_data:
-            overall_lat = latency_data["总体延迟"]
-            avg_latency = overall_lat.get("平均延迟_ns", 0)
-            max_latency = overall_lat.get("最大延迟_ns", 0)
-            min_latency = overall_lat.get("最小延迟_ns", 0)
-
-            categories = ["最小延迟", "平均延迟", "最大延迟"]
-            values = [min_latency, avg_latency, max_latency]
-
-            ax.bar(categories, values, color=["lightgreen", "gold", "lightcoral"])
-            ax.set_ylabel("延迟 (ns)")
-            ax.set_title("CrossRing延迟分布分析")
-
-            # 添加数值标签
-            for i, v in enumerate(values):
-                ax.text(i, v + max(values) * 0.01, f"{v:.2f}", ha="center", va="bottom")
-
-        plt.tight_layout()
-        plt.show()
-        print("📊 延迟分布图表已显示")
-
-    def _analyze_ip_interfaces(self, ip_stats: Dict[str, Any]) -> Dict[str, Any]:
-        """分析IP接口统计"""
-        summary = {"total_interfaces": len(ip_stats), "by_type": {}, "total_read_transactions": 0, "total_write_transactions": 0, "total_retries": 0}
-
-        for ip_key, stats in ip_stats.items():
-            ip_type = ip_key.split("_")[0]
-
-            if ip_type not in summary["by_type"]:
-                summary["by_type"][ip_type] = {"count": 0, "read_transactions": 0, "write_transactions": 0, "retries": 0}
-
-            summary["by_type"][ip_type]["count"] += 1
-            summary["by_type"][ip_type]["read_transactions"] += stats.get("rn_read_active", 0)
-            summary["by_type"][ip_type]["write_transactions"] += stats.get("rn_write_active", 0)
-            summary["by_type"][ip_type]["retries"] += stats.get("read_retries", 0) + stats.get("write_retries", 0)
-
-            summary["total_read_transactions"] += stats.get("rn_read_active", 0)
-            summary["total_write_transactions"] += stats.get("rn_write_active", 0)
-            summary["total_retries"] += stats.get("read_retries", 0) + stats.get("write_retries", 0)
-
-        return summary
-
-    def _analyze_congestion(self) -> Dict[str, Any]:
-        """分析拥塞情况"""
-        congestion_summary = {"congestion_detected": False, "total_congestion_events": 0, "congestion_rate": 0.0}
-
-        if hasattr(self, "get_congestion_statistics"):
-            congestion_stats = self.get_congestion_statistics()
-            total_congestion = congestion_stats.get("total_congestion_events", 0)
-            total_injections = congestion_stats.get("total_injections", 1)
-
-            congestion_summary["congestion_detected"] = total_congestion > 0
-            congestion_summary["total_congestion_events"] = total_congestion
-            congestion_summary["congestion_rate"] = total_congestion / total_injections if total_injections > 0 else 0.0
-
-        return congestion_summary
-
-    def generate_simulation_report(self, results: Dict[str, Any], analysis: Dict[str, Any] = None) -> str:
-        """
-        生成仿真报告
-
-        Args:
-            results: 仿真结果
-            analysis: 分析结果（可选，如果未提供则自动分析）
-
-        Returns:
-            报告文本
-        """
-        if analysis is None:
-            analysis = self.analyze_simulation_results(results)
-
-        report = []
-        report.append("=" * 60)
-        report.append("CrossRing NoC 仿真报告")
-        report.append("=" * 60)
-
-        # 拓扑信息
-        report.append(f"拓扑配置: {self.config.NUM_ROW}x{self.config.NUM_COL}")
-        report.append(f"总节点数: {self.config.NUM_NODE}")
-        report.append("")
-
-        # 基础指标
-        basic = analysis.get("basic_metrics", {})
-        report.append("性能指标:")
-        report.append(f"  仿真周期: {basic.get('total_cycles', 0):,}")
-        report.append(f"  总事务数: {basic.get('total_transactions', 0):,}")
-        report.append(f"  峰值活跃请求: {basic.get('peak_active_requests', 0)}")
-        report.append(f"  吞吐量: {basic.get('throughput', 0):.4f} 事务/周期")
-        report.append(f"  带宽: {basic.get('bandwidth_mbps', 0):.2f} Mbps")
-        report.append("")
-
-        # 重试统计
-        report.append("重试统计:")
-        report.append(f"  读重试: {basic.get('total_read_retries', 0)}")
-        report.append(f"  写重试: {basic.get('total_write_retries', 0)}")
-        report.append("")
-
-        # IP接口统计
-        ip_summary = analysis.get("ip_summary", {})
-        report.append("IP接口统计:")
-        report.append(f"  总接口数: {ip_summary.get('total_interfaces', 0)}")
-
-        by_type = ip_summary.get("by_type", {})
-        for ip_type, stats in by_type.items():
-            report.append(f"  {ip_type}: {stats['count']}个接口, " f"读事务={stats['read_transactions']}, " f"写事务={stats['write_transactions']}, " f"重试={stats['retries']}")
-
-        report.append("")
-
-        # 拥塞分析
-        congestion = analysis.get("congestion_summary", {})
-        if congestion.get("congestion_detected", False):
-            report.append("拥塞分析:")
-            report.append(f"  拥塞事件: {congestion.get('total_congestion_events', 0)}")
-            report.append(f"  拥塞率: {congestion.get('congestion_rate', 0):.2%}")
-        else:
-            report.append("拥塞分析: 未检测到显著拥塞")
-
-        report.append("")
-        report.append("=" * 60)
-
-        return "\n".join(report)
-
     def _get_ip_type_abbreviation(self, ip_id: str) -> str:
         """获取IP类型缩写"""
         ip_id_lower = ip_id.lower()
@@ -1667,122 +1182,128 @@ class CrossRingModel(BaseNoCModel):
             # 对于其他类型，使用前两个字符加数字
             return f"{ip_id[:2].upper()}0"
 
+    # FIFO注册配置
+    FIFO_REGISTRY_CONFIG = {
+        "node_fifos": [
+            {"attr_path": "inject_input_fifos", "name_prefix": "IQ_OUT", "directions": ["TR", "TL", "TU", "TD", "EQ"]},
+            {"attr_path": "eject_queue.eject_input_fifos", "name_prefix": "EQ_IN", "directions": ["TU", "TD", "TR", "TL"]},
+            {"attr_path": "ring_bridge.ring_bridge_input_fifos", "name_prefix": "RB_IN", "directions": None},  # 使用所有可用方向
+            {"attr_path": "ring_bridge.ring_bridge_output_fifos", "name_prefix": "RB_OUT", "directions": None},  # 使用所有可用方向
+        ],
+        "ip_fifos": [{"attr_path": "l2h_fifos", "name_prefix": "L2H"}, {"attr_path": "h2l_fifos", "name_prefix": "H2L"}],
+        "channel_buffers": [{"attr_path": "ip_inject_channel_buffers", "name_prefix": "IP_CH"}, {"attr_path": "ip_eject_channel_buffers", "name_prefix": "IP_EJECT"}],
+    }
+
     def _register_all_fifos_for_statistics(self) -> None:
         """注册所有FIFO到统计收集器（重写基类方法）"""
-
-        # 注册IP接口的FIFO
-        for ip_id, ip_interface in self.ip_interfaces.items():
-            node_id = str(ip_interface.node_id)
-            ip_abbrev = self._get_ip_type_abbreviation(ip_id)
-
-            # l2h FIFO
-            for channel in ["req", "rsp", "data"]:
-                if hasattr(ip_interface, "l2h_fifos") and channel in ip_interface.l2h_fifos:
-                    fifo = ip_interface.l2h_fifos[channel]
-                    if hasattr(fifo, "name") and hasattr(fifo, "stats"):  # 确保是PipelinedFIFO
-                        simplified_name = f"{channel}_L2H_{ip_abbrev}"
-                        self.fifo_stats_collector.register_fifo(fifo, node_id=node_id, simplified_name=simplified_name)
-
-            # h2l FIFO
-            for channel in ["req", "rsp", "data"]:
-                if hasattr(ip_interface, "h2l_fifos") and channel in ip_interface.h2l_fifos:
-                    fifo = ip_interface.h2l_fifos[channel]
-                    if hasattr(fifo, "name") and hasattr(fifo, "stats"):  # 确保是PipelinedFIFO
-                        simplified_name = f"{channel}_H2L_{ip_abbrev}"
-                        self.fifo_stats_collector.register_fifo(fifo, node_id=node_id, simplified_name=simplified_name)
-
-            # inject FIFO (IP内部注入FIFO)
-            for channel in ["req", "rsp", "data"]:
-                if hasattr(ip_interface, "inject_fifos") and channel in ip_interface.inject_fifos:
-                    fifo = ip_interface.inject_fifos[channel]
-                    if hasattr(fifo, "name") and hasattr(fifo, "stats"):  # 确保是PipelinedFIFO
-                        simplified_name = f"{channel}_IP_INJ_{ip_abbrev}"
-                        self.fifo_stats_collector.register_fifo(fifo, node_id=node_id, simplified_name=simplified_name)
-
-            # ip_processing FIFO (IP内部处理FIFO)
-            for channel in ["req", "rsp", "data"]:
-                if hasattr(ip_interface, "ip_processing_fifos") and channel in ip_interface.ip_processing_fifos:
-                    fifo = ip_interface.ip_processing_fifos[channel]
-                    if hasattr(fifo, "name") and hasattr(fifo, "stats"):  # 确保是PipelinedFIFO
-                        simplified_name = f"{channel}_IP_PROC_{ip_abbrev}"
-                        self.fifo_stats_collector.register_fifo(fifo, node_id=node_id, simplified_name=simplified_name)
+        # IP接口的FIFO将在setup_traffic_scheduler后单独注册
 
         # 注册CrossRing节点的FIFO
         for node_id, node in self.nodes.items():
             node_id_str = str(node_id)
+            self._register_node_fifos(node, node_id_str)
 
-            # 注册inject direction FIFOs (注入队列输出)
-            if hasattr(node, "inject_input_fifos"):
-                # 结构: inject_input_fifos[channel][direction]
-                for channel in ["req", "rsp", "data"]:
-                    if channel in node.inject_input_fifos:
-                        direction_dict = node.inject_input_fifos[channel]
-                        if isinstance(direction_dict, dict):
-                            for direction in ["TR", "TL", "TU", "TD", "EQ"]:
-                                if direction in direction_dict:
-                                    fifo = direction_dict[direction]
-                                    if hasattr(fifo, "name") and hasattr(fifo, "stats"):
-                                        simplified_name = f"{channel}_IQ_OUT_{direction}"
-                                        self.fifo_stats_collector.register_fifo(fifo, node_id=node_id_str, simplified_name=simplified_name)
+    def _register_node_fifos(self, node: Any, node_id_str: str) -> None:
+        """注册节点的FIFO"""
+        channel = "data"  # 只注册data通道
 
-            # 注册eject input FIFOs (弹出队列输入)
-            if hasattr(node, "eject_input_fifos"):
-                # 结构: eject_input_fifos[channel][direction]
-                for channel in ["req", "rsp", "data"]:
-                    if channel in node.eject_input_fifos:
-                        direction_dict = node.eject_input_fifos[channel]
-                        if isinstance(direction_dict, dict):
-                            for direction in ["TU", "TD", "TR", "TL"]:
-                                if direction in direction_dict:
-                                    fifo = direction_dict[direction]
-                                    if hasattr(fifo, "name") and hasattr(fifo, "stats"):
-                                        simplified_name = f"{channel}_EQ_IN_{direction}"
-                                        self.fifo_stats_collector.register_fifo(fifo, node_id=node_id_str, simplified_name=simplified_name)
+        for fifo_config in self.FIFO_REGISTRY_CONFIG["node_fifos"]:
+            self._register_fifo_group(node, node_id_str, channel, fifo_config["attr_path"], fifo_config["name_prefix"], fifo_config.get("directions"))
 
-            # 注册ip_inject_channel_buffers (IP注入通道缓冲)
-            if hasattr(node, "ip_inject_channel_buffers"):
-                for ip_id, channels in node.ip_inject_channel_buffers.items():
-                    if isinstance(channels, dict):
-                        ip_abbrev = self._get_ip_type_abbreviation(ip_id)
-                        for channel, fifo in channels.items():
-                            if hasattr(fifo, "name") and hasattr(fifo, "stats"):
-                                simplified_name = f"{channel}_IP_CH_{ip_abbrev}"
-                                self.fifo_stats_collector.register_fifo(fifo, node_id=node_id_str, simplified_name=simplified_name)
+    def _register_fifo_group(self, obj: Any, node_id_str: str, channel: str, attr_path: str, name_prefix: str, directions: list = None) -> None:
+        """注册一组FIFO"""
+        # 获取嵌套属性
+        fifo_container = self._get_nested_attr(obj, attr_path)
+        if not fifo_container or channel not in fifo_container:
+            return
 
-            # 注册ip_eject_channel_buffers (IP弹出通道缓冲)
-            if hasattr(node, "ip_eject_channel_buffers"):
-                for ip_id, channels in node.ip_eject_channel_buffers.items():
-                    if isinstance(channels, dict):
-                        ip_abbrev = self._get_ip_type_abbreviation(ip_id)
-                        for channel, fifo in channels.items():
-                            if hasattr(fifo, "name") and hasattr(fifo, "stats"):
-                                simplified_name = f"{channel}_IP_EJECT_{ip_abbrev}"
-                                self.fifo_stats_collector.register_fifo(fifo, node_id=node_id_str, simplified_name=simplified_name)
+        direction_dict = fifo_container[channel]
+        if not isinstance(direction_dict, dict):
+            return
 
-            # 注册ring_bridge input FIFOs (环桥输入)
-            if hasattr(node, "ring_bridge_input_fifos"):
-                for channel in ["req", "rsp", "data"]:
-                    if channel in node.ring_bridge_input_fifos:
-                        direction_dict = node.ring_bridge_input_fifos[channel]
-                        if isinstance(direction_dict, dict):
-                            for direction, fifo in direction_dict.items():
-                                if hasattr(fifo, "name") and hasattr(fifo, "stats"):
-                                    simplified_name = f"{channel}_RB_IN_{direction}"
-                                    self.fifo_stats_collector.register_fifo(fifo, node_id=node_id_str, simplified_name=simplified_name)
+        # 决定要遍历的方向
+        target_directions = directions if directions else direction_dict.keys()
 
-            # 注册ring_bridge output FIFOs (环桥输出)
-            if hasattr(node, "ring_bridge_output_fifos"):
-                for channel in ["req", "rsp", "data"]:
-                    if channel in node.ring_bridge_output_fifos:
-                        direction_dict = node.ring_bridge_output_fifos[channel]
-                        if isinstance(direction_dict, dict):
-                            for direction, fifo in direction_dict.items():
-                                if hasattr(fifo, "name") and hasattr(fifo, "stats"):
-                                    simplified_name = f"{channel}_RB_OUT_{direction}"
-                                    self.fifo_stats_collector.register_fifo(fifo, node_id=node_id_str, simplified_name=simplified_name)
+        for direction in target_directions:
+            if direction in direction_dict:
+                fifo = direction_dict[direction]
+                if hasattr(fifo, "name") and hasattr(fifo, "stats"):
+                    simplified_name = f"{channel}_{name_prefix}_{direction}"
+                    self.fifo_stats_collector.register_fifo(fifo, node_id=node_id_str, simplified_name=simplified_name)
 
-        # 统计注册的FIFO数量
-        total_fifos = len(self.fifo_stats_collector.fifo_registry)
+    def _get_nested_attr(self, obj: Any, attr_path: str) -> Any:
+        """获取嵌套属性"""
+        attrs = attr_path.split(".")
+        result = obj
+
+        for attr in attrs:
+            if hasattr(result, attr):
+                result = getattr(result, attr)
+            else:
+                return None
+
+        return result
+
+    def _register_ip_fifos_for_statistics(self) -> None:
+        """注册IP接口的FIFO到统计收集器"""
+        channel = "data"  # 只注册data通道
+
+        # 注册IP接口的FIFO
+        for ip_id, ip_interface in self.ip_interfaces.items():
+            interface_obj, node_id = self._extract_ip_interface_info(ip_interface)
+            if not interface_obj:
+                continue
+
+            ip_abbrev = self._get_ip_type_abbreviation(ip_id)
+
+            # 使用配置驱动的方式注册IP FIFO
+            for fifo_config in self.FIFO_REGISTRY_CONFIG["ip_fifos"]:
+                self._register_ip_fifo_by_config(interface_obj, node_id, channel, ip_abbrev, fifo_config)
+
+        # 注册节点上IP的channel buffer FIFOs
+        for node_id, node in self.nodes.items():
+            node_id_str = str(node_id)
+            self._register_channel_buffer_fifos(node, node_id_str, channel)
+
+    def _extract_ip_interface_info(self, ip_interface) -> tuple:
+        """提取IP接口信息"""
+        if isinstance(ip_interface, dict):
+            node_id = str(ip_interface.get("node_id", "unknown"))
+            interface_obj = ip_interface.get("interface")
+        else:
+            node_id = str(getattr(ip_interface, "node_id", "unknown"))
+            interface_obj = ip_interface
+
+        return interface_obj, node_id
+
+    def _register_ip_fifo_by_config(self, interface_obj, node_id, channel, ip_abbrev, fifo_config):
+        """根据配置注册IP FIFO"""
+        attr_path = fifo_config["attr_path"]
+        name_prefix = fifo_config["name_prefix"]
+
+        if hasattr(interface_obj, attr_path.replace("_fifos", "_fifos")):
+            fifos = getattr(interface_obj, attr_path)
+            if channel in fifos:
+                fifo = fifos[channel]
+                if hasattr(fifo, "name") and hasattr(fifo, "stats"):
+                    simplified_name = f"{channel}_{name_prefix}_{ip_abbrev}"
+                    self.fifo_stats_collector.register_fifo(fifo, node_id=node_id, simplified_name=simplified_name)
+
+    def _register_channel_buffer_fifos(self, node, node_id_str, channel):
+        """注册channel buffer FIFOs"""
+        for buffer_config in self.FIFO_REGISTRY_CONFIG["channel_buffers"]:
+            attr_path = buffer_config["attr_path"]
+            name_prefix = buffer_config["name_prefix"]
+
+            if hasattr(node, attr_path):
+                buffer_dict = getattr(node, attr_path)
+                for ip_id, channels in buffer_dict.items():
+                    if isinstance(channels, dict) and channel in channels:
+                        fifo = channels[channel]
+                        if hasattr(fifo, "name") and hasattr(fifo, "stats"):
+                            ip_abbrev = self._get_ip_type_abbreviation(ip_id)
+                            simplified_name = f"{channel}_{name_prefix}_{ip_abbrev}"
+                            self.fifo_stats_collector.register_fifo(fifo, node_id=node_id_str, simplified_name=simplified_name)
 
     def export_fifo_statistics(self, filename: str = None, output_dir: str = "results") -> str:
         """
@@ -1796,10 +1317,6 @@ class CrossRingModel(BaseNoCModel):
             导出的文件路径
         """
         return self.fifo_stats_collector.export_to_csv(filename, output_dir)
-
-    def get_fifo_statistics_summary(self) -> str:
-        """获取FIFO统计摘要报告"""
-        return self.fifo_stats_collector.get_summary_report()
 
     # ========== 可视化相关方法 ==========
 
@@ -1890,94 +1407,6 @@ class CrossRingModel(BaseNoCModel):
         self._setup_crossring_networks()
         print(f"CrossRing网络初始化完成: {self.config.NUM_ROW}x{self.config.NUM_COL}")
 
-    def inject_packet(self, src_node: NodeId, dst_node: NodeId, op_type: str = "R", burst_size: int = 4, cycle: int = None, packet_id: str = None) -> bool:
-        """注入包（统一接口）"""
-        if cycle is None:
-            cycle = self.cycle
-
-        # 生成包ID
-        if packet_id is None:
-            packet_id = f"pkt_{src_node}_{dst_node}_{op_type}_{cycle}"
-
-        # 开始追踪请求
-        if self.debug_enabled or packet_id in self.trace_packets:
-            self.request_tracker.start_request(packet_id, src_node, dst_node, op_type, burst_size, cycle)
-
-        # 使用现有的inject_test_traffic方法
-        packet_ids = self.inject_request(source=src_node, destination=dst_node, req_type=op_type, count=1, burst_length=burst_size)
-
-        if len(packet_ids) > 0 and self.debug_enabled:
-            self.request_tracker.update_request_state(packet_id, RequestState.INJECTED, cycle)
-
-        return len(packet_ids) > 0
-
-    def get_completed_packets(self) -> List[Dict[str, Any]]:
-        """获取已完成的包（统一接口）"""
-        completed_packets = []
-
-        # 从请求跟踪器中获取已完成的包
-        if hasattr(self, "request_tracker") and self.request_tracker:
-            for packet_id, lifecycle in self.request_tracker.completed_requests.items():
-                if lifecycle.current_state == RequestState.COMPLETED and not lifecycle.reported:
-                    completed_packets.append(
-                        {
-                            "packet_id": packet_id,
-                            "source": lifecycle.source,
-                            "destination": lifecycle.destination,
-                            "op_type": lifecycle.op_type,
-                            "burst_size": lifecycle.burst_size,
-                            "injected_cycle": lifecycle.injected_cycle,
-                            "completed_cycle": lifecycle.completed_cycle,
-                            "latency": lifecycle.completed_cycle - lifecycle.injected_cycle if lifecycle.completed_cycle else 0,
-                            "data_flit_count": lifecycle.burst_size if lifecycle.op_type == "R" else 0,
-                        }
-                    )
-                    # 标记为已报告
-                    lifecycle.reported = True
-
-        return completed_packets
-
-    def _simulate_packet_completion(self):
-        """简化的包完成模拟逻辑（用于demo）"""
-        if not hasattr(self, "request_tracker") or not self.request_tracker:
-            return
-
-        # 模拟延迟：假设包在注入后10-20个周期完成
-        # 使用列表拷贝避免在迭代时修改字典
-        active_packets = list(self.request_tracker.active_requests.items())
-        for packet_id, lifecycle in active_packets:
-            if lifecycle.current_state == RequestState.INJECTED:
-                latency = self.cycle - lifecycle.injected_cycle
-
-                # 简单的完成条件：延迟达到10-20周期（基于距离和类型）
-                expected_latency = 10 + (abs(lifecycle.source - lifecycle.destination) * 2)
-                if lifecycle.op_type == "R":
-                    expected_latency += 5  # 读操作需要更长时间
-
-                if latency >= expected_latency:
-                    # 标记为完成
-                    self.request_tracker.update_request_state(packet_id, RequestState.COMPLETED, self.cycle)
-                    lifecycle.completed_cycle = self.cycle
-
-        # ========== 调试功能接口 ==========
-
-        # 打印验证结果
-        validation = self.validate_traffic_correctness()
-        print(f"\n流量正确性验证:")
-        print(f"  完成率: {validation['completion_rate']:.1f}%")
-        print(f"  响应错误: {validation['response_errors']}")
-        print(f"  数据错误: {validation['data_errors']}")
-        print(f"  结果: {'正确' if validation['is_correct'] else '有错误'}")
-
-    def set_debug_sleep_time(self, sleep_time: float):
-        """
-        设置debug模式下每个周期的休眠时间
-
-        Args:
-            sleep_time: 休眠时间（秒），0表示不休眠
-        """
-        self.debug_config["sleep_time"] = sleep_time
-
     def _collect_and_export_link_statistics(self, save_dir: str, timestamp: int = None) -> str:
         """收集所有链路的带宽统计数据并导出CSV文件
 
@@ -2063,42 +1492,6 @@ class CrossRingModel(BaseNoCModel):
         except Exception as e:
             print(f"ERROR: 导出链路统计数据失败: {e}")
             import traceback
-
-    def _print_link_bandwidth_summary(self, link_stats: List[Dict[str, Any]]) -> None:
-        """打印链路带宽统计汇总"""
-        if not link_stats:
-            return
-
-        print("\n📊 =============== 链路带宽统计汇总 ===============")
-
-        # 按链路分组统计
-        links_summary = {}
-        for stat in link_stats:
-            link_key = f"{stat['link_id']} ({stat['source_node']}→{stat['dest_node']})"
-            if link_key not in links_summary:
-                links_summary[link_key] = {"total_bandwidth": 0.0, "avg_utilization": 0.0, "avg_idle_rate": 0.0, "channels": []}
-
-            links_summary[link_key]["total_bandwidth"] += stat["bandwidth_gbps"]
-            links_summary[link_key]["avg_utilization"] += stat["utilization"]
-            links_summary[link_key]["avg_idle_rate"] += stat["idle_rate"]
-            links_summary[link_key]["channels"].append({"channel": stat["channel"], "bandwidth": stat["bandwidth_gbps"], "utilization": stat["utilization"]})
-
-        # 显示汇总结果
-        for link_name, summary in links_summary.items():
-            num_channels = len(summary["channels"])
-            avg_util = summary["avg_utilization"] / num_channels if num_channels > 0 else 0
-            avg_idle = summary["avg_idle_rate"] / num_channels if num_channels > 0 else 0
-
-            print(f"\n🔗 {link_name}:")
-            print(f"   总带宽: {summary['total_bandwidth']:.2f} GB/s")
-            print(f"   平均利用率: {avg_util:.1%}, 平均空载率: {avg_idle:.1%}")
-
-            for ch in summary["channels"]:
-                print(f"   - {ch['channel']}: {ch['bandwidth']:.2f}GB/s ({ch['utilization']:.1%})")
-
-        print("=" * 55)
-
-    # ========== 重写run_simulation以集成可视化控制 ==========
 
     def run_simulation(
         self, max_time_ns: float = 5000.0, stats_start_time_ns: float = 0.0, progress_interval_ns: float = 1000.0, results_analysis: bool = False, verbose: bool = True
@@ -2210,92 +1603,3 @@ class CrossRingModel(BaseNoCModel):
                 print(f"结果分析过程中出错: {e}")
 
         return results
-
-    # ========== 实现BaseNoCModel抽象方法 ==========
-
-    def check_all_slots_in_network(self) -> Dict[str, Any]:
-        """
-        检查整个网络中所有链路的slot状态
-
-        Returns:
-            网络级别的slot检查报告
-        """
-        network_report = {
-            "total_links": len(self.links),
-            "links_with_all_slots": 0,
-            "links_with_missing_slots": 0,
-            "total_slices": 0,
-            "total_slots": 0,
-            "link_reports": {},
-            "summary": "",
-            "missing_slots_summary": [],
-        }
-
-        for link_id, link in self.links.items():
-            link_report = link.check_all_slices_have_slots()
-            network_report["link_reports"][link_id] = link_report
-
-            # 累计统计
-            network_report["total_slices"] += link_report["total_slices"]
-            network_report["total_slots"] += sum(link_report["slot_distribution"].values())
-
-            if link_report["slices_without_slots"] == 0:
-                network_report["links_with_all_slots"] += 1
-            else:
-                network_report["links_with_missing_slots"] += 1
-                network_report["missing_slots_summary"].extend(link_report["missing_slots"])
-
-        # 生成网络级别汇总
-        if network_report["links_with_missing_slots"] == 0:
-            network_report["summary"] = f"✅ 所有{network_report['total_links']}个链路的slot都完整"
-        else:
-            network_report["summary"] = f"❌ {network_report['links_with_missing_slots']}/{network_report['total_links']}个链路有slot缺失"
-
-        return network_report
-
-    def print_network_slot_report(self) -> None:
-        """打印网络级别的slot检查报告"""
-        report = self.check_all_slots_in_network()
-
-        print("🌐 CrossRing网络Slot完整性检查报告:")
-        print(f"   {report['summary']}")
-        print(f"   总链路数: {report['total_links']}")
-        print(f"   总Slice数: {report['total_slices']}")
-        print(f"   总Slot数: {report['total_slots']}")
-        print(f"   完整链路: {report['links_with_all_slots']}, 缺失链路: {report['links_with_missing_slots']}")
-
-        # 如果有缺失，按链路详细报告
-        if report["links_with_missing_slots"] > 0:
-            print("\n   问题链路详情:")
-            for link_id, link_report in report["link_reports"].items():
-                if link_report["slices_without_slots"] > 0:
-                    print(f"   📍 {link_id}: {link_report['summary']}")
-                    for missing in link_report["missing_slots"]:
-                        print(f"      - {missing['channel']}通道 {missing['slice_id']} (位置{missing['position']})")
-
-        print(f"\n   Slot分布统计:")
-        for link_id, link_report in report["link_reports"].items():
-            total_link_slots = sum(link_report["slot_distribution"].values())
-            print(f"   {link_id}: {total_link_slots}个slot {link_report['slot_distribution']}")
-
-
-def create_crossring_model(config_name: str = "default", num_row: int = 5, num_col: int = 4, **config_kwargs) -> CrossRingModel:
-    """
-    创建CrossRing模型的便捷函数
-
-    Args:
-        config_name: 配置名称
-        num_row: 行数
-        num_col: 列数
-        **config_kwargs: 其他配置参数
-
-    Returns:
-        CrossRing模型实例
-    """
-    config = CrossRingConfig(num_col=num_col, num_row=num_row, config_name=config_name)
-
-    # 应用额外的配置参数
-    if config_kwargs:
-        config.from_dict(config_kwargs)
-
-    return CrossRingModel(config)

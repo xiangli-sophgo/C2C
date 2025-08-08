@@ -26,7 +26,6 @@ from .ip_interface import CrossRingIPInterface
 
 from .model import (
     CrossRingModel,
-    create_crossring_model,
 )
 
 # 导入现有的组件
@@ -62,7 +61,6 @@ __all__ = [
     "create_crossring_flit",
     "return_crossring_flit",
     "get_crossring_flit_pool_stats",
-    "create_crossring_model",
 ]
 
 
