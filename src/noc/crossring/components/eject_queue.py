@@ -37,7 +37,6 @@ class EjectQueue:
         self.eq_in_depth = config.fifo_config.EQ_IN_FIFO_DEPTH
         self.eq_ch_depth = config.fifo_config.EQ_CH_DEPTH
 
-
         # 连接的IP列表
         self.connected_ips = []
 
@@ -59,9 +58,7 @@ class EjectQueue:
         for channel in ["req", "rsp", "data"]:
             result[channel] = {}
             for direction in ["TU", "TD", "TR", "TL"]:
-                result[channel][direction] = self._create_fifo(
-                    f"eject_in_{channel}_{direction}_{self.node_id}", self.eq_in_depth
-                )
+                result[channel][direction] = self._create_fifo(f"eject_in_{channel}_{direction}_{self.node_id}", self.eq_in_depth)
         return result
 
     def connect_ip(self, ip_id: str) -> bool:
@@ -80,25 +77,17 @@ class EjectQueue:
             # 为这个IP创建eject channel_buffer
             self.ip_eject_channel_buffers[ip_id] = {}
             for channel in ["req", "rsp", "data"]:
-                self.ip_eject_channel_buffers[ip_id][channel] = self._create_fifo(
-                    f"ip_eject_channel_{channel}_{ip_id}_{self.node_id}", self.eq_ch_depth
-                )
+                self.ip_eject_channel_buffers[ip_id][channel] = self._create_fifo(f"ip_eject_channel_{channel}_{ip_id}_{self.node_id}", self.eq_ch_depth)
 
             # 为每个IP的每个通道创建独立的轮询状态
             for channel in ["req", "rsp", "data"]:
                 ip_channel_key = f"{ip_id}_{channel}"
                 if ip_channel_key not in self.eject_arbitration_state:
                     active_sources = self._get_active_eject_sources()
-                    self.eject_arbitration_state[ip_channel_key] = {
-                        "current_source": 0,
-                        "sources": active_sources.copy(),
-                        "last_served_source": {source: 0 for source in active_sources}
-                    }
+                    self.eject_arbitration_state[ip_channel_key] = {"current_source": 0, "sources": active_sources.copy(), "last_served_source": {source: 0 for source in active_sources}}
             return True
         else:
             return False
-
-
 
     def _get_active_eject_sources(self) -> List[str]:
         """根据路由策略获取活跃的eject输入源。"""
@@ -117,7 +106,6 @@ class EjectQueue:
             sources.extend(["TU", "TD", "TR", "TL"])
 
         return sources
-
 
     def compute_arbitration(self, cycle: int, inject_input_fifos: Dict, ring_bridge) -> None:
         """
@@ -143,7 +131,7 @@ class EjectQueue:
         # 收集所有源的可用flit
         available_flits = {}  # {source: [flit1, flit2, ...]}
         active_sources = self._get_active_eject_sources()
-        
+
         for source in active_sources:
             flit = self._peek_flit_from_eject_source(source, channel, inject_input_fifos, ring_bridge)
             if flit is not None:
@@ -158,10 +146,10 @@ class EjectQueue:
             ip_channel_key = f"{ip_id}_{channel}"
             if ip_channel_key not in self.eject_arbitration_state:
                 continue
-                
+
             arb_state = self.eject_arbitration_state[ip_channel_key]
             sources = arb_state["sources"]
-            
+
             # 检查目标为该IP的可用源
             candidate_sources = []
             for source in sources:
@@ -170,40 +158,42 @@ class EjectQueue:
                         if target_ip == ip_id:
                             candidate_sources.append((source, flit))
                             break  # 每个源只取一个flit
-            
+
             if candidate_sources:
                 # 按轮询顺序选择源
                 selected_source = None
                 selected_flit = None
-                
+                selected_index = None
+
                 for source_attempt in range(len(sources)):
                     current_source_idx = (arb_state["current_source"] + source_attempt) % len(sources)
                     current_source = sources[current_source_idx]
-                    
+
                     # 检查当前源是否有候选flit
                     for source, flit in candidate_sources:
                         if source == current_source:
                             selected_source = source
                             selected_flit = flit
+                            selected_index = current_source_idx
                             break
-                    
-                    if selected_source:
+
+                    if selected_source is not None:
                         break
-                
+
                 if selected_source and selected_flit:
                     # 保存传输计划
                     self._eject_transfer_plan.append((selected_source, channel, selected_flit, ip_id))
                     arb_state["last_served_source"][selected_source] = cycle
-                    
+
                     # 从available_flits中移除已选择的flit，避免重复分配
                     if selected_source in available_flits:
-                        available_flits[selected_source] = [(f, t) for f, t in available_flits[selected_source] 
-                                                          if f != selected_flit or t != ip_id]
+                        available_flits[selected_source] = [(f, t) for f, t in available_flits[selected_source] if f != selected_flit or t != ip_id]
                         if not available_flits[selected_source]:
                             del available_flits[selected_source]
-                
-                # 更新该IP通道的轮询指针
-                arb_state["current_source"] = (arb_state["current_source"] + 1) % len(sources)
+
+                # 更新该IP通道的轮询指针：从刚才命中的源位置+1
+                if selected_index is not None:
+                    arb_state["current_source"] = (selected_index + 1) % len(sources)
 
     def execute_arbitration(self, cycle: int, inject_input_fifos: Dict, ring_bridge) -> None:
         """
@@ -288,7 +278,7 @@ class EjectQueue:
             alloc_info = flit.allocated_entry_info
             alloc_direction = alloc_info.get("direction")
             alloc_priority = alloc_info.get("priority")
-            
+
             if alloc_direction and alloc_priority:
                 # 根据方向找到对应的CrossPoint
                 crosspoint = None
@@ -296,8 +286,8 @@ class EjectQueue:
                     crosspoint = self.parent_node.vertical_crosspoint
                 elif direction in ["TL", "TR"]:
                     crosspoint = self.parent_node.horizontal_crosspoint
-                
-                if crosspoint and hasattr(crosspoint, 'etag_entry_managers'):
+
+                if crosspoint and hasattr(crosspoint, "etag_entry_managers"):
                     if channel in crosspoint.etag_entry_managers and alloc_direction in crosspoint.etag_entry_managers[channel]:
                         entry_manager = crosspoint.etag_entry_managers[channel][alloc_direction]
                         if entry_manager.release_entry(alloc_priority):
@@ -316,13 +306,13 @@ class EjectQueue:
                     eject_buffer = self.ip_eject_channel_buffers[ip_id][channel]
                     if eject_buffer.ready_signal():
                         return ip_id
-            
+
             # 如果完全匹配的IP buffer不ready，等待而不是fallback到其他IP
             # 这可以避免响应被错误路由到同类型的其他IP
             for ip_id in self.connected_ips:
                 if ip_id == flit.destination_type:
                     return None  # 目标IP存在但buffer不ready，等待
-            
+
             # 如果完全匹配的IP不存在，才考虑基础类型匹配（用于兼容性）
             dest_base_type = flit.destination_type.split("_")[0]
             for ip_id in self.connected_ips:
@@ -415,7 +405,6 @@ class EjectQueue:
         """FIFO时序逻辑更新。"""
         # 不需要再次更新current_cycle，已经在compute阶段更新过
         self._step_all_fifos("step_update_phase")
-
 
     def get_stats(self) -> Dict:
         """获取统计信息。"""

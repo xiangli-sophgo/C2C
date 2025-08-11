@@ -391,7 +391,7 @@ class CrossRingNodeVisualizer:
                     if "_arr" in lane:
                         # 为水平方向的CrossPoint调整标签位置，使其居中对齐
                         (label_x, label_y) = (
-                            (x + module_width / 2, y + module_height / 2 + square / 2) if lane[:2] in ["TL"] else (x + module_width / 2 - square * 2 / 3, y + module_height / 2 - square)
+                            (x + module_width / 2 + square / 5, y + module_height / 2 - square) if lane[:2] in ["TL"] else (x + module_width / 2 - square * 4 / 5, y + module_height / 2 + square / 2)
                         )
                         self.ax.text(label_x, label_y, lane[:2].upper(), ha=ha, va="center", fontsize=fontsize, family="serif")
                 elif lane[:2] in ["TL", "TR", "TU", "TD", "EQ"]:
@@ -516,21 +516,12 @@ class CrossRingNodeVisualizer:
             else:
                 raise ValueError(f"Unknown orientation: {orient}")
 
-
     def _get_flit_attributes(self, flit):
         """提取flit属性的通用方法，兼容字典和对象格式"""
         if isinstance(flit, dict):
-            return {
-                "packet_id": flit.get("packet_id"),
-                "flit_id": flit.get("flit_id", 0),
-                "etag": flit.get("ETag_priority", flit.get("etag_priority", "T2"))
-            }
+            return {"packet_id": flit.get("packet_id"), "flit_id": flit.get("flit_id", 0), "etag": flit.get("ETag_priority", flit.get("etag_priority", "T2"))}
         else:
-            return {
-                "packet_id": getattr(flit, "packet_id", None),
-                "flit_id": getattr(flit, "flit_id", 0),
-                "etag": getattr(flit, "etag_priority", getattr(flit, "ETag_priority", "T2"))
-            }
+            return {"packet_id": getattr(flit, "packet_id", None), "flit_id": getattr(flit, "flit_id", 0), "etag": getattr(flit, "etag_priority", getattr(flit, "ETag_priority", "T2"))}
 
     def _get_flit_style(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None):
         """
@@ -539,7 +530,7 @@ class CrossRingNodeVisualizer:
         - linewidth / edgecolor 由 flit.ETag_priority 决定（tag相关边框属性，不透明）
         """
         import matplotlib.colors as mcolors
-        
+
         # E-Tag样式映射
         _ETAG_LW = {"T0": 1.2, "T1": 0.9, "T2": 0.6}
         _ETAG_EDGE = {"T0": "darkred", "T1": "darkblue", "T2": "black"}
@@ -646,11 +637,11 @@ class CrossRingNodeVisualizer:
 
         # 触发重绘
         self.fig.canvas.draw_idle()
-    
+
     def sync_tags_mode(self, show_tags_mode):
         """同步标签显示模式"""
         self.show_tags_mode = show_tags_mode
-        
+
         # 更新所有patch的样式
         for patch, (txt, flit) in self.patch_info_map.items():
             # 重新计算并应用flit样式
@@ -663,7 +654,7 @@ class CrossRingNodeVisualizer:
                 patch.set_facecolor(face)
                 patch.set_linewidth(lw)
                 patch.set_edgecolor(edge)
-        
+
         # 触发重绘
         self.fig.canvas.draw_idle()
 
@@ -677,22 +668,22 @@ class CrossRingNodeVisualizer:
             # 优先使用保存的repr
             if "flit_repr" in flit:
                 return flit["flit_repr"]
-            
+
             # 回退到基本信息显示
             info_lines = []
             packet_id = flit.get("packet_id", None)
             flit_id = flit.get("flit_id", None)
             channel = flit.get("channel", None)
-            
+
             if packet_id is not None:
                 info_lines.append(f"Packet ID: {packet_id}")
             if flit_id is not None:
                 info_lines.append(f"Flit ID: {flit_id}")
             if channel:
                 info_lines.append(f"Channel: {channel}")
-                
+
             return "\n".join(info_lines) if info_lines else "No valid info"
-        
+
         # 对于活动的flit对象，直接使用repr
         try:
             return repr(flit)
@@ -706,7 +697,7 @@ class CrossRingNodeVisualizer:
         """提取flit数据的通用方法，包含flit的repr信息"""
         if not flit:
             return None
-        
+
         # 提取基本字段
         # 为ETag_priority添加多种可能的属性名检查，确保兼容性
         # CrossRing flit使用etag_priority（小写），优先检查这个
@@ -715,7 +706,7 @@ class CrossRingNodeVisualizer:
             etag_priority = getattr(flit, "ETag_priority", None)
         if etag_priority is None:
             etag_priority = getattr(flit, "priority", "T2")  # 最后使用默认值
-        
+
         data = {
             "packet_id": getattr(flit, "packet_id", None),
             "flit_id": getattr(flit, "flit_id", None),
@@ -725,13 +716,13 @@ class CrossRingNodeVisualizer:
             "channel": channel,
             "direction": direction,
         }
-        
+
         # 保存flit的完整repr信息
         try:
             data["flit_repr"] = repr(flit)
         except Exception as e:
             data["flit_repr"] = f"repr failed: {e}"
-        
+
         return data
 
     def _extract_fifo_data(self, fifos, node_id, channels=["req", "rsp", "data"]):
@@ -933,7 +924,7 @@ class CrossRingNodeVisualizer:
             (self.eq_patches, self.eq_texts),
             (self.rb_patches, self.rb_texts),
             (self.cph_patches, self.cph_texts),
-            (self.cpv_patches, self.cpv_texts)
+            (self.cpv_patches, self.cpv_texts),
         ]:
             patches_dict, texts_dict = component_dict
             for lane_name, patches in patches_dict.items():
@@ -1136,7 +1127,6 @@ class CrossRingNodeVisualizer:
         if lane_name not in patch_dict or lane_name not in text_dict:
             return
         self._clear_and_render_patches(patch_dict[lane_name], text_dict[lane_name], flit_list)
-
 
     def _render_crosspoint_patches_split(self, patch_dict, text_dict, direction, slice_data):
         """渲染CrossPoint类型patch的slice数据 - 拆分版本"""

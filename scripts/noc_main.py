@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import sys
 from pathlib import Path
-
+import numpy as np
 
 from src.noc.crossring.model import CrossRingModel
 from src.noc.configs.crossring.config import create_3x3_config, create_5x2_config, create_5x4_config
@@ -25,20 +25,21 @@ def main():
     # config = create_5x2_config()
     config = create_5x4_config()
     model = CrossRingModel(config)
+    np.random.seed(811)
 
     save_dir = None
     save_dir = f"../output/noc/CrossRing/{config.NUM_COL}x{config.NUM_ROW}/"
 
     # 3. 配置各种选项
     model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)
-    # model.setup_debug(trace_packets=[128], update_interval=0.0)
-    # model.setup_visualization(enable=True, update_interval=0.5, start_cycle=200)
+    # model.setup_debug(trace_packets=[3], update_interval=0.0)
+    # model.setup_visualization(enable=True, update_interval=0.8, start_cycle=110)
 
     model.setup_result_analysis(
         # 图片生成控制
         flow_distribution_fig=0,
         bandwidth_analysis_fig=0,
-        latency_analysis_fig=0,
+        latency_analysis_fig=1,
         save_figures=0,
         # CSV文件导出控制
         export_request_csv=1,

@@ -403,8 +403,9 @@ class CrossRingModel(BaseNoCModel):
                 traffic_ch_names = sorted(list(all_ip_types))  # 保持一致性
                 self.config.update_channel_names(traffic_ch_names)
 
-            # 去重
-            unique_required_ips = list(set(all_required_ips))
+            # 去重并保持输入文件顺序的稳定性
+            # 使用dict.fromkeys保留首次出现顺序，避免set引入的非确定性
+            unique_required_ips = list(dict.fromkeys(all_required_ips))
 
             # 动态创建需要的IP接口
             self._create_specific_ip_interfaces(unique_required_ips)

@@ -30,10 +30,11 @@ class TrafficFileReader:
         self.write_req = 0
         self.read_flit = 0
         self.write_flit = 0
-        
+
         # IP接口使用信息
-        self.required_ips = set()  # 存储需要的IP接口 (node_id, ip_type)
-        self.used_nodes = set()  # 存储使用的节点ID
+        # 使用列表记录并用dict.fromkeys去重以保持读取顺序稳定
+        self.required_ips = []  # 存储需要的IP接口 (node_id, ip_type)
+        self.used_nodes = []  # 存储使用的节点ID
 
         # 文件状态
         self._file_handle = None
@@ -52,26 +53,26 @@ class TrafficFileReader:
         with open(self.abs_path, "r") as f:
             for line in f:
                 line = line.strip()
-                if not line or line.startswith('#'):
+                if not line or line.startswith("#"):
                     continue
-                    
+
                 # 支持逗号和空格分隔符
-                if ',' in line:
-                    parts = line.split(',')
+                if "," in line:
+                    parts = line.split(",")
                 else:
                     parts = line.split()
-                    
+
                 if len(parts) < 7:
                     continue
 
                 try:
                     cycle, src_node, src_ip, dst_node, dst_ip, op, burst = parts[:7]
-                    
+
                     # 转换类型
                     src_node = int(src_node)
                     dst_node = int(dst_node)
                     burst = int(burst)
-                    
+
                     # 收集统计信息
                     if op.upper() in ["R", "READ"]:
                         self.read_req += 1
@@ -79,29 +80,28 @@ class TrafficFileReader:
                     else:
                         self.write_req += 1
                         self.write_flit += burst
-                    
-                    # 收集IP接口使用信息
-                    self.required_ips.add((src_node, src_ip))
-                    self.required_ips.add((dst_node, dst_ip))
-                    self.used_nodes.add(src_node)
-                    self.used_nodes.add(dst_node)
-                    
+
+                    # 收集IP接口使用信息（保持文件出现顺序）
+                    self.required_ips.append((src_node, src_ip))
+                    self.required_ips.append((dst_node, dst_ip))
+                    self.used_nodes.append(src_node)
+                    self.used_nodes.append(dst_node)
+
                 except (ValueError, IndexError):
                     continue
 
         self.total_req = self.read_req + self.write_req
         self.total_flit = self.read_flit + self.write_flit
         self._stats_calculated = True
-        
+
     def get_required_ip_interfaces(self):
         """获取需要的IP接口信息"""
         self._calculate_file_stats()  # 确保已经分析过文件
-        return {
-            'required_ips': list(self.required_ips),
-            'used_nodes': list(self.used_nodes),
-            'total_interfaces': len(self.required_ips),
-            'total_nodes': len(self.used_nodes)
-        }
+        # 去重但保持顺序
+        ordered_required_ips = list(dict.fromkeys(self.required_ips))
+        ordered_used_nodes = list(dict.fromkeys(self.used_nodes))
+
+        return {"required_ips": ordered_required_ips, "used_nodes": ordered_used_nodes, "total_interfaces": len(ordered_required_ips), "total_nodes": len(ordered_used_nodes)}
 
     def _open_file(self):
         """打开文件句柄"""
@@ -144,7 +144,7 @@ class TrafficFileReader:
             # 解析请求
             t, src, src_t, dst, dst_t, op, burst = parts
             # t是纳秒，time_offset也是纳秒，都需要转换为网络周期数
-            network_freq = getattr(self.config.basic_config, 'NETWORK_FREQUENCY', 1.0) * 1000000000
+            network_freq = getattr(self.config.basic_config, "NETWORK_FREQUENCY", 1.0) * 1000000000
             t = (int(t) + self.time_offset) * int(network_freq) / 1e9  # Convert to cycles: (ns + offset_ns) * Hz / 1e9
             src, dst, burst = int(src), int(dst), int(burst)
 
@@ -393,7 +393,7 @@ class TrafficScheduler:
             print(f"  流量 ID: {traffic_id}, 请求数: {total_req}, Flit数: {total_flit}")
             print(f"  时间偏移: {chain.chain_time_offset}ns")
             if requests:
-                network_freq = getattr(self.config.basic_config, 'NETWORK_FREQUENCY', 1.0) * 1000000000
+                network_freq = getattr(self.config.basic_config, "NETWORK_FREQUENCY", 1.0) * 1000000000
                 first_time_ns = requests[0][0] * 1e9 / int(network_freq)
                 last_time_ns = requests[-1][0] * 1e9 / int(network_freq)
                 print(f"  首个请求时间: {first_time_ns}ns ({requests[0][0]} 周期)")
@@ -422,7 +422,7 @@ class TrafficScheduler:
                 # 解析原始数据
                 t, src, src_t, dst, dst_t, op, burst = parts
                 # t是纳秒，time_offset也是纳秒，都需要转换为网络周期数
-                network_freq = getattr(self.config.basic_config, 'NETWORK_FREQUENCY', 1.0) * 1000000000
+                network_freq = getattr(self.config.basic_config, "NETWORK_FREQUENCY", 1.0) * 1000000000
                 t = (int(t) + time_offset) * int(network_freq) / 1e9  # Convert to cycles: (ns + offset_ns) * Hz / 1e9
                 src, dst, burst = int(src), int(dst), int(burst)
 
@@ -513,7 +513,7 @@ class TrafficScheduler:
                 state.update_received_flit()
                 # 记录实际结束时间（纳秒）
                 if state.received_flit >= state.total_flit:
-                    network_freq = getattr(self.config.basic_config, 'NETWORK_FREQUENCY', 1.0) * 1000000000
+                    network_freq = getattr(self.config.basic_config, "NETWORK_FREQUENCY", 1.0) * 1000000000
                     state.actual_end_time = self.current_cycle // int(network_freq)
 
     def check_and_advance_chains(self, current_cycle: int) -> List[str]:
@@ -581,28 +581,22 @@ class TrafficScheduler:
 
     def get_total_requests(self) -> int:
         """获取所有traffic文件的总请求数
-        
+
         Returns:
             所有traffic文件中的总请求数量
         """
         total = 0
         for traffic_state in self.active_traffics.values():
             total += traffic_state.total_req
-        
+
         # 如果当前没有活跃的traffic，检查已完成的链
         if total == 0:
             for chain in self.parallel_chains:
                 for traffic_file in chain.traffic_files:
                     # 创建临时reader来获取统计信息
-                    reader = TrafficFileReader(
-                        traffic_file, 
-                        self.traffic_file_path, 
-                        self.config, 
-                        0,  # time_offset不影响统计
-                        f"temp_{traffic_file}"
-                    )
+                    reader = TrafficFileReader(traffic_file, self.traffic_file_path, self.config, 0, f"temp_{traffic_file}")  # time_offset不影响统计
                     total += reader.total_req
-        
+
         return total
 
     def get_chain_status(self) -> Dict[str, Dict]:

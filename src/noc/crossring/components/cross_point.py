@@ -577,34 +577,34 @@ class CrossPoint:
 
         # ========== 执行下环传输计划 ==========
         for plan in self.ejection_transfer_plans:
-            if plan["type"] == "eject_to_ring_bridge":
+            if plan.get("type") == "eject_to_ring_bridge":
                 # 下环到Ring Bridge
                 success = self._execute_RB_ejection(plan, ring_bridge)
                 if success:
-                    self.stats["flits_ejected"][plan["channel"]] += 1
+                    self.stats["flits_ejected"][plan.get("channel")] += 1
 
-            elif plan["type"] == "eject_to_eq_fifo":
+            elif plan.get("type") == "eject_to_eq_fifo":
                 # 下环到EjectQueue FIFO
                 success = self._execute_EQ_ejection(plan)
                 if success:
-                    self.stats["flits_ejected"][plan["channel"]] += 1
+                    self.stats["flits_ejected"][plan.get("channel")] += 1
 
         # ========== 执行上环传输计划 ==========
         # 按优先级排序执行（ring_bridge优先于FIFO）
         sorted_plans = sorted(self.injection_transfer_plans, key=lambda x: x.get("priority", 999))
 
         for plan in sorted_plans:
-            if plan["type"] == "RB_injection":
+            if plan.get("type") == "RB_injection":
                 # Ring Bridge重新注入
                 success = self._execute_RB_injection(plan, ring_bridge)
                 if success:
-                    self.stats["flits_injected"][plan["channel"]] += 1
+                    self.stats["flits_injected"][plan.get("channel")] += 1
 
-            elif plan["type"] == "IQ_injection":
+            elif plan.get("type") == "IQ_injection":
                 # 普通FIFO注入
                 success = self._execute_IQ_injection(plan)
                 if success:
-                    self.stats["flits_injected"][plan["channel"]] += 1
+                    self.stats["flits_injected"][plan.get("channel")] += 1
 
     def _should_eject_flit(self, flit: CrossRingFlit, arrival_direction: str) -> Tuple[bool, str]:
         """
@@ -928,9 +928,9 @@ class CrossPoint:
             return True
 
         # 情况2：slot有flit，但在compute阶段已决定下环（检查ejection_transfer_plans）
-        ejection_key = (direction, channel)
-        if ejection_key in [plan.get("direction_channel") for plan in self.ejection_transfer_plans if plan.get("direction_channel") == ejection_key]:
-            return True  # 这个slot即将在update阶段被清空
+        for plan in self.ejection_transfer_plans:
+            if plan.get("direction") == direction and plan.get("channel") == channel:
+                return True  # 这个slot即将在update阶段被清空
 
         # 情况3：slot被本节点预约（I-Tag机制）
         if current_slot.itag_reserved and current_slot.itag_reserver_id == self.node_id:
@@ -1048,10 +1048,10 @@ class CrossPoint:
         Returns:
             是否执行成功
         """
-        flit = plan["flit"]  # compute阶段已从slot中取出的flit
-        source_direction = plan["source_direction"]
-        channel = plan["channel"]
-        original_slot = plan["original_slot"]
+        flit = plan.get("flit")  # compute阶段已从slot中取出的flit
+        source_direction = plan.get("source_direction")
+        channel = plan.get("channel")
+        original_slot = plan.get("original_slot")
 
         # 更新flit状态
         flit.flit_position = f"RB_{source_direction}"
@@ -1086,11 +1086,11 @@ class CrossPoint:
         Returns:
             是否执行成功
         """
-        flit = plan["flit"]  # compute阶段已从slot中取出的flit
-        target_fifo = plan["target_fifo"]
-        direction = plan["direction"]
-        channel = plan["channel"]
-        original_slot = plan["original_slot"]
+        flit = plan.get("flit")  # compute阶段已从slot中取出的flit
+        target_fifo = plan.get("target_fifo")
+        direction = plan.get("direction")
+        channel = plan.get("channel")
+        original_slot = plan.get("original_slot")
 
         # 更新flit状态
         flit.flit_position = f"EQ_{direction}"
@@ -1119,8 +1119,8 @@ class CrossPoint:
         Returns:
             是否执行成功
         """
-        direction = plan["direction"]
-        channel = plan["channel"]
+        direction = plan.get("direction")
+        channel = plan.get("channel")
 
         # 从内部缓冲区获取flit
         if self.injected_flits_buffer["RB"][channel]:
@@ -1139,8 +1139,8 @@ class CrossPoint:
         Returns:
             是否执行成功
         """
-        direction = plan["direction"]
-        channel = plan["channel"]
+        direction = plan.get("direction")
+        channel = plan.get("channel")
 
         # 从内部缓冲区获取flit
         if self.injected_flits_buffer["IQ"][channel]:

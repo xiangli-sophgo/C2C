@@ -391,7 +391,7 @@ class BaseNoCModel(ABC):
         # 如果用户中断，立即停止
         if self.user_interrupted:
             return True
-            
+
         # 直接从TrafficScheduler获取总请求数（已经计算过的）
         total_requests = 0
         if hasattr(self, "traffic_scheduler") and self.traffic_scheduler:
@@ -421,7 +421,6 @@ class BaseNoCModel(ABC):
                 "throughput": {"requests_per_cycle": 0.0, "data_per_cycle": 0.0},
             }
 
-
     def _generate_simulation_results(self, stats_start_cycle: int) -> Dict[str, Any]:
         """生成仿真结果"""
         simulation_time = self.end_time - self.start_time
@@ -442,14 +441,14 @@ class BaseNoCModel(ABC):
         total_data_flits = 0
         total_retries = 0
         all_latencies = []
-        
+
         for ip in self._ip_registry.values():
             total_requests += sum(ip.stats["requests_sent"].values())
             total_responses += sum(ip.stats["responses_received"].values())
             total_data_flits += sum(ip.stats["data_transferred"].values())
             total_retries += sum(ip.stats["retries"].values())
             all_latencies.extend(ip.stats["latencies"]["total"])
-        
+
         # 计算平均延迟和吞吐量
         average_latency = sum(all_latencies) / len(all_latencies) if all_latencies else 0.0
         throughput = total_requests / self.cycle if self.cycle > 0 else 0.0
@@ -476,9 +475,7 @@ class BaseNoCModel(ABC):
             "memory_stats": {
                 "flit_pools": pool_stats,
             },
-            "performance_metrics": self._calculate_performance_metrics_direct(
-                total_requests, total_retries, total_data_flits, all_latencies
-            ),
+            "performance_metrics": self._calculate_performance_metrics_direct(total_requests, total_retries, total_data_flits, all_latencies),
         }
 
         return results
@@ -491,8 +488,7 @@ class BaseNoCModel(ABC):
             "ip_interface_count": len(self.ip_interfaces),
         }
 
-    def _calculate_performance_metrics_direct(self, total_requests: int, total_retries: int, 
-                                              total_data_flits: int, all_latencies: list) -> Dict[str, Any]:
+    def _calculate_performance_metrics_direct(self, total_requests: int, total_retries: int, total_data_flits: int, all_latencies: list) -> Dict[str, Any]:
         """直接计算性能指标（不依赖global_stats）"""
         metrics = {}
 
@@ -643,11 +639,11 @@ class BaseNoCModel(ABC):
     def _print_final_statistics(self) -> None:
         """打印最终统计信息"""
         print("仿真完成!")
-        
+
         # 计算仿真用时统计
         simulation_time = self.end_time - self.start_time
         cycles_per_second = self.cycle / simulation_time if simulation_time > 0 else 0
-        
+
         print(f"仿真用时: {simulation_time:.2f} 秒")
         print(f"处理周期数: {self.cycle} 个周期")
         print(f"仿真性能: {cycles_per_second:.0f} 周期/秒")
@@ -937,7 +933,7 @@ class BaseNoCModel(ABC):
         self.debug_config["sleep_time"] = sleep_time
 
         if trace_packets:
-            if isinstance(trace_packets, (list, tuple)):
+            if isinstance(trace_packets, (list, tuple, set)):
                 self.trace_packets.update(trace_packets)
             else:
                 self.trace_packets.add(trace_packets)

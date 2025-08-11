@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Any, Deque
 from collections import deque, defaultdict
 import logging
+import numpy as np
 
 from .flit import CrossRingFlit, create_crossring_flit
 from .config import CrossRingConfig
@@ -195,6 +196,10 @@ class CrossRingIPInterface(BaseIPInterface):
             if flit.packet_id not in self.rn_rdb:
                 self.rn_rdb[flit.packet_id] = []
 
+            # 记录cmd_entry_cake0_cycle
+            if hasattr(flit, "cmd_entry_cake0_cycle") and (flit.cmd_entry_cake0_cycle == np.inf or flit.cmd_entry_cake0_cycle == -1):
+                flit.cmd_entry_cake0_cycle = self.current_cycle
+
             self.rn_tracker["read"].append(flit)
             self.rn_tracker_pointer["read"] += 1
 
@@ -215,6 +220,9 @@ class CrossRingIPInterface(BaseIPInterface):
             self.rn_wdb_count -= flit.burst_length
             self.rn_tracker_count["write"] -= 1
             self.rn_wdb[flit.packet_id] = []  # 只创建空的WDB条目
+            # 记录cmd_entry_cake0_cycle
+            if hasattr(flit, "cmd_entry_cake0_cycle") and (flit.cmd_entry_cake0_cycle == np.inf or flit.cmd_entry_cake0_cycle == -1):
+                flit.cmd_entry_cake0_cycle = self.current_cycle
             self.rn_tracker["write"].append(flit)
             self.rn_tracker_pointer["write"] += 1
 

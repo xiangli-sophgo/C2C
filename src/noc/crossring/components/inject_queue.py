@@ -52,10 +52,7 @@ class InjectQueue:
         for channel in ["req", "rsp", "data"]:
             self.inject_arbitration_state[channel] = {}
             for direction in ["TR", "TL", "TU", "TD", "EQ"]:
-                self.inject_arbitration_state[channel][direction] = {
-                    "current_ip_index": 0,
-                    "ip_list": []
-                }
+                self.inject_arbitration_state[channel][direction] = {"current_ip_index": 0, "ip_list": []}
 
         # 传输计划（两阶段执行用）
         self._inject_transfer_plan = []
@@ -64,7 +61,7 @@ class InjectQueue:
         """创建方向化FIFO集合。"""
         # 获取统计采样间隔
         sample_interval = self.config.basic_config.FIFO_STATS_SAMPLE_INTERVAL
-        
+
         result = {}
         for channel in ["req", "rsp", "data"]:
             result[channel] = {}
@@ -91,7 +88,7 @@ class InjectQueue:
             # 为这个IP创建inject channel_buffer
             # 获取统计采样间隔
             sample_interval = self.config.basic_config.FIFO_STATS_SAMPLE_INTERVAL
-            
+
             self.ip_inject_channel_buffers[ip_id] = {}
             for channel in ["req", "rsp", "data"]:
                 fifo = PipelinedFIFO(f"ip_inject_channel_{channel}_{ip_id}_{self.node_id}", depth=self.iq_ch_depth)
@@ -158,19 +155,20 @@ class InjectQueue:
             for direction in ["TR", "TL", "TU", "TD", "EQ"]:
                 arb_state = self.inject_arbitration_state[channel][direction]
                 ip_list = arb_state["ip_list"]
-                
+
                 if not ip_list:
                     continue  # 该(channel, direction)没有IP
-                
+
                 # 在该(channel, direction)内轮询IP
                 current_ip_index = arb_state["current_ip_index"]
                 selected_ip = None
                 selected_flit = None
-                
+                selected_ip_index = None
+
                 for ip_offset in range(len(ip_list)):
                     ip_index = (current_ip_index + ip_offset) % len(ip_list)
                     ip_id = ip_list[ip_index]
-                    
+
                     if ip_id not in self.ip_inject_channel_buffers:
                         continue
 
@@ -196,14 +194,19 @@ class InjectQueue:
                     # 找到了可传输的flit
                     selected_ip = ip_id
                     selected_flit = flit
+                    selected_ip_index = ip_index
                     break
 
                 if selected_ip and selected_flit:
                     # 计划传输
                     self._inject_transfer_plan.append((selected_ip, channel, selected_flit, direction))
-                
-                # 更新该(channel, direction)的轮询指针（无论是否找到flit都要更新）
-                arb_state["current_ip_index"] = (arb_state["current_ip_index"] + 1) % len(ip_list)
+
+                # 更新该(channel, direction)的轮询指针
+                # 命中时：从刚才命中的索引+1；未命中时：从当前位置+1
+                if selected_ip_index is not None:
+                    arb_state["current_ip_index"] = (selected_ip_index + 1) % len(ip_list)
+                else:
+                    arb_state["current_ip_index"] = (arb_state["current_ip_index"] + 1) % len(ip_list)
 
     def execute_arbitration(self, cycle: int) -> None:
         """
@@ -224,7 +227,6 @@ class InjectQueue:
                 # 更新flit位置状态
                 actual_flit.flit_position = f"IQ_{direction}"
                 actual_flit.current_node_id = self.node_id
-
 
     def _step_all_fifos(self, method_name: str, cycle: int = None) -> None:
         """对所有FIFO执行指定方法的辅助函数。"""
@@ -255,7 +257,6 @@ class InjectQueue:
         """FIFO时序逻辑更新。"""
         # 不需要再次更新current_cycle，已经在compute阶段更新过
         self._step_all_fifos("step_update_phase")
-
 
     def _calculate_routing_direction_fallback(self, flit: CrossRingFlit) -> str:
         """
@@ -318,25 +319,23 @@ class InjectQueue:
     def _find_target_direction_for_flit(self, flit: CrossRingFlit, channel: str) -> str:
         """
         确定flit的目标传输方向。
-        
+
         Args:
             flit: 要路由的flit
             channel: 通道类型
-            
+
         Returns:
             目标方向（"TR", "TL", "TU", "TD", "EQ"）
         """
         # 优先使用拓扑路由表
-        if self.topology and hasattr(self.topology, 'get_next_direction'):
+        if self.topology and hasattr(self.topology, "get_next_direction"):
             try:
-                direction = self.topology.get_next_direction(
-                    self.coordinates, flit.destination, flit
-                )
+                direction = self.topology.get_next_direction(self.coordinates, flit.destination, flit)
                 if direction:
                     return direction
             except Exception:
                 pass  # 回退到默认路由
-        
+
         # 使用回退路由计算
         return self._calculate_routing_direction_fallback(flit)
 
