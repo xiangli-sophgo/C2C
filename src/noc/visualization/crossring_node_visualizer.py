@@ -519,15 +519,15 @@ class CrossRingNodeVisualizer:
     def _get_flit_attributes(self, flit):
         """提取flit属性的通用方法，兼容字典和对象格式"""
         if isinstance(flit, dict):
-            return {"packet_id": flit.get("packet_id"), "flit_id": flit.get("flit_id", 0), "etag": flit.get("ETag_priority", flit.get("etag_priority", "T2"))}
+            return {"packet_id": flit.get("packet_id"), "flit_id": flit.get("flit_id", 0), "etag": flit.get("etag_priority", "T2")}
         else:
-            return {"packet_id": getattr(flit, "packet_id", None), "flit_id": getattr(flit, "flit_id", 0), "etag": getattr(flit, "etag_priority", getattr(flit, "ETag_priority", "T2"))}
+            return {"packet_id": getattr(flit, "packet_id", None), "flit_id": getattr(flit, "flit_id", 0), "etag": getattr(flit, "etag_priority", "T2")}
 
     def _get_flit_style(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None):
         """
         返回 (facecolor, linewidth, edgecolor)
         - facecolor 包含透明度信息的RGBA颜色（基于flit_id调整透明度）
-        - linewidth / edgecolor 由 flit.ETag_priority 决定（tag相关边框属性，不透明）
+        - linewidth / edgecolor 由 flit.etag_priority 决定（tag相关边框属性，不透明）
         """
         import matplotlib.colors as mcolors
 
@@ -699,18 +699,13 @@ class CrossRingNodeVisualizer:
             return None
 
         # 提取基本字段
-        # 为ETag_priority添加多种可能的属性名检查，确保兼容性
-        # CrossRing flit使用etag_priority（小写），优先检查这个
-        etag_priority = getattr(flit, "etag_priority", None)
-        if etag_priority is None:
-            etag_priority = getattr(flit, "ETag_priority", None)
-        if etag_priority is None:
-            etag_priority = getattr(flit, "priority", "T2")  # 最后使用默认值
+        # 直接使用etag_priority属性
+        etag_priority = getattr(flit, "etag_priority", "T2")
 
         data = {
             "packet_id": getattr(flit, "packet_id", None),
             "flit_id": getattr(flit, "flit_id", None),
-            "ETag_priority": etag_priority,
+            "etag_priority": etag_priority,
             "itag_h": getattr(flit, "itag_h", False),
             "itag_v": getattr(flit, "itag_v", False),
             "channel": channel,

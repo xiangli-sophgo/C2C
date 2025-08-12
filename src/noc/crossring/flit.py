@@ -35,13 +35,13 @@ class CrossRingFlit(BaseFlit):
     itag_h: bool = False  # 水平ITag
     itag_v: bool = False  # 垂直ITag
     itag_reservation: int = 0  # I-Tag预留信息
-    
+
     # I-Tag机制新增字段 - 分水平和垂直等待
     injection_wait_start_cycle_h: int = -1  # 水平环等待注入开始周期
     injection_wait_start_cycle_v: int = -1  # 垂直环等待注入开始周期
     itag_reserved: bool = False  # 是否已预约I-Tag
     itag_timeout: bool = False  # 是否已超时
-    
+
     # 真正的等待时间统计字段 - 从第一次尝试注入但被阻塞时开始计算
     actual_wait_start_cycle_h: int = -1  # 水平环实际等待开始周期
     actual_wait_start_cycle_v: int = -1  # 垂直环实际等待开始周期
@@ -49,8 +49,8 @@ class CrossRingFlit(BaseFlit):
     # 环路移动状态
     moving_direction: int = 1  # 1 (顺时针) | -1 (逆时针)
     moving_direction_v: int = 1  # 垂直方向
-    circuits_completed_h: int = 0  # 水平环路完成数
-    circuits_completed_v: int = 0  # 垂直环路完成数
+    eject_attempts_h: int = 0  # 水平方向下环尝试次数
+    eject_attempts_v: int = 0  # 垂直方向下环尝试次数
     wait_cycle_h: int = 0  # 水平等待周期
     wait_cycle_v: int = 0  # 垂直等待周期
 
@@ -75,7 +75,7 @@ class CrossRingFlit(BaseFlit):
     current_link_id: str = ""  # 当前所在链路ID
     current_slice_index: int = -1  # 当前所在slice索引
     current_slot_index: int = -1  # 当前所在slot索引
-    current_tag_info: str = ""  # 当前slot的tag信息
+    # 移除未使用的current_tag_info字段
     crosspoint_direction: str = ""  # 在CrossPoint中的方向(arrival/departure)
 
     # 特有的tracker信息
@@ -116,8 +116,8 @@ class CrossRingFlit(BaseFlit):
             "dest_yid": self.dest_yid,
             "moving_direction": self.moving_direction,
             "moving_direction_v": self.moving_direction_v,
-            "circuits_completed_h": self.circuits_completed_h,
-            "circuits_completed_v": self.circuits_completed_v,
+            "eject_attempts_h": self.eject_attempts_h,
+            "eject_attempts_v": self.eject_attempts_v,
         }
 
     def calculate_expected_hops(self) -> int:
@@ -195,12 +195,12 @@ class CrossRingFlit(BaseFlit):
             self.itag_v = False
         self.is_tagged = self.itag_h or self.itag_v
 
-    def increment_circuit(self, direction: str) -> None:
-        """增加环路完成计数"""
+    def increment_eject_attempts(self, direction: str) -> None:
+        """增加下环尝试计数"""
         if direction == "horizontal":
-            self.circuits_completed_h += 1
+            self.eject_attempts_h += 1
         elif direction == "vertical":
-            self.circuits_completed_v += 1
+            self.eject_attempts_v += 1
 
     def add_wait_cycles(self, direction: str, cycles: int) -> None:
         """添加等待周期"""
@@ -216,21 +216,21 @@ class CrossRingFlit(BaseFlit):
         self.prepare_for_retry("crossring_retry")
 
         # 重置CrossRing特有状态
-        self.circuits_completed_h = 0
-        self.circuits_completed_v = 0
+        self.eject_attempts_h = 0
+        self.eject_attempts_v = 0
         self.wait_cycle_h = 0
         self.wait_cycle_v = 0
-        
+
         # 重置I-Tag等待时间计时器
         self.injection_wait_start_cycle_h = -1
         self.injection_wait_start_cycle_v = -1
         self.itag_reserved = False
         self.itag_timeout = False
-        
+
         # 重置实际等待时间统计
         self.actual_wait_start_cycle_h = -1
         self.actual_wait_start_cycle_v = -1
-        
+
         self.clear_itag()
         self.station_position = -1
         self.current_seat_index = -1
@@ -246,7 +246,7 @@ class CrossRingFlit(BaseFlit):
             {
                 "etag_priority": self.etag_priority,
                 "itag_status": {"h": self.itag_h, "v": self.itag_v},
-                "circuits": {"h": self.circuits_completed_h, "v": self.circuits_completed_v},
+                "eject_attempts": {"h": self.eject_attempts_h, "v": self.eject_attempts_v},
                 "wait_cycles": {"h": self.wait_cycle_h, "v": self.wait_cycle_v},
                 "coordinates": {"dest_x": self.dest_xid, "dest_y": self.dest_yid},
                 "tracker_types": {"rn": self.rn_tracker_type, "sn": self.sn_tracker_type},
@@ -284,13 +284,10 @@ class CrossRingFlit(BaseFlit):
         src_type = self._get_simplified_ip_type(source_type, self.source) if source_type else "??"
         dst_type = self._get_simplified_ip_type(destination_type, self.destination) if destination_type else "??"
 
-        # Tag信息
-        tag_info = ""
-        current_tag_info = getattr(self, "current_tag_info", "")
-        if current_tag_info:
-            tag_info = f"[{current_tag_info}]"
+        # Tag信息 - 仅显示E-Tag优先级
+        tag_info = f"{self.etag_priority}" if hasattr(self, "etag_priority") else ""
 
-        return f"{self.flit_type.upper()},{self.packet_id}.{self.flit_id},{src_type}->{dst_type}:{position_str}{tag_info},{req_attr},{type_display},{status_str},{self.etag_priority}"
+        return f"{self.flit_type.upper()},{self.packet_id}.{self.flit_id},{src_type}->{dst_type}:{position_str},{tag_info},{req_attr},{type_display},{status_str}"
 
     def _get_simplified_ip_type(self, ip_type_str: str, node_id: int) -> str:
         """
@@ -399,8 +396,8 @@ class CrossRingFlit(BaseFlit):
         self.itag_timeout = False
         self.moving_direction = 1
         self.moving_direction_v = 1
-        self.circuits_completed_h = 0
-        self.circuits_completed_v = 0
+        self.eject_attempts_h = 0
+        self.eject_attempts_v = 0
         self.wait_cycle_h = 0
         self.wait_cycle_v = 0
         self.dest_xid = 0
@@ -413,7 +410,6 @@ class CrossRingFlit(BaseFlit):
         self.current_link_id = ""
         self.current_slice_index = -1
         self.current_slot_index = -1
-        self.current_tag_info = ""
         self.crosspoint_direction = ""
 
         # 重置延迟发送

@@ -254,11 +254,24 @@ class EjectQueue:
             # 直接从inject_input_fifos的EQ获取
             eq_fifo = inject_input_fifos[channel]["EQ"]
             if eq_fifo.valid_signal():
-                return eq_fifo.read_output()
+                flit = eq_fifo.read_output()
+                if flit:
+                    # flit到达IP之前，重置展示用E-Tag为T2
+                    try:
+                        flit.etag_priority = "T2"
+                    except Exception:
+                        pass
+                return flit
 
         elif source == "ring_bridge_EQ":
             # 从ring_bridge的EQ输出获取
-            return ring_bridge.get_eq_output_flit(channel)
+            flit = ring_bridge.get_eq_output_flit(channel)
+            if flit:
+                try:
+                    flit.etag_priority = "T2"
+                except Exception:
+                    pass
+            return flit
 
         elif source in ["TU", "TD", "TR", "TL"]:
             # 从eject_input_fifos获取
@@ -268,6 +281,11 @@ class EjectQueue:
                 # 通知entry释放
                 if flit and self.parent_node:
                     self._notify_entry_release(flit, channel, source)
+                if flit:
+                    try:
+                        flit.etag_priority = "T2"
+                    except Exception:
+                        pass
                 return flit
 
         return None

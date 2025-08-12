@@ -78,6 +78,16 @@ class RequestInfo:
     data_entry_noc_from_cake0_cycle: int = -1  # data从Cake0进入NoC(写)
     data_entry_noc_from_cake1_cycle: int = -1  # data从Cake1进入NoC(读)
     data_received_complete_cycle: int = -1  # data接收完成
+    
+    # 下环尝试次数统计
+    eject_attempts_h_list: List[int] = None  # 每个flit的水平方向下环尝试次数列表
+    eject_attempts_v_list: List[int] = None  # 每个flit的垂直方向下环尝试次数列表
+    
+    def __post_init__(self):
+        if self.eject_attempts_h_list is None:
+            self.eject_attempts_h_list = []
+        if self.eject_attempts_v_list is None:
+            self.eject_attempts_v_list = []
 
 
 @dataclass
@@ -199,6 +209,8 @@ class ResultAnalyzer:
                     cmd_received_by_cake1_cycle = min(cmd_received_by_cake1_cycle, flit.cmd_received_by_cake1_cycle)
 
             # 从data flits中收集时间戳
+            eject_attempts_h_list = []  # 保存每个flit的水平下环尝试次数
+            eject_attempts_v_list = []  # 保存每个flit的垂直下环尝试次数
             for flit in lifecycle.data_flits:
                 if hasattr(flit, "data_entry_noc_from_cake0_cycle") and flit.data_entry_noc_from_cake0_cycle < np.inf:
                     data_entry_noc_from_cake0_cycle = min(data_entry_noc_from_cake0_cycle, flit.data_entry_noc_from_cake0_cycle)
@@ -206,6 +218,12 @@ class ResultAnalyzer:
                     data_entry_noc_from_cake1_cycle = min(data_entry_noc_from_cake1_cycle, flit.data_entry_noc_from_cake1_cycle)
                 if hasattr(flit, "data_received_complete_cycle") and flit.data_received_complete_cycle < np.inf:
                     data_received_complete_cycle = min(data_received_complete_cycle, flit.data_received_complete_cycle)
+                
+                # 收集每个flit的下环尝试次数
+                if hasattr(flit, "eject_attempts_h"):
+                    eject_attempts_h_list.append(flit.eject_attempts_h)
+                if hasattr(flit, "eject_attempts_v"):
+                    eject_attempts_v_list.append(flit.eject_attempts_v)
 
             # 按照BaseFlit的calculate_latencies方法计算延迟
             cmd_latency = np.inf
@@ -304,6 +322,9 @@ class ResultAnalyzer:
                 data_entry_noc_from_cake0_cycle=data_entry_noc_from_cake0_cycle_val,
                 data_entry_noc_from_cake1_cycle=data_entry_noc_from_cake1_cycle_val,
                 data_received_complete_cycle=data_received_complete_cycle_val,
+                # 添加每个flit的下环尝试次数
+                eject_attempts_h_list=eject_attempts_h_list,
+                eject_attempts_v_list=eject_attempts_v_list,
             )
             requests.append(request_info)
 
@@ -861,12 +882,14 @@ class ResultAnalyzer:
     def analyze_tag_data(self, model, verbose: bool = True) -> Dict[str, Any]:
         """分析Tag机制数据（按照CrossRing规格要求的格式）"""
         tag_analysis = {
-            "Circuits统计": {"req_h": 0, "req_v": 0, "rsp_h": 0, "rsp_v": 0, "data_h": 0, "data_v": 0},
             "Wait_cycle统计": {"req_h": 0, "req_v": 0, "rsp_h": 0, "rsp_v": 0, "data_h": 0, "data_v": 0},
+            "Eject_attempts统计": {"req_h": 0, "req_v": 0, "rsp_h": 0, "rsp_v": 0, "data_h": 0, "data_v": 0},
             "RB_ETag统计": {"req": {"T1": 0, "T0": 0}, "rsp": {"T1": 0, "T0": 0}, "data": {"T1": 0, "T0": 0}},  # 水平CrossPoint的E-Tag统计（按通道分组）
             "EQ_ETag统计": {"req": {"T1": 0, "T0": 0}, "rsp": {"T1": 0, "T0": 0}, "data": {"T1": 0, "T0": 0}},  # 垂直CrossPoint的E-Tag统计（按通道分组）
             "ITag统计": {"h": {"req": 0, "rsp": 0, "data": 0}, "v": {"req": 0, "rsp": 0, "data": 0}},
             "Retry统计": {"read": 0, "write": 0},
+            "绕环比例统计": {"h": 0.0, "v": 0.0, "total": 0.0, "h_count": 0, "v_count": 0, "total_count": 0, 
+                          "h_needs_eject": 0, "v_needs_eject": 0, "total_needs_eject": 0},
         }
 
         # 从NoC节点中收集统计数据
@@ -878,11 +901,6 @@ class ResultAnalyzer:
                     if hasattr(hcp, "stats"):
                         stats = hcp.stats
 
-                        # Circuits统计（绕环事件）
-                        tag_analysis["Circuits统计"]["req_h"] += stats.get("bypass_events", {}).get("req", 0)
-                        tag_analysis["Circuits统计"]["rsp_h"] += stats.get("bypass_events", {}).get("rsp", 0)
-                        tag_analysis["Circuits统计"]["data_h"] += stats.get("bypass_events", {}).get("data", 0)
-
                         # I-Tag统计
                         tag_analysis["ITag统计"]["h"]["req"] += stats.get("itag_triggers", {}).get("req", 0)
                         tag_analysis["ITag统计"]["h"]["rsp"] += stats.get("itag_triggers", {}).get("rsp", 0)
@@ -893,11 +911,6 @@ class ResultAnalyzer:
                     vcp = node.vertical_crosspoint
                     if hasattr(vcp, "stats"):
                         stats = vcp.stats
-
-                        # Circuits统计（绕环事件）
-                        tag_analysis["Circuits统计"]["req_v"] += stats.get("bypass_events", {}).get("req", 0)
-                        tag_analysis["Circuits统计"]["rsp_v"] += stats.get("bypass_events", {}).get("rsp", 0)
-                        tag_analysis["Circuits统计"]["data_v"] += stats.get("bypass_events", {}).get("data", 0)
 
                         # I-Tag统计
                         tag_analysis["ITag统计"]["v"]["req"] += stats.get("itag_triggers", {}).get("req", 0)
@@ -939,6 +952,14 @@ class ResultAnalyzer:
                             tag_analysis["Wait_cycle统计"]["data_h"] += getattr(ip_interface, "data_wait_cycles_h", 0)
                             tag_analysis["Wait_cycle统计"]["data_v"] += getattr(ip_interface, "data_wait_cycles_v", 0)
 
+                            # 下环尝试统计
+                            tag_analysis["Eject_attempts统计"]["req_h"] += getattr(ip_interface, "req_eject_attempts_h", 0)
+                            tag_analysis["Eject_attempts统计"]["req_v"] += getattr(ip_interface, "req_eject_attempts_v", 0)
+                            tag_analysis["Eject_attempts统计"]["rsp_h"] += getattr(ip_interface, "rsp_eject_attempts_h", 0)
+                            tag_analysis["Eject_attempts统计"]["rsp_v"] += getattr(ip_interface, "rsp_eject_attempts_v", 0)
+                            tag_analysis["Eject_attempts统计"]["data_h"] += getattr(ip_interface, "data_eject_attempts_h", 0)
+                            tag_analysis["Eject_attempts统计"]["data_v"] += getattr(ip_interface, "data_eject_attempts_v", 0)
+
                             # Circuits统计已通过CrossPoint的bypass_events统计，避免重复计数
                     else:
                         # 简单结构：直接是IP接口对象
@@ -955,6 +976,14 @@ class ResultAnalyzer:
                         tag_analysis["Wait_cycle统计"]["data_h"] += getattr(ip_interface, "data_wait_cycles_h", 0)
                         tag_analysis["Wait_cycle统计"]["data_v"] += getattr(ip_interface, "data_wait_cycles_v", 0)
 
+                        # 下环尝试统计
+                        tag_analysis["Eject_attempts统计"]["req_h"] += getattr(ip_interface, "req_eject_attempts_h", 0)
+                        tag_analysis["Eject_attempts统计"]["req_v"] += getattr(ip_interface, "req_eject_attempts_v", 0)
+                        tag_analysis["Eject_attempts统计"]["rsp_h"] += getattr(ip_interface, "rsp_eject_attempts_h", 0)
+                        tag_analysis["Eject_attempts统计"]["rsp_v"] += getattr(ip_interface, "rsp_eject_attempts_v", 0)
+                        tag_analysis["Eject_attempts统计"]["data_h"] += getattr(ip_interface, "data_eject_attempts_h", 0)
+                        tag_analysis["Eject_attempts统计"]["data_v"] += getattr(ip_interface, "data_eject_attempts_v", 0)
+
                         # Circuits统计已通过CrossPoint的bypass_events统计，避免重复计数
 
         except Exception as e:
@@ -968,11 +997,6 @@ class ResultAnalyzer:
             print("\n" + "=" * 60)
             print("绕环与Tag统计")
             print("=" * 60)
-
-            circuits = tag_analysis["Circuits统计"]
-            print(f"  请求绕环  - 横向: {circuits['req_h']}, 纵向: {circuits['req_v']}")
-            print(f"  响应绕环  - 横向: {circuits['rsp_h']}, 纵向: {circuits['rsp_v']}")
-            print(f"  数据绕环  - 横向: {circuits['data_h']}, 纵向: {circuits['data_v']}")
 
             wait_cycles = tag_analysis["Wait_cycle统计"]
             print(f"  请求等待时间  - 横向: {wait_cycles['req_h']}, 纵向: {wait_cycles['req_v']}")
@@ -996,6 +1020,84 @@ class ResultAnalyzer:
 
             retry = tag_analysis["Retry统计"]
             print(f"  Retry数量 - 读: {retry['read']}, 写: {retry['write']}")
+
+            # 添加下环尝试统计输出
+            eject_attempts = tag_analysis["Eject_attempts统计"]
+            print(f"  请求下环尝试 - 横向: {eject_attempts['req_h']}, 纵向: {eject_attempts['req_v']}")
+            print(f"  响应下环尝试 - 横向: {eject_attempts['rsp_h']}, 纵向: {eject_attempts['rsp_v']}")
+            print(f"  数据下环尝试 - 横向: {eject_attempts['data_h']}, 纵向: {eject_attempts['data_v']}")
+
+        # 计算绕环比例统计
+        if hasattr(model, "request_tracker"):
+            try:
+                # 统计各方向上需要下环和绕环的flit数量
+                h_needs_eject = 0  # 横向需要下环的flit数 (eject_attempts_h > 0)
+                h_circuits = 0     # 横向绕环的flit数 (eject_attempts_h > 1)
+                v_needs_eject = 0  # 纵向需要下环的flit数 (eject_attempts_v > 0)
+                v_circuits = 0     # 纵向绕环的flit数 (eject_attempts_v > 1)
+                
+                # 总体统计（任一方向需要下环/绕环的flit数，避免重复计算）
+                total_needs_eject = 0  # 任一方向需要下环的flit数
+                total_circuits = 0     # 任一方向绕环的flit数
+                
+                # 用于去重统计的flit集合
+                flits_needs_eject = set()  # 需要下环的flit ID集合
+                flits_circuits = set()     # 绕环的flit ID集合
+                
+                for req_id, lifecycle in model.request_tracker.completed_requests.items():
+                    for flit in lifecycle.data_flits:
+                        flit_id = f"{req_id}_{id(flit)}"  # 为每个flit生成唯一ID
+                        
+                        # 横向统计
+                        if hasattr(flit, "eject_attempts_h") and flit.eject_attempts_h > 0:
+                            h_needs_eject += 1
+                            if flit.eject_attempts_h > 1:
+                                h_circuits += 1
+                        
+                        # 纵向统计
+                        if hasattr(flit, "eject_attempts_v") and flit.eject_attempts_v > 0:
+                            v_needs_eject += 1
+                            if flit.eject_attempts_v > 1:
+                                v_circuits += 1
+                        
+                        # 总体统计（去重）
+                        if ((hasattr(flit, "eject_attempts_h") and flit.eject_attempts_h > 0) or 
+                            (hasattr(flit, "eject_attempts_v") and flit.eject_attempts_v > 0)):
+                            flits_needs_eject.add(flit_id)
+                            
+                        if ((hasattr(flit, "eject_attempts_h") and flit.eject_attempts_h > 1) or 
+                            (hasattr(flit, "eject_attempts_v") and flit.eject_attempts_v > 1)):
+                            flits_circuits.add(flit_id)
+                
+                total_needs_eject = len(flits_needs_eject)
+                total_circuits = len(flits_circuits)
+                
+                # 计算比例
+                h_ratio = h_circuits / h_needs_eject if h_needs_eject > 0 else 0
+                v_ratio = v_circuits / v_needs_eject if v_needs_eject > 0 else 0
+                total_ratio = total_circuits / total_needs_eject if total_needs_eject > 0 else 0
+                
+                tag_analysis["绕环比例统计"] = {
+                    "h": h_ratio,
+                    "v": v_ratio,
+                    "total": total_ratio,
+                    "h_count": h_circuits,      # 横向绕环flit数
+                    "v_count": v_circuits,      # 纵向绕环flit数
+                    "total_count": total_circuits,  # 总绕环flit数
+                    "h_needs_eject": h_needs_eject,   # 横向需要下环flit数
+                    "v_needs_eject": v_needs_eject,   # 纵向需要下环flit数
+                    "total_needs_eject": total_needs_eject,  # 总需要下环flit数
+                }
+                
+                if verbose:
+                    print(f"  横向绕环比例: {h_ratio:.4f} ({h_circuits}/{h_needs_eject})")
+                    print(f"  纵向绕环比例: {v_ratio:.4f} ({v_circuits}/{v_needs_eject})")
+                    print(f"  总体绕环比例: {total_ratio:.4f} ({total_circuits}/{total_needs_eject})")
+                    
+            except Exception as e:
+                print(f"计算绕环比例时出错: {e}")
+                import traceback
+                traceback.print_exc()
 
         return tag_analysis
 
@@ -1178,7 +1280,7 @@ class ResultAnalyzer:
 
             os.makedirs(save_dir, exist_ok=True)
 
-            # CSV文件头（包含所有cycle字段）
+            # CSV文件头（包含所有cycle字段和下环尝试次数）
             csv_header = [
                 "packet_id",
                 "start_time_ns",
@@ -1200,6 +1302,9 @@ class ResultAnalyzer:
                 "data_entry_noc_from_cake0_cycle",
                 "data_entry_noc_from_cake1_cycle",
                 "data_received_complete_cycle",
+                # 添加每个flit的下环尝试次数（以JSON格式保存）
+                "eject_attempts_h_list",
+                "eject_attempts_v_list",
             ]
 
             # 分离读写请求
@@ -1239,6 +1344,9 @@ class ResultAnalyzer:
                             req.data_entry_noc_from_cake0_cycle,
                             req.data_entry_noc_from_cake1_cycle,
                             req.data_received_complete_cycle,
+                            # 添加每个flit的下环尝试次数（转换为JSON字符串）
+                            str(req.eject_attempts_h_list),
+                            str(req.eject_attempts_v_list),
                         ]
                         writer.writerow(row)
 
@@ -1275,6 +1383,9 @@ class ResultAnalyzer:
                             req.data_entry_noc_from_cake0_cycle,
                             req.data_entry_noc_from_cake1_cycle,
                             req.data_received_complete_cycle,
+                            # 添加每个flit的下环尝试次数（转换为JSON字符串）
+                            str(req.eject_attempts_h_list),
+                            str(req.eject_attempts_v_list),
                         ]
                         writer.writerow(row)
 

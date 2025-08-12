@@ -36,12 +36,12 @@ configure_matplotlib_fonts(verbose=False)
 
 # ---------- lightweight flit proxy for snapshot rendering ----------
 class _FlitProxy:
-    __slots__ = ("packet_id", "flit_id", "ETag_priority", "itag_h", "itag_v", "flit_repr", "channel", "current_node_id", "flit_position")
+    __slots__ = ("packet_id", "flit_id", "etag_priority", "itag_h", "itag_v", "flit_repr", "channel", "current_node_id", "flit_position")
 
     def __init__(self, pid, fid, etag, ih, iv, flit_repr=None, channel=None, current_node_id=None, flit_position=None):
         self.packet_id = pid
         self.flit_id = fid
-        self.ETag_priority = etag
+        self.etag_priority = etag
         self.itag_h = ih
         self.itag_v = iv
         self.flit_repr = flit_repr
@@ -51,7 +51,7 @@ class _FlitProxy:
 
     def __repr__(self):
         itag = "H" if self.itag_h else ("V" if self.itag_v else "")
-        return f"(pid={self.packet_id}, fid={self.flit_id}, ET={self.ETag_priority}, IT={itag})"
+        return f"(pid={self.packet_id}, fid={self.flit_id}, ET={self.etag_priority}, IT={itag})"
 
 
 class LinkStateVisualizer:
@@ -90,7 +90,7 @@ class LinkStateVisualizer:
         # 高亮控制
         self.tracked_pid = None
         self.use_highlight = False
-        
+
         # 标签显示模式
         self.show_tags_mode = False
 
@@ -255,7 +255,6 @@ class LinkStateVisualizer:
 
         spacing_x = base_spacing_x * spacing_factor
         spacing_y = base_spacing_y * spacing_factor
-
 
         for row in range(self.rows):
             for col in range(self.cols):
@@ -475,9 +474,7 @@ class LinkStateVisualizer:
                         offset_start_y, offset_end_y = offset_end_y, offset_start_y
 
                     # 绘制箭头
-                    arrow = FancyArrowPatch(
-                        (offset_start_x, offset_start_y), (offset_end_x, offset_end_y), arrowstyle="-|>", mutation_scale=15, color="black", linewidth=1.5, alpha=0.8, zorder=1
-                    )
+                    arrow = FancyArrowPatch((offset_start_x, offset_start_y), (offset_end_x, offset_end_y), arrowstyle="-|>", mutation_scale=15, color="black", linewidth=1.5, alpha=0.8, zorder=1)
                     self.link_ax.add_patch(arrow)
 
             # 绘制slice slots
@@ -581,9 +578,6 @@ class LinkStateVisualizer:
             if node_pair:
                 self.node_pair_slots[node_pair] = slot_positions_list
 
-
-
-
     def _track_packet(self, packet_id):
         """追踪包"""
         self.tracked_pid = packet_id
@@ -607,7 +601,9 @@ class LinkStateVisualizer:
         for rect, (rect_link_ids, flit, rect_slot_idx) in self.rect_info_map.items():
             if flit:
                 # 重新计算flit样式
-                face_color, line_width, edge_color = self._get_flit_style(flit, use_highlight=self.use_highlight, expected_packet_id=self.tracked_pid, highlight_color="red", show_tags_mode=self.show_tags_mode)
+                face_color, line_width, edge_color = self._get_flit_style(
+                    flit, use_highlight=self.use_highlight, expected_packet_id=self.tracked_pid, highlight_color="red", show_tags_mode=self.show_tags_mode
+                )
 
                 # 应用样式 - face_color已包含透明度信息，不再使用set_alpha
                 rect.set_facecolor(face_color)
@@ -648,9 +644,9 @@ class LinkStateVisualizer:
             return "\n".join(info_lines) if info_lines else "No valid info"
 
         # 对于活动的flit对象，优先使用保存的flit_repr
-        if hasattr(flit, 'flit_repr') and flit.flit_repr:
+        if hasattr(flit, "flit_repr") and flit.flit_repr:
             return flit.flit_repr
-        
+
         # 否则直接使用repr
         try:
             return repr(flit)
@@ -989,20 +985,20 @@ CrossRing可视化控制键:
         """切换标签显示"""
         # 切换标签模式状态
         self.show_tags_mode = not self.show_tags_mode
-        
+
         # 更新按钮文本
         if self.show_tags_mode:
             self.tags_btn.label.set_text("隐藏标签")
         else:
             self.tags_btn.label.set_text("显示标签")
-        
+
         # 同步节点可视化器的标签模式
         if hasattr(self, "node_vis") and self.node_vis:
             self.node_vis.sync_tags_mode(self.show_tags_mode)
-        
+
         # 立即重新应用所有flit的样式
         self._reapply_all_flit_styles()
-        
+
         try:
             self.fig.canvas.draw_idle()
         except Exception as e:
@@ -1025,9 +1021,9 @@ CrossRing可视化控制键:
             # 优先使用传入的cycle，其次使用模型的cycle，最后使用递增值
             if cycle is not None:
                 effective_cycle = cycle
-            elif network and hasattr(network, 'cycle'):
+            elif network and hasattr(network, "cycle"):
                 effective_cycle = network.cycle
-            elif network and hasattr(network, '_current_cycle'):
+            elif network and hasattr(network, "_current_cycle"):
                 effective_cycle = network._current_cycle
             else:
                 # 避免cycle重复：如果历史不为空，使用最后一个cycle+1
@@ -1089,7 +1085,7 @@ CrossRing可视化控制键:
                                             flit_data = {
                                                 "packet_id": getattr(slot.flit, "packet_id", None),
                                                 "flit_id": getattr(slot.flit, "flit_id", None),
-                                                "ETag_priority": getattr(slot.flit, "ETag_priority", None),
+                                                "etag_priority": getattr(slot.flit, "etag_priority", "T2"),
                                                 "itag_h": getattr(slot.flit, "itag_h", False),
                                                 "itag_v": getattr(slot.flit, "itag_v", False),
                                                 "current_node_id": getattr(slot.flit, "current_node_id", None),
@@ -1166,7 +1162,7 @@ CrossRing可视化控制键:
                                 flit_data = {
                                     "packet_id": getattr(slot, "packet_id", None),
                                     "flit_id": getattr(slot, "flit_id", None),
-                                    "ETag_priority": getattr(slot, "ETag_priority", getattr(slot, "etag_priority", "T2")),
+                                    "etag_priority": getattr(slot, "etag_priority", "T2"),
                                     "itag_h": getattr(slot, "itag_h", False),
                                     "itag_v": getattr(slot, "itag_v", False),
                                     "current_node_id": None,
@@ -1270,7 +1266,7 @@ CrossRing可视化控制键:
                                 temp_flit = _FlitProxy(
                                     pid=flit_data.get("packet_id"),
                                     fid=flit_data.get("flit_id"),
-                                    etag=flit_data.get("ETag_priority", "T2"),
+                                    etag=flit_data.get("etag_priority", "T2"),
                                     ih=flit_data.get("itag_h", False),
                                     iv=flit_data.get("itag_v", False),
                                     flit_repr=flit_data.get("flit_repr"),
@@ -1357,11 +1353,11 @@ CrossRing可视化控制键:
         """
         返回 (facecolor, linewidth, edgecolor)
         - facecolor 包含透明度信息的RGBA颜色（基于flit_id调整透明度）
-        - linewidth / edgecolor 由 flit.ETag_priority 决定（tag相关边框属性，不透明）
+        - linewidth / edgecolor 由 flit.etag_priority 决定（tag相关边框属性，不透明）
         - show_tags_mode: 标签模式下隐藏颜色，突出显示边框
         """
         import matplotlib.colors as mcolors
-        
+
         # E-Tag样式映射 - 仅控制边框属性，不影响填充透明度
         _ETAG_LW = {"T0": 2.0, "T1": 1.5, "T2": 1.0}
         _ETAG_EDGE = {"T0": "darkred", "T1": "darkblue", "T2": "black"}
@@ -1375,11 +1371,11 @@ CrossRing可视化控制键:
 
         # 获取E-Tag优先级 - 仅控制边框样式（边框保持完全不透明）
         if isinstance(flit, dict):
-            # 字典格式：优先使用标准化的ETag_priority，然后尝试etag_priority
-            etag = flit.get("ETag_priority", flit.get("etag_priority", "T2"))
+            # 字典格式：使用etag_priority
+            etag = flit.get("etag_priority", "T2")
         else:
-            # 对象格式：优先使用etag_priority（CrossRing flit的实际属性名），然后尝试ETag_priority
-            etag = getattr(flit, "etag_priority", getattr(flit, "ETag_priority", "T2"))
+            # 对象格式：使用etag_priority
+            etag = getattr(flit, "etag_priority", "T2")
         line_width = _ETAG_LW.get(etag, 1.0)
         edge_color = _ETAG_EDGE.get(etag, "black")  # 边框颜色保持不透明
 
@@ -1393,7 +1389,7 @@ CrossRing可视化控制键:
                 flit_id = flit.get("flit_id", 0)
             else:
                 flit_id = getattr(flit, "flit_id", 0)
-                
+
             alpha = max(0.4, 1.0 - (int(flit_id) * 0.2)) if flit_id is not None else 1.0
 
         # 将基础颜色转换为RGBA格式，嵌入透明度信息
@@ -1414,7 +1410,7 @@ CrossRing可视化控制键:
             flit_pid = flit.get("packet_id", None)
         else:
             flit_pid = getattr(flit, "packet_id", None)
-        
+
         # 高亮模式：目标 flit → 指定颜色，其余 → 灰
         if use_highlight and expected_packet_id is not None:
             return (highlight_color or "red") if str(flit_pid) == str(expected_packet_id) else "lightgrey"

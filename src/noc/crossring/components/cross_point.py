@@ -374,11 +374,19 @@ class CrossPoint:
                             # 使用E-Tag机制判断是否可以下环到RB（同时检查FIFO空间）
                             can_eject_etag = self._can_eject_with_etag_mechanism(current_slot, channel, direction)
 
-                            # 检查Ring Bridge输入FIFO是否有空间
+                            # 棣查Ring Bridge输入FIFO是否有空间
                             rb_input_fifo = ring_bridge.ring_bridge_input_fifos[channel][direction]
                             can_eject_fifo = rb_input_fifo.ready_signal()
 
                             can_eject = can_eject_etag and can_eject_fifo
+
+                            # 增加flit的下环尝试计数（无论成功还是失败都应该统计）
+                            if current_slot.flit:
+                                # 根据CrossPoint方向确定是水平还是垂直环路
+                                if self.direction == CrossPointDirection.HORIZONTAL:
+                                    current_slot.flit.increment_eject_attempts("horizontal")
+                                elif self.direction == CrossPointDirection.VERTICAL:
+                                    current_slot.flit.increment_eject_attempts("vertical")
 
                             if can_eject:
                                 # compute阶段：计划下环操作，但先记录到缓冲区，在update阶段协调执行
@@ -421,6 +429,14 @@ class CrossPoint:
                             can_eject_fifo = target_fifo.ready_signal()  # 检查FIFO是否有空间
 
                             can_eject = can_eject_etag and can_eject_fifo
+
+                            # 增加flit的下环尝试计数（无论成功还是失败都应该统计）
+                            if current_slot.flit:
+                                # 根据CrossPoint方向确定是水平还是垂直环路
+                                if self.direction == CrossPointDirection.HORIZONTAL:
+                                    current_slot.flit.increment_eject_attempts("horizontal")
+                                elif self.direction == CrossPointDirection.VERTICAL:
+                                    current_slot.flit.increment_eject_attempts("vertical")
 
                             if can_eject:
                                 # compute阶段：计划下环操作，但先记录到缓冲区，在update阶段协调执行
@@ -733,6 +749,11 @@ class CrossPoint:
         slot.allocated_entry_info = allocation_info
         if slot.flit:
             slot.flit.allocated_entry_info = allocation_info
+            # 同步更新flit的E-Tag显示优先级
+            try:
+                slot.flit.etag_priority = priority
+            except Exception:
+                pass
 
     def _is_first_in_t0_queue(self, slot: CrossRingSlot, channel: str) -> bool:
         """
@@ -849,6 +870,13 @@ class CrossPoint:
             # 如果升级到T0，加入T0全局队列
             if new_priority == PriorityLevel.T0:
                 self._add_to_t0_queue(slot, channel)
+
+            # 将升级后的优先级同步到flit对象，便于可视化/日志
+            if slot.flit:
+                try:
+                    slot.flit.etag_priority = getattr(new_priority, "value", str(new_priority).split(".")[-1])
+                except Exception:
+                    pass
 
         else:
             pass
@@ -1187,6 +1215,12 @@ class CrossPoint:
             else:
                 # 使用非预约slot，延迟释放
                 self.itag_to_release_counts[direction][channel] += 1
+
+        # flit进入环路后，E-Tag标记由slot管理，重置flit上的显示优先级为T2
+        try:
+            flit.etag_priority = "T2"
+        except Exception:
+            pass
 
         return True
 

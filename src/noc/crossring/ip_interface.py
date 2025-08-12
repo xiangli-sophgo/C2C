@@ -94,12 +94,12 @@ class CrossRingIPInterface(BaseIPInterface):
         self.data_wait_cycles_v = 0
 
         # 环路完成统计
-        self.req_cir_h_num = 0
-        self.req_cir_v_num = 0
-        self.rsp_cir_h_num = 0
-        self.rsp_cir_v_num = 0
-        self.data_cir_h_num = 0
-        self.data_cir_v_num = 0
+        self.req_eject_attempts_h = 0
+        self.req_eject_attempts_v = 0
+        self.rsp_eject_attempts_h = 0
+        self.rsp_eject_attempts_v = 0
+        self.data_eject_attempts_h = 0
+        self.data_eject_attempts_v = 0
 
         # 创建分通道的pending队列，替代父类pending_requests
         self.pending_by_channel = {"req": deque(), "rsp": deque(), "data": deque()}
@@ -333,11 +333,11 @@ class CrossRingIPInterface(BaseIPInterface):
 
         req.cmd_received_by_cake1_cycle = self.current_cycle
 
-        # 统计等待周期和环路数
+        # 统计等待周期和下环尝试次数
         self.req_wait_cycles_h += req.wait_cycle_h
         self.req_wait_cycles_v += req.wait_cycle_v
-        self.req_cir_h_num += req.circuits_completed_h
-        self.req_cir_v_num += req.circuits_completed_v
+        self.req_eject_attempts_h += req.eject_attempts_h
+        self.req_eject_attempts_v += req.eject_attempts_v
 
         if req.req_type == "read":
             if req.req_attr == "new":
@@ -417,11 +417,11 @@ class CrossRingIPInterface(BaseIPInterface):
 
         rsp.cmd_received_by_cake0_cycle = self.current_cycle
 
-        # 统计等待周期和环路数
+        # 统计等待周期和下环尝试次数
         self.rsp_wait_cycles_h += rsp.wait_cycle_h
         self.rsp_wait_cycles_v += rsp.wait_cycle_v
-        self.rsp_cir_h_num += rsp.circuits_completed_h
-        self.rsp_cir_v_num += rsp.circuits_completed_v
+        self.rsp_eject_attempts_h += rsp.eject_attempts_h
+        self.rsp_eject_attempts_v += rsp.eject_attempts_v
 
         # 更新重试统计
         if rsp.rsp_type == "negative":
@@ -462,11 +462,11 @@ class CrossRingIPInterface(BaseIPInterface):
         """
         flit.arrival_cycle = self.current_cycle
 
-        # 统计等待周期和环路数
+        # 统计等待周期和下环尝试次数
         self.data_wait_cycles_h += flit.wait_cycle_h
         self.data_wait_cycles_v += flit.wait_cycle_v
-        self.data_cir_h_num += flit.circuits_completed_h
-        self.data_cir_v_num += flit.circuits_completed_v
+        self.data_eject_attempts_h += flit.eject_attempts_h
+        self.data_eject_attempts_v += flit.eject_attempts_v
 
         if flit.req_type == "read":
             # 读数据到达RN端
@@ -873,8 +873,8 @@ class CrossRingIPInterface(BaseIPInterface):
                 "write_retries": self.write_retry_num_stat,
                 "req_wait_cycles_h": self.req_wait_cycles_h,
                 "req_wait_cycles_v": self.req_wait_cycles_v,
-                "req_circuits_h": self.req_cir_h_num,
-                "req_circuits_v": self.req_cir_v_num,
+                "req_eject_attempts_h": self.req_eject_attempts_h,
+                "req_eject_attempts_v": self.req_eject_attempts_v,
             },
             "fifo_status": {
                 channel: {
@@ -1102,8 +1102,7 @@ class CrossRingIPInterface(BaseIPInterface):
             # 如果没有提供destination_type，记录警告
             flit.channel = "req"
 
-            # 设置命令进入源IP的时间戳
-            flit.cmd_entry_cake0_cycle = self.current_cycle
+            # 设置注入周期（不设置cmd_entry_cake0_cycle，该时间戳应在资源检查通过后设置）
             flit.inject_cycle = kwargs.get("inject_cycle", self.current_cycle)
 
             # 注册到请求追踪器
