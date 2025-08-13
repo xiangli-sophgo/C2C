@@ -17,3 +17,9 @@ tracker:
 
 latency:
   DDR_R_LATENCY: 40
+
+tag:
+  ITAG_TRIGGER_TH_H: 80
+  ITAG_TRIGGER_TH_V: 80
+  ITAG_MAX_NUM_H: 1
+  ITAG_MAX_NUM_V: 1
