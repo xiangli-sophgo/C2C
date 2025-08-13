@@ -1076,7 +1076,9 @@ class CrossRingModel(BaseNoCModel):
         """为响应查找合适的IP接口（优先存储类）"""
         return self._find_ip_interface(node_id, req_type, ip_type, "response")
 
-    def analyze_simulation_results(self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output", verbose: bool = True) -> Dict[str, Any]:
+    def analyze_simulation_results(
+        self, results: Dict[str, Any], enable_visualization: bool = True, save_results: bool = True, save_dir: str = "output", verbose: bool = True
+    ) -> Dict[str, Any]:
         """
         分析仿真结果 - 调用CrossRing专用分析器
 
@@ -1138,7 +1140,9 @@ class CrossRingModel(BaseNoCModel):
             if link_csv_path and hasattr(self, "links"):
                 viz_config["link_count"] = len(self.links)
 
-        analysis_results = analyzer.analyze_noc_results(self.request_tracker, self.config, self, results, enable_visualization, save_results, timestamped_dir, save_figures, verbose, viz_config)
+        analysis_results = analyzer.analyze_noc_results(
+            self.request_tracker, self.config, self, results, enable_visualization, save_results, timestamped_dir, save_figures, verbose, viz_config
+        )
 
         # ResultAnalyzer现在会根据save_figures参数直接处理显示或保存
 
@@ -1323,14 +1327,16 @@ class CrossRingModel(BaseNoCModel):
 
         try:
             from src.noc.visualization.link_state_visualizer import LinkStateVisualizer
+            import matplotlib.pyplot as plt
 
             # 创建可视化器
             self._realtime_visualizer = LinkStateVisualizer(config=self.config, model=self)
 
-            # 显示可视化窗口（现在使用Dash，不需要matplotlib的交互模式）
+            # 显示可视化窗口
+            plt.ion()  # 开启交互模式
             self._realtime_visualizer.show()
 
-            # print(f"🎪 可视化窗口已打开 (周期 {self.cycle})")
+            print(f"🎪 可视化窗口已打开 (周期 {self.cycle})")
             self._visualization_initialized = True
 
         except ImportError as e:
@@ -1352,10 +1358,36 @@ class CrossRingModel(BaseNoCModel):
             # 更新可视化器状态
             self._realtime_visualizer.update(self, cycle=self.cycle)
 
-            # 使用time.sleep控制帧率，替代matplotlib的pause
-            if self._visualization_enabled and self._visualization_frame_interval > 0:
-                import time
-                time.sleep(self._visualization_frame_interval)
+            # 强制刷新显示
+            import matplotlib.pyplot as plt
+
+            # 检查matplotlib窗口是否关闭（用户点击X或按q）
+            if not plt.get_fignums():  # 如果没有打开的图形窗口
+                self.cleanup_visualization()
+                return
+
+            # 检查暂停状态
+            paused = getattr(self, "_paused", False)
+            if paused:
+                # 进入暂停等待循环，保持GUI响应
+                while getattr(self, "_paused", False) and plt.get_fignums():
+                    try:
+                        plt.pause(0.1)
+                    except Exception as e:
+                        print(f"警告：暂停时matplotlib错误: {e}")
+                        break  # 退出暂停循环
+                    # 在暂停期间也检查窗口关闭
+                    if not plt.get_fignums():
+                        self.cleanup_visualization()
+                        return
+            else:
+                # 正常帧率控制 - 只有在可视化启用时才暂停
+                if self._visualization_enabled and self._visualization_frame_interval > 0:
+                    try:
+                        plt.pause(self._visualization_frame_interval)
+                    except Exception as e:
+                        print(f"警告：可视化帧率控制时matplotlib错误: {e}")
+                        pass  # 忽略错误，继续仿真
 
         except KeyboardInterrupt:
             # 捕获Ctrl+C或其他键盘中断
@@ -1373,7 +1405,12 @@ class CrossRingModel(BaseNoCModel):
 
     def __repr__(self) -> str:
         """字符串表示"""
-        return f"CrossRingModel({self.config.config_name}, " f"{self.config.NUM_ROW}x{self.config.NUM_COL}, " f"cycle={self.cycle}, " f"active_requests={self.get_total_active_requests()})"
+        return (
+            f"CrossRingModel({self.config.config_name}, "
+            f"{self.config.NUM_ROW}x{self.config.NUM_COL}, "
+            f"cycle={self.cycle}, "
+            f"active_requests={self.get_total_active_requests()})"
+        )
 
     # ========== 统一接口方法（用于兼容性） ==========
 
