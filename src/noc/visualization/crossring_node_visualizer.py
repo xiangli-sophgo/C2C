@@ -21,6 +21,8 @@ from enum import Enum
 import copy
 from src.noc.crossring.config import CrossRingConfig
 from src.utils.font_config import configure_matplotlib_fonts
+from .color_manager import ColorManager
+from .style_manager import VisualizationStyleManager
 
 # 配置跨平台字体支持
 configure_matplotlib_fonts(verbose=False)
@@ -83,14 +85,13 @@ class CrossRingNodeVisualizer:
         # 改为自动调整比例，而不是强制相等比例
         self.ax.set_aspect("auto")
 
-        # 调色板
-        self._colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+        # 样式管理器
+        self.color_manager = ColorManager()
+        self.style_manager = VisualizationStyleManager(self.color_manager)
 
         # ------ highlight / tracking ------
         self.use_highlight = False  # 是否启用高亮模式
         self.highlight_pid = None  # 被追踪的 packet_id
-        self.highlight_color = "red"  # 追踪 flit 颜色
-        self.grey_color = "lightgrey"  # 其它 flit 颜色
         self.show_tags_mode = False  # 标签显示模式
 
         # 存储 patch 和 text
@@ -516,61 +517,6 @@ class CrossRingNodeVisualizer:
             else:
                 raise ValueError(f"Unknown orientation: {orient}")
 
-    def _get_flit_attributes(self, flit):
-        """提取flit属性的通用方法，兼容字典和对象格式"""
-        if isinstance(flit, dict):
-            return {"packet_id": flit.get("packet_id"), "flit_id": flit.get("flit_id", 0), "etag": flit.get("etag_priority", "T2")}
-        else:
-            return {"packet_id": getattr(flit, "packet_id", None), "flit_id": getattr(flit, "flit_id", 0), "etag": getattr(flit, "etag_priority", "T2")}
-
-    def _get_flit_style(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None):
-        """
-        返回 (facecolor, linewidth, edgecolor)
-        - facecolor 包含透明度信息的RGBA颜色（基于flit_id调整透明度）
-        - linewidth / edgecolor 由 flit.etag_priority 决定（tag相关边框属性，不透明）
-        """
-        import matplotlib.colors as mcolors
-
-        # E-Tag样式映射
-        _ETAG_LW = {"T0": 1.2, "T1": 0.9, "T2": 0.6}
-        _ETAG_EDGE = {"T0": "darkred", "T1": "darkblue", "T2": "black"}
-
-        # 提取flit属性
-        attrs = self._get_flit_attributes(flit)
-        packet_id = attrs["packet_id"]
-        flit_id = attrs["flit_id"]
-        etag = attrs["etag"]
-
-        # 获取基础颜色
-        if self.show_tags_mode:
-            base_color = "lightgray"
-        elif use_highlight and expected_packet_id is not None:
-            hl_color = highlight_color or "red"
-            base_color = hl_color if str(packet_id) == str(expected_packet_id) else "lightgrey"
-        elif packet_id is not None:
-            try:
-                color_index = int(packet_id) % len(self.parent._colors)
-                base_color = self.parent._colors[color_index]
-            except:
-                base_color = "lightblue"
-        else:
-            base_color = "lightblue"
-
-        # 计算透明度
-        if self.show_tags_mode:
-            alpha = 0.3
-        elif flit_id is not None:
-            alpha = max(0.4, 1.0 - (int(flit_id) * 0.2))
-        else:
-            alpha = 1.0
-
-        # 转换为RGBA格式
-        try:
-            face_color_with_alpha = mcolors.to_rgba(base_color, alpha=alpha)
-        except:
-            face_color_with_alpha = (0.5, 0.5, 1.0, alpha)
-
-        return face_color_with_alpha, _ETAG_LW.get(etag, 1.0), _ETAG_EDGE.get(etag, "black")
 
     def _on_click(self, event):
         """处理点击事件"""
@@ -580,7 +526,7 @@ class CrossRingNodeVisualizer:
             contains, _ = patch.contains(event)
             if contains:
                 # 只有在高亮模式下才允许切换文本可见性
-                attrs = self._get_flit_attributes(flit)
+                attrs = self.style_manager._extract_flit_attributes(flit)
                 pid = attrs["packet_id"]
                 fid = attrs["flit_id"]
                 if self.use_highlight and pid == self.highlight_pid:
@@ -612,25 +558,28 @@ class CrossRingNodeVisualizer:
 
         # 更新所有patch的颜色和文本可见性
         for patch, (txt, flit) in self.patch_info_map.items():
-            attrs = self._get_flit_attributes(flit)
-            pid = attrs["packet_id"]
-
-            # 重新计算并应用flit样式（包括颜色）
             if flit:
-                face, lw, edge = self._get_flit_style(
-                    flit,
+                attrs = self.style_manager._extract_flit_attributes(flit)
+                pid = attrs["packet_id"]
+                
+                # 使用样式管理器应用样式
+                self.style_manager.apply_style_to_patch(
+                    patch, flit, 
                     use_highlight=self.use_highlight,
                     expected_packet_id=self.highlight_pid,
+                    show_tags_mode=self.show_tags_mode
                 )
-                patch.set_facecolor(face)
-                patch.set_linewidth(lw)
-                patch.set_edgecolor(edge)
 
-            # 更新文本可见性
-            if self.use_highlight and pid == self.highlight_pid:
-                txt.set_visible(True)
+                # 更新文本可见性
+                if self.use_highlight and pid == self.highlight_pid:
+                    txt.set_visible(True)
+                else:
+                    txt.set_visible(False)
             else:
-                txt.set_visible(False)
+                # 应用空样式
+                empty_style = self.style_manager.create_empty_patch_style()
+                for key, value in empty_style.items():
+                    getattr(patch, f"set_{key}")(value)
 
         if not self.use_highlight:
             self.info_text.set_text("")
@@ -644,16 +593,14 @@ class CrossRingNodeVisualizer:
 
         # 更新所有patch的样式
         for patch, (txt, flit) in self.patch_info_map.items():
-            # 重新计算并应用flit样式
+            # 使用样式管理器重新计算并应用样式
             if flit:
-                face, lw, edge = self._get_flit_style(
-                    flit,
+                self.style_manager.apply_style_to_patch(
+                    patch, flit,
                     use_highlight=self.use_highlight,
                     expected_packet_id=self.highlight_pid,
+                    show_tags_mode=self.show_tags_mode
                 )
-                patch.set_facecolor(face)
-                patch.set_linewidth(lw)
-                patch.set_edgecolor(edge)
 
         # 触发重绘
         self.fig.canvas.draw_idle()
@@ -1095,19 +1042,18 @@ class CrossRingNodeVisualizer:
             t = texts[idx]
 
             if flit:
-                # 使用统一的属性提取方法
-                attrs = self._get_flit_attributes(flit)
+                # 使用样式管理器处理属性和样式
+                attrs = self.style_manager._extract_flit_attributes(flit)
                 packet_id = attrs["packet_id"]
                 flit_id = attrs["flit_id"]
 
-                face, lw, edge = self._get_flit_style(
-                    flit,
+                # 应用样式
+                self.style_manager.apply_style_to_patch(
+                    p, flit,
                     use_highlight=self.use_highlight,
                     expected_packet_id=self.highlight_pid,
+                    show_tags_mode=self.show_tags_mode
                 )
-                p.set_facecolor(face)
-                p.set_linewidth(lw)
-                p.set_edgecolor(edge)
 
                 info = f"{packet_id}-{flit_id}"
                 t.set_text(info)

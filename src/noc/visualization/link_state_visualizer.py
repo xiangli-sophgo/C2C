@@ -27,6 +27,8 @@ from src.noc.crossring.config import CrossRingConfig
 from src.noc.visualization.crossring_node_visualizer import CrossRingNodeVisualizer
 from src.noc.base.model import BaseNoCModel
 from src.utils.font_config import configure_matplotlib_fonts
+from .color_manager import ColorManager
+from .style_manager import VisualizationStyleManager
 
 # 移除了logging依赖
 
@@ -81,8 +83,9 @@ class LinkStateVisualizer:
         self.cols = config.NUM_COL
         self.num_nodes = self.rows * self.cols
 
-        # 调色板
-        self._colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+        # 样式管理器
+        self.color_manager = ColorManager()
+        self.style_manager = VisualizationStyleManager(self.color_manager)
 
         # 当前显示的通道
         self.current_channel = "data"  # req/rsp/data，默认显示data通道
@@ -599,23 +602,14 @@ class LinkStateVisualizer:
     def _reapply_all_flit_styles(self):
         """重新应用所有flit的样式，用于高亮状态改变后"""
         for rect, (rect_link_ids, flit, rect_slot_idx) in self.rect_info_map.items():
-            if flit:
-                # 重新计算flit样式
-                face_color, line_width, edge_color = self._get_flit_style(
-                    flit, use_highlight=self.use_highlight, expected_packet_id=self.tracked_pid, highlight_color="red", show_tags_mode=self.show_tags_mode
-                )
-
-                # 应用样式 - face_color已包含透明度信息，不再使用set_alpha
-                rect.set_facecolor(face_color)
-                rect.set_edgecolor(edge_color)
-                rect.set_linewidth(max(line_width, 0.8))
-                rect.set_linestyle("-")
-            else:
-                # 空slot恢复默认样式
-                rect.set_facecolor("none")
-                rect.set_edgecolor("gray")
-                rect.set_linewidth(0.8)
-                rect.set_linestyle("--")
+            # 使用样式管理器重新应用样式
+            self.style_manager.apply_style_to_patch(
+                rect, flit,
+                use_highlight=self.use_highlight,
+                expected_packet_id=self.tracked_pid,
+                highlight_color="red",
+                show_tags_mode=self.show_tags_mode
+            )
 
     def _format_flit_info(self, flit):
         """Format flit information display - use flit's repr for detailed info"""
@@ -1337,86 +1331,18 @@ CrossRing可视化控制键:
                         # 更新flit信息
                         self.rect_info_map[rect] = (rect_link_ids, slot, rect_slot_idx)
 
-                        # 获取flit样式并应用
-                        face_color, line_width, edge_color = self._get_flit_style(
-                            slot, use_highlight=self.use_highlight, expected_packet_id=self.tracked_pid, highlight_color="red", show_tags_mode=self.show_tags_mode
+                        # 使用样式管理器应用样式
+                        self.style_manager.apply_style_to_patch(
+                            rect, slot,
+                            use_highlight=self.use_highlight,
+                            expected_packet_id=self.tracked_pid,
+                            highlight_color="red",
+                            show_tags_mode=self.show_tags_mode
                         )
-                        rect.set_facecolor(face_color)
-                        rect.set_edgecolor(edge_color)
-                        rect.set_linewidth(max(line_width, 0.8))
-                        rect.set_linestyle("-")
                         break  # 找到匹配的rect后立即退出循环
                 except (ValueError, IndexError):
                     continue
 
-    def _get_flit_style(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None, show_tags_mode=False):
-        """
-        返回 (facecolor, linewidth, edgecolor)
-        - facecolor 包含透明度信息的RGBA颜色（基于flit_id调整透明度）
-        - linewidth / edgecolor 由 flit.etag_priority 决定（tag相关边框属性，不透明）
-        - show_tags_mode: 标签模式下隐藏颜色，突出显示边框
-        """
-        import matplotlib.colors as mcolors
-
-        # E-Tag样式映射 - 仅控制边框属性，不影响填充透明度
-        _ETAG_LW = {"T0": 2.0, "T1": 1.5, "T2": 1.0}
-        _ETAG_EDGE = {"T0": "darkred", "T1": "darkblue", "T2": "black"}
-
-        # 标签模式下：使用统一的浅色背景，突出显示边框
-        if show_tags_mode:
-            base_color = "lightgray"
-        else:
-            # 获取基础颜色（不含透明度）
-            base_color = self._get_flit_color(flit, use_highlight, expected_packet_id, highlight_color)
-
-        # 获取E-Tag优先级 - 仅控制边框样式（边框保持完全不透明）
-        if isinstance(flit, dict):
-            # 字典格式：使用etag_priority
-            etag = flit.get("etag_priority", "T2")
-        else:
-            # 对象格式：使用etag_priority
-            etag = getattr(flit, "etag_priority", "T2")
-        line_width = _ETAG_LW.get(etag, 1.0)
-        edge_color = _ETAG_EDGE.get(etag, "black")  # 边框颜色保持不透明
-
-        # 根据flit_id调整填充颜色透明度（转换为RGBA格式）
-        if show_tags_mode:
-            # 标签模式下使用固定的中等透明度，便于看清边框
-            alpha = 0.3
-        else:
-            # 正常模式下根据flit_id调整透明度
-            if isinstance(flit, dict):
-                flit_id = flit.get("flit_id", 0)
-            else:
-                flit_id = getattr(flit, "flit_id", 0)
-
-            alpha = max(0.4, 1.0 - (int(flit_id) * 0.2)) if flit_id is not None else 1.0
-
-        # 将基础颜色转换为RGBA格式，嵌入透明度信息
-        try:
-            # 转换颜色为RGBA元组
-            rgba = mcolors.to_rgba(base_color, alpha=alpha)
-            face_color_with_alpha = rgba
-        except:
-            # 如果转换失败，使用默认颜色
-            face_color_with_alpha = (0.5, 0.5, 1.0, alpha)  # 浅蓝色
-
-        return face_color_with_alpha, line_width, edge_color
-
-    def _get_flit_color(self, flit, use_highlight=True, expected_packet_id=None, highlight_color=None):
-        """获取flit颜色，支持多种PID格式"""
-        # 获取packet_id，兼容字典和对象格式
-        if isinstance(flit, dict):
-            flit_pid = flit.get("packet_id", None)
-        else:
-            flit_pid = getattr(flit, "packet_id", None)
-
-        # 高亮模式：目标 flit → 指定颜色，其余 → 灰
-        if use_highlight and expected_packet_id is not None:
-            return (highlight_color or "red") if str(flit_pid) == str(expected_packet_id) else "lightgrey"
-
-        # 普通模式：根据packet_id使用调色板颜色
-        return self._colors[int(flit_pid) % len(self._colors)] if flit_pid is not None else "lightblue"
 
     def set_network(self, network):
         """设置网络模型"""
