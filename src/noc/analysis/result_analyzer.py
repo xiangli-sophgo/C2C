@@ -78,11 +78,11 @@ class RequestInfo:
     data_entry_noc_from_cake0_cycle: int = -1  # data从Cake0进入NoC(写)
     data_entry_noc_from_cake1_cycle: int = -1  # data从Cake1进入NoC(读)
     data_received_complete_cycle: int = -1  # data接收完成
-    
+
     # 下环尝试次数统计
     eject_attempts_h_list: List[int] = None  # 每个flit的水平方向下环尝试次数列表
     eject_attempts_v_list: List[int] = None  # 每个flit的垂直方向下环尝试次数列表
-    
+
     def __post_init__(self):
         if self.eject_attempts_h_list is None:
             self.eject_attempts_h_list = []
@@ -218,7 +218,7 @@ class ResultAnalyzer:
                     data_entry_noc_from_cake1_cycle = min(data_entry_noc_from_cake1_cycle, flit.data_entry_noc_from_cake1_cycle)
                 if hasattr(flit, "data_received_complete_cycle") and flit.data_received_complete_cycle < np.inf:
                     data_received_complete_cycle = min(data_received_complete_cycle, flit.data_received_complete_cycle)
-                
+
                 # 收集每个flit的下环尝试次数
                 if hasattr(flit, "eject_attempts_h"):
                     eject_attempts_h_list.append(flit.eject_attempts_h)
@@ -265,7 +265,7 @@ class ResultAnalyzer:
             cmd_latency_ns = int(cmd_latency * cycle_time_ns) if cmd_latency < np.inf else 0
             data_latency_ns = int(data_latency * cycle_time_ns) if data_latency < np.inf else 0
             transaction_latency_ns = int(transaction_latency * cycle_time_ns) if transaction_latency < np.inf else 0
-            
+
             # 使用cmd_entry_cake0_cycle作为start_time（请求真正进入源IP的时间）
             if cmd_entry_cake0_cycle < np.inf:
                 start_time = int(cmd_entry_cake0_cycle * cycle_time_ns)
@@ -789,12 +789,8 @@ class ResultAnalyzer:
 
             # 总体延迟统计（分CMD、Data、Transaction）- 使用缓存数据
             print("总体延迟统计:")
-            print(
-                f"  CMD延迟: 平均 {np.mean(data_cache.all_cmd_latencies):.2f} ns, 最小 {np.min(data_cache.all_cmd_latencies):.2f} ns, 最大 {np.max(data_cache.all_cmd_latencies):.2f} ns"
-            )
-            print(
-                f"  Data延迟: 平均 {np.mean(data_cache.all_data_latencies):.2f} ns, 最小 {np.min(data_cache.all_data_latencies):.2f} ns, 最大 {np.max(data_cache.all_data_latencies):.2f} ns"
-            )
+            print(f"  CMD延迟: 平均 {np.mean(data_cache.all_cmd_latencies):.2f} ns, 最小 {np.min(data_cache.all_cmd_latencies):.2f} ns, 最大 {np.max(data_cache.all_cmd_latencies):.2f} ns")
+            print(f"  Data延迟: 平均 {np.mean(data_cache.all_data_latencies):.2f} ns, 最小 {np.min(data_cache.all_data_latencies):.2f} ns, 最大 {np.max(data_cache.all_data_latencies):.2f} ns")
             print(
                 f"  Transaction延迟: 平均 {np.mean(data_cache.all_trans_latencies):.2f} ns, 最小 {np.min(data_cache.all_trans_latencies):.2f} ns, 最大 {np.max(data_cache.all_trans_latencies):.2f} ns"
             )
@@ -888,8 +884,7 @@ class ResultAnalyzer:
             "EQ_ETag统计": {"req": {"T1": 0, "T0": 0}, "rsp": {"T1": 0, "T0": 0}, "data": {"T1": 0, "T0": 0}},  # 垂直CrossPoint的E-Tag统计（按通道分组）
             "ITag统计": {"h": {"req": 0, "rsp": 0, "data": 0}, "v": {"req": 0, "rsp": 0, "data": 0}},
             "Retry统计": {"read": 0, "write": 0},
-            "绕环比例统计": {"h": 0.0, "v": 0.0, "total": 0.0, "h_count": 0, "v_count": 0, "total_count": 0, 
-                          "h_needs_eject": 0, "v_needs_eject": 0, "total_needs_eject": 0},
+            "绕环比例统计": {"h": 0.0, "v": 0.0, "total": 0.0, "h_count": 0, "v_count": 0, "total_count": 0, "h_needs_eject": 0, "v_needs_eject": 0, "total_needs_eject": 0},
         }
 
         # 从NoC节点中收集统计数据
@@ -999,9 +994,10 @@ class ResultAnalyzer:
             print("=" * 60)
 
             wait_cycles = tag_analysis["Wait_cycle统计"]
-            print(f"  请求等待时间  - 横向: {wait_cycles['req_h']}, 纵向: {wait_cycles['req_v']}")
-            print(f"  响应等待时间  - 横向: {wait_cycles['rsp_h']}, 纵向: {wait_cycles['rsp_v']}")
-            print(f"  数据等待时间  - 横向: {wait_cycles['data_h']}, 纵向: {wait_cycles['data_v']}")
+            print(f"  等待时间统计:")
+            print(f"    REQ: 横向={wait_cycles['req_h']}, 纵向={wait_cycles['req_v']}")
+            print(f"    RSP: 横向={wait_cycles['rsp_h']}, 纵向={wait_cycles['rsp_v']}")
+            print(f"    DATA: 横向={wait_cycles['data_h']}, 纵向={wait_cycles['data_v']}")
 
             rb_etag = tag_analysis["RB_ETag统计"]
             print(f"  RB ETag统计:")
@@ -1019,84 +1015,86 @@ class ResultAnalyzer:
                 print(f"    {channel.upper()}: H={itag['h'][channel]}, V={itag['v'][channel]}")
 
             retry = tag_analysis["Retry统计"]
-            print(f"  Retry数量 - 读: {retry['read']}, 写: {retry['write']}")
+            print(f"  Retry数量:")
+            print(f"    读: {retry['read']}, 写: {retry['write']}")
 
             # 添加下环尝试统计输出
             eject_attempts = tag_analysis["Eject_attempts统计"]
-            print(f"  请求下环尝试 - 横向: {eject_attempts['req_h']}, 纵向: {eject_attempts['req_v']}")
-            print(f"  响应下环尝试 - 横向: {eject_attempts['rsp_h']}, 纵向: {eject_attempts['rsp_v']}")
-            print(f"  数据下环尝试 - 横向: {eject_attempts['data_h']}, 纵向: {eject_attempts['data_v']}")
+            print(f"  下环尝试统计:")
+            print(f"    REQ: 横向={eject_attempts['req_h']}, 纵向={eject_attempts['req_v']}")
+            print(f"    RSP: 横向={eject_attempts['rsp_h']}, 纵向={eject_attempts['rsp_v']}")
+            print(f"    DATA: 横向={eject_attempts['data_h']}, 纵向={eject_attempts['data_v']}")
 
         # 计算绕环比例统计
         if hasattr(model, "request_tracker"):
             try:
                 # 统计各方向上需要下环和绕环的flit数量
                 h_needs_eject = 0  # 横向需要下环的flit数 (eject_attempts_h > 0)
-                h_circuits = 0     # 横向绕环的flit数 (eject_attempts_h > 1)
+                h_circuits = 0  # 横向绕环的flit数 (eject_attempts_h > 1)
                 v_needs_eject = 0  # 纵向需要下环的flit数 (eject_attempts_v > 0)
-                v_circuits = 0     # 纵向绕环的flit数 (eject_attempts_v > 1)
-                
+                v_circuits = 0  # 纵向绕环的flit数 (eject_attempts_v > 1)
+
                 # 总体统计（任一方向需要下环/绕环的flit数，避免重复计算）
                 total_needs_eject = 0  # 任一方向需要下环的flit数
-                total_circuits = 0     # 任一方向绕环的flit数
-                
+                total_circuits = 0  # 任一方向绕环的flit数
+
                 # 用于去重统计的flit集合
                 flits_needs_eject = set()  # 需要下环的flit ID集合
-                flits_circuits = set()     # 绕环的flit ID集合
-                
+                flits_circuits = set()  # 绕环的flit ID集合
+
                 for req_id, lifecycle in model.request_tracker.completed_requests.items():
                     for flit in lifecycle.data_flits:
                         flit_id = f"{req_id}_{id(flit)}"  # 为每个flit生成唯一ID
-                        
+
                         # 横向统计
                         if hasattr(flit, "eject_attempts_h") and flit.eject_attempts_h > 0:
                             h_needs_eject += 1
                             if flit.eject_attempts_h > 1:
                                 h_circuits += 1
-                        
+
                         # 纵向统计
                         if hasattr(flit, "eject_attempts_v") and flit.eject_attempts_v > 0:
                             v_needs_eject += 1
                             if flit.eject_attempts_v > 1:
                                 v_circuits += 1
-                        
+
                         # 总体统计（去重）
-                        if ((hasattr(flit, "eject_attempts_h") and flit.eject_attempts_h > 0) or 
-                            (hasattr(flit, "eject_attempts_v") and flit.eject_attempts_v > 0)):
+                        if (hasattr(flit, "eject_attempts_h") and flit.eject_attempts_h > 0) or (hasattr(flit, "eject_attempts_v") and flit.eject_attempts_v > 0):
                             flits_needs_eject.add(flit_id)
-                            
-                        if ((hasattr(flit, "eject_attempts_h") and flit.eject_attempts_h > 1) or 
-                            (hasattr(flit, "eject_attempts_v") and flit.eject_attempts_v > 1)):
+
+                        if (hasattr(flit, "eject_attempts_h") and flit.eject_attempts_h > 1) or (hasattr(flit, "eject_attempts_v") and flit.eject_attempts_v > 1):
                             flits_circuits.add(flit_id)
-                
+
                 total_needs_eject = len(flits_needs_eject)
                 total_circuits = len(flits_circuits)
-                
+
                 # 计算比例
                 h_ratio = h_circuits / h_needs_eject if h_needs_eject > 0 else 0
                 v_ratio = v_circuits / v_needs_eject if v_needs_eject > 0 else 0
                 total_ratio = total_circuits / total_needs_eject if total_needs_eject > 0 else 0
-                
+
                 tag_analysis["绕环比例统计"] = {
                     "h": h_ratio,
                     "v": v_ratio,
                     "total": total_ratio,
-                    "h_count": h_circuits,      # 横向绕环flit数
-                    "v_count": v_circuits,      # 纵向绕环flit数
+                    "h_count": h_circuits,  # 横向绕环flit数
+                    "v_count": v_circuits,  # 纵向绕环flit数
                     "total_count": total_circuits,  # 总绕环flit数
-                    "h_needs_eject": h_needs_eject,   # 横向需要下环flit数
-                    "v_needs_eject": v_needs_eject,   # 纵向需要下环flit数
+                    "h_needs_eject": h_needs_eject,  # 横向需要下环flit数
+                    "v_needs_eject": v_needs_eject,  # 纵向需要下环flit数
                     "total_needs_eject": total_needs_eject,  # 总需要下环flit数
                 }
-                
+
                 if verbose:
-                    print(f"  横向绕环比例: {h_ratio:.4f} ({h_circuits}/{h_needs_eject})")
-                    print(f"  纵向绕环比例: {v_ratio:.4f} ({v_circuits}/{v_needs_eject})")
-                    print(f"  总体绕环比例: {total_ratio:.4f} ({total_circuits}/{total_needs_eject})")
-                    
+                    print(f"  数据绕环比例:")
+                    print(f"    横向: {h_ratio*100:.2f}% ({h_circuits}/{h_needs_eject})")
+                    print(f"    纵向: {v_ratio*100:.2f}% ({v_circuits}/{v_needs_eject})")
+                    print(f"    总体: {total_ratio*100:.2f}% ({total_circuits}/{total_needs_eject})")
+
             except Exception as e:
                 print(f"计算绕环比例时出错: {e}")
                 import traceback
+
                 traceback.print_exc()
 
         return tag_analysis
@@ -1835,9 +1833,7 @@ class ResultAnalyzer:
                 write_requests = ip_analysis[ip_type]["写请求数"]
 
                 # 在X轴标签下方添加请求数信息
-                ax.text(
-                    i, -max(max(read_bw), max(write_bw)) * 0.1, f"总请求: {total_requests}\n(读:{read_requests}, 写:{write_requests})", ha="center", va="top", fontsize=8, alpha=0.7
-                )
+                ax.text(i, -max(max(read_bw), max(write_bw)) * 0.1, f"总请求: {total_requests}\n(读:{read_requests}, 写:{write_requests})", ha="center", va="top", fontsize=8, alpha=0.7)
 
             plt.tight_layout()
 
@@ -2194,9 +2190,16 @@ class ResultAnalyzer:
 
                 # 计算链路颜色和线宽
                 if bandwidth > 0:
-                    intensity = min(1.0, bandwidth / max_link_bw)
-                    color = (intensity, 0, 0)
-                    linewidth = 1 + intensity * 2  # 减小线宽
+                    if bandwidth < 100:
+                        # 小于100的带宽显示为黑色
+                        color = (0, 0, 0)
+                        linewidth = 1.0
+                    else:
+                        # 大于等于100的带宽开始变红，256时最红
+                        # 将100-256映射到0-1的红色强度
+                        intensity = min(1.0, (bandwidth - 100) / (256 - 100))
+                        color = (intensity, 0, 0)
+                        linewidth = 1 + intensity * 2  # 减小线宽
                     alpha = 0.9
                 else:
                     color = (0.7, 0.7, 0.7)  # 灰色表示无流量

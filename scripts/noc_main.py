@@ -32,12 +32,12 @@ def main():
 
     # 3. 配置各种选项
     model.setup_traffic_scheduler(traffic_file_path=traffic_file_path, traffic_chains=traffic_chains)
-    model.setup_debug(trace_packets=[11], update_interval=0.0)
-    model.setup_visualization(enable=True, update_interval=0.8, start_cycle=0)
+    model.setup_debug(trace_packets=[99], update_interval=0.0)
+    # model.setup_visualization(enable=True, update_interval=0.5, start_cycle=80)
 
     model.setup_result_analysis(
         # 图片生成控制
-        flow_distribution_fig=0,
+        flow_distribution_fig=1,
         bandwidth_analysis_fig=0,
         latency_analysis_fig=0,
         save_figures=0,
