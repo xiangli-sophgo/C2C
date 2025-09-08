@@ -11,6 +11,7 @@ CrossRing环形桥接管理。
 from typing import Dict, List, Optional, Tuple
 
 from src.noc.base.ip_interface import PipelinedFIFO
+from src.noc.utils.round_robin import RoundRobinScheduler
 from ..flit import CrossRingFlit
 from ..config import CrossRingConfig, RoutingStrategy
 
@@ -45,12 +46,8 @@ class RingBridge:
         # ring_bridge输出FIFO
         self.ring_bridge_output_fifos = self._create_output_fifos()
 
-        # Ring_bridge轮询仲裁器状态 - 修改为输出端独立仲裁
-        self.ring_bridge_arbitration_state = {
-            "req": {"input_sources": [], "output_directions": [], "output_current_input": {}, "last_served_input": {}, "last_served_output": {}},
-            "rsp": {"input_sources": [], "output_directions": [], "output_current_input": {}, "last_served_input": {}, "last_served_output": {}},
-            "data": {"input_sources": [], "output_directions": [], "output_current_input": {}, "last_served_input": {}, "last_served_output": {}},
-        }
+        # 使用标准轮询调度器替代原有的仲裁状态管理
+        self.ring_bridge_scheduler = RoundRobinScheduler()
 
         # Ring_bridge仲裁决策缓存（两阶段执行用）
         self.ring_bridge_arbitration_decisions = {
@@ -91,15 +88,15 @@ class RingBridge:
         """根据路由策略获取ring_bridge的输入源和输出方向配置。"""
         routing_strategy = self._get_routing_strategy()
 
-        # 根据路由策略配置输入源和输出方向
+        # 按CrossRing顺序：[0]TL, [1]TR, [2]TU, [3]TD 对应的输入源
         if routing_strategy == "XY":
-            input_sources = ["IQ_TU", "IQ_TD", "RB_TR", "RB_TL"]  # 修正：移除RB_TU, RB_TD
+            input_sources = ["RB_TL", "RB_TR", "IQ_TU", "IQ_TD"]
             output_directions = ["EQ", "TU", "TD"]
         elif routing_strategy == "YX":
-            input_sources = ["IQ_TR", "IQ_TL", "RB_TU", "RB_TD"]
+            input_sources = ["IQ_TL", "IQ_TR", "RB_TU", "RB_TD"]
             output_directions = ["EQ", "TR", "TL"]
         else:  # ADAPTIVE 或其他
-            input_sources = ["IQ_TU", "IQ_TD", "IQ_TR", "IQ_TL", "RB_TR", "RB_TL", "RB_TU", "RB_TD"]
+            input_sources = ["IQ_TL", "IQ_TR", "IQ_TU", "IQ_TD", "RB_TL", "RB_TR", "RB_TU", "RB_TD"]
             output_directions = ["EQ", "TU", "TD", "TR", "TL"]
 
         return input_sources, output_directions
@@ -111,18 +108,6 @@ class RingBridge:
             routing_strategy = routing_strategy.value
         return routing_strategy
 
-    def _initialize_ring_bridge_arbitration(self) -> None:
-        """初始化ring_bridge仲裁的源和方向列表 - 输出端独立仲裁。"""
-        input_sources, output_directions = self._get_ring_bridge_config()
-
-        for channel in ["req", "rsp", "data"]:
-            arb_state = self.ring_bridge_arbitration_state[channel]
-            arb_state["input_sources"] = input_sources.copy()
-            arb_state["output_directions"] = output_directions.copy()
-            # 每个输出方向维护独立的输入源轮询索引
-            arb_state["output_current_input"] = {direction: 0 for direction in output_directions}
-            arb_state["last_served_input"] = {source: 0 for source in input_sources}
-            arb_state["last_served_output"] = {direction: 0 for direction in output_directions}
 
     def add_to_ring_bridge_input(self, flit: CrossRingFlit, direction: str, channel: str) -> bool:
         """
@@ -174,10 +159,6 @@ class RingBridge:
         # 清空上一周期的决策 - 改为列表以支持多个传输
         self.ring_bridge_arbitration_decisions = {"req": [], "rsp": [], "data": []}
 
-        # 首先初始化源和方向列表（如果还没有初始化）
-        if not self.ring_bridge_arbitration_state["req"]["input_sources"]:
-            self._initialize_ring_bridge_arbitration()
-
         # 为每个通道计算仲裁决策（IQ源直接传输到RB输出，无需内部FIFO）
         for channel in ["req", "rsp", "data"]:
             self._compute_channel_ring_bridge_arbitration(channel, cycle, inject_input_fifos)
@@ -185,9 +166,7 @@ class RingBridge:
 
     def _compute_channel_ring_bridge_arbitration(self, channel: str, cycle: int, inject_input_fifos: Dict) -> None:
         """计算单个通道的ring_bridge仲裁决策 - 输出端独立仲裁。"""
-        arb_state = self.ring_bridge_arbitration_state[channel]
-        input_sources = arb_state["input_sources"]
-        output_directions = arb_state["output_directions"]
+        input_sources, output_directions = self._get_ring_bridge_config()
 
         # 为每个输出方向独立进行仲裁
         for output_direction in output_directions:
@@ -196,42 +175,35 @@ class RingBridge:
             if not output_fifo.ready_signal():
                 continue  # 输出FIFO满，跳过该输出方向
 
-            # 获取该输出方向的当前轮询索引
-            current_input_idx = arb_state["output_current_input"][output_direction]
-            
-            # 轮询该输出方向的所有输入源
-            selected_flit = None
-            selected_input_source = None
-            
-            for input_attempt in range(len(input_sources)):
-                input_idx = (current_input_idx + input_attempt) % len(input_sources)
-                input_source = input_sources[input_idx]
+            # 为该输出方向生成唯一的调度器key
+            scheduler_key = f"RB_{channel}_{output_direction}_{self.node_id}"
 
-                # 获取该输入源的flit
+            # 定义输入源检查函数
+            def check_input_source_ready(input_source):
                 flit = self._peek_flit_from_input_source(input_source, channel, inject_input_fifos)
+                if flit is None:
+                    return False
                 
-                if flit is not None:
-                    # 检查该flit是否想要去这个输出方向
-                    flit_output_direction = self._determine_ring_bridge_output_direction(flit)
-                    
-                    if flit_output_direction == output_direction:
-                        # 找到了匹配的flit
-                        selected_flit = flit
-                        selected_input_source = input_source
-                        # 更新该输出方向的轮询索引到下一个输入源
-                        arb_state["output_current_input"][output_direction] = (input_idx + 1) % len(input_sources)
-                        break
+                # 检查该flit是否想要去这个输出方向
+                flit_output_direction = self._determine_ring_bridge_output_direction(flit)
+                return flit_output_direction == output_direction
+
+            # 使用轮询调度器选择输入源
+            selected_input_source, _ = self.ring_bridge_scheduler.select(
+                scheduler_key,
+                input_sources,
+                check_input_source_ready
+            )
             
-            # 如果找到了匹配的flit，保存仲裁决策
-            if selected_flit is not None:
-                self.ring_bridge_arbitration_decisions[channel].append({
-                    "flit": selected_flit,
-                    "output_direction": output_direction,
-                    "input_source": selected_input_source
-                })
-            else:
-                # 没有找到flit，也要更新轮询索引确保公平性
-                arb_state["output_current_input"][output_direction] = (current_input_idx + 1) % len(input_sources)
+            # 如果找到了匹配的输入源，保存仲裁决策
+            if selected_input_source:
+                selected_flit = self._peek_flit_from_input_source(selected_input_source, channel, inject_input_fifos)
+                if selected_flit:
+                    self.ring_bridge_arbitration_decisions[channel].append({
+                        "flit": selected_flit,
+                        "output_direction": output_direction,
+                        "input_source": selected_input_source
+                    })
 
     def execute_arbitration(self, cycle: int, inject_input_fifos: Dict) -> None:
         """
@@ -273,9 +245,8 @@ class RingBridge:
             success = self._assign_flit_to_ring_bridge_output(flit, output_direction, channel, cycle)
 
             if success:
-                # 成功传输，更新仲裁状态
-                arb_state = self.ring_bridge_arbitration_state[channel]
-                arb_state["last_served_input"][input_source] = cycle
+                # 成功传输（轮询调度器自动管理状态）
+                pass
 
                 # 释放E-Tag entry（如果flit有allocated_entry_info）
                 if hasattr(flit, "allocated_entry_info") and self.parent_node:
@@ -544,10 +515,7 @@ class RingBridge:
             flit.flit_position = f"RB_{output_direction}"
 
             if output_fifo.write_input(flit):
-                # 成功分配，更新输出仲裁状态
-                arb_state = self.ring_bridge_arbitration_state[channel]
-                arb_state["last_served_output"][output_direction] = cycle
-
+                # 成功分配（轮询调度器自动管理状态）
                 return True
 
         return False

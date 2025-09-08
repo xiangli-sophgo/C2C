@@ -2326,10 +2326,21 @@ class ResultAnalyzer:
                 # 添加自环链路带宽标注
                 if node_id in self_loop_bandwidth:
                     loop_data = self_loop_bandwidth[node_id]
+                    
+                    # 定义自环链路颜色计算函数（与普通链路一致）
+                    def calculate_bandwidth_color(bandwidth):
+                        if bandwidth < 100:
+                            return (0, 0, 0)  # 黑色
+                        else:
+                            # 大于等于100的带宽开始变红，256时最红
+                            intensity = min(1.0, (bandwidth - 100) / (256 - 100))
+                            return (intensity, 0, 0)  # 动态红色
 
                     # TL_TR (水平自环) - 标在节点左右两边，竖着写
                     if "TL_TR" in loop_data:
                         bandwidth = loop_data["TL_TR"]
+                        # 计算颜色（与普通链路一致）
+                        bandwidth_color = calculate_bandwidth_color(bandwidth)
                         # 左侧标注
                         ax.text(
                             x - square_size / 2 - 0.3,
@@ -2340,12 +2351,14 @@ class ResultAnalyzer:
                             fontsize=dynamic_font * link_label_font_factor,
                             rotation=90,
                             fontweight="bold",
-                            color="red",
+                            color=bandwidth_color,
                             bbox=dict(boxstyle="round,pad=0.1", facecolor="none", alpha=0),
                         )
 
                     if "TR_TL" in loop_data:
                         bandwidth = loop_data["TR_TL"]
+                        # 计算颜色（与普通链路一致）
+                        bandwidth_color = calculate_bandwidth_color(bandwidth)
                         # 右侧标注
                         ax.text(
                             x + square_size / 2 + 0.3,
@@ -2356,13 +2369,15 @@ class ResultAnalyzer:
                             fontsize=dynamic_font * link_label_font_factor,
                             rotation=90,
                             fontweight="bold",
-                            color="red",
+                            color=bandwidth_color,
                             bbox=dict(boxstyle="round,pad=0.1", facecolor="none", alpha=0),
                         )
 
                     # TU_TD (垂直自环) - 标在节点上下两边，正常写
                     if "TU_TD" in loop_data:
                         bandwidth = loop_data["TU_TD"]
+                        # 计算颜色（与普通链路一致）
+                        bandwidth_color = calculate_bandwidth_color(bandwidth)
                         # 上侧标注
                         ax.text(
                             x,
@@ -2372,12 +2387,14 @@ class ResultAnalyzer:
                             va="center",
                             fontsize=dynamic_font * link_label_font_factor,
                             fontweight="bold",
-                            color="red",
+                            color=bandwidth_color,
                             bbox=dict(boxstyle="round,pad=0.1", facecolor="none", alpha=0),
                         )
 
                     if "TD_TU" in loop_data:
                         bandwidth = loop_data["TD_TU"]
+                        # 计算颜色（与普通链路一致）
+                        bandwidth_color = calculate_bandwidth_color(bandwidth)
                         # 下侧标注
                         ax.text(
                             x,
@@ -2387,7 +2404,7 @@ class ResultAnalyzer:
                             va="center",
                             fontsize=dynamic_font * link_label_font_factor,
                             fontweight="bold",
-                            color="red",
+                            color=bandwidth_color,
                             bbox=dict(boxstyle="round,pad=0.1", facecolor="none", alpha=0),
                         )
 

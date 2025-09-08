@@ -11,6 +11,7 @@ CrossRing弹出队列管理。
 from typing import Dict, List, Optional, Tuple
 
 from src.noc.base.ip_interface import PipelinedFIFO
+from src.noc.utils.round_robin import RoundRobinScheduler
 from ..flit import CrossRingFlit
 from ..config import CrossRingConfig, RoutingStrategy
 
@@ -46,8 +47,8 @@ class EjectQueue:
         # eject输入FIFO
         self.eject_input_fifos = self._create_eject_input_fifos()
 
-        # Eject轮询仲裁器状态：按IP通道独立轮询
-        self.eject_arbitration_state = {}  # 将在connect_ip时为每个IP通道创建独立的轮询状态
+        # 使用标准轮询调度器替代原有的仲裁状态管理
+        self.eject_scheduler = RoundRobinScheduler()
 
         # 性能统计
         self.stats = {"ejected_flits": {"req": 0, "rsp": 0, "data": 0}}
@@ -79,12 +80,7 @@ class EjectQueue:
             for channel in ["req", "rsp", "data"]:
                 self.ip_eject_channel_buffers[ip_id][channel] = self._create_fifo(f"ip_eject_channel_{channel}_{ip_id}_{self.node_id}", self.eq_ch_depth)
 
-            # 为每个IP的每个通道创建独立的轮询状态
-            for channel in ["req", "rsp", "data"]:
-                ip_channel_key = f"{ip_id}_{channel}"
-                if ip_channel_key not in self.eject_arbitration_state:
-                    active_sources = self._get_active_eject_sources()
-                    self.eject_arbitration_state[ip_channel_key] = {"current_source": 0, "sources": active_sources.copy(), "last_served_source": {source: 0 for source in active_sources}}
+            # IP连接成功（轮询调度器无需显式管理状态）
             return True
         else:
             return False
@@ -95,15 +91,13 @@ class EjectQueue:
         if hasattr(routing_strategy, "value"):
             routing_strategy = routing_strategy.value
 
-        # 这两个源总是存在
-        sources = ["IQ_EQ", "ring_bridge_EQ"]
-
+        # 按CrossRing顺序：[0]TU, [1]TD, [2]IQ_EQ, [3]ring_bridge_EQ
         if routing_strategy == "XY":
-            sources.extend(["TU", "TD"])
+            sources = ["TU", "TD", "IQ_EQ", "ring_bridge_EQ"]
         elif routing_strategy == "YX":
-            sources.extend(["TR", "TL"])
+            sources = ["TR", "TL", "IQ_EQ", "ring_bridge_EQ"]
         else:  # ADAPTIVE 或其他
-            sources.extend(["TU", "TD", "TR", "TL"])
+            sources = ["TU", "TD", "TR", "TL", "IQ_EQ", "ring_bridge_EQ"]
 
         return sources
 
@@ -128,72 +122,41 @@ class EjectQueue:
         if not self.connected_ips:
             return
 
-        # 收集所有源的可用flit
-        available_flits = {}  # {source: [flit1, flit2, ...]}
         active_sources = self._get_active_eject_sources()
-
-        for source in active_sources:
-            flit = self._peek_flit_from_eject_source(source, channel, inject_input_fifos, ring_bridge)
-            if flit is not None:
-                target_ip = self._find_target_ip_for_flit(flit, channel, cycle)
-                if target_ip:
-                    if source not in available_flits:
-                        available_flits[source] = []
-                    available_flits[source].append((flit, target_ip))
 
         # 为每个IP通道独立进行轮询仲裁
         for ip_id in self.connected_ips:
-            ip_channel_key = f"{ip_id}_{channel}"
-            if ip_channel_key not in self.eject_arbitration_state:
+            # 检查该IP的channel buffer是否有空间
+            eject_buffer = self.ip_eject_channel_buffers[ip_id][channel]
+            if not eject_buffer.ready_signal():
                 continue
 
-            arb_state = self.eject_arbitration_state[ip_channel_key]
-            sources = arb_state["sources"]
+            # 为该IP通道生成唯一的调度器key
+            scheduler_key = f"EQ_{ip_id}_{channel}_{self.node_id}"
 
-            # 检查目标为该IP的可用源
-            candidate_sources = []
-            for source in sources:
-                if source in available_flits:
-                    for flit, target_ip in available_flits[source]:
-                        if target_ip == ip_id:
-                            candidate_sources.append((source, flit))
-                            break  # 每个源只取一个flit
+            # 定义源检查函数
+            def check_source_ready(source):
+                flit = self._peek_flit_from_eject_source(source, channel, inject_input_fifos, ring_bridge)
+                if flit is None:
+                    return False
+                
+                target_ip = self._find_target_ip_for_flit(flit, channel, cycle)
+                return target_ip == ip_id
 
-            if candidate_sources:
-                # 按轮询顺序选择源
-                selected_source = None
-                selected_flit = None
-                selected_index = None
+            # 使用轮询调度器选择源
+            selected_source, _ = self.eject_scheduler.select(
+                scheduler_key,
+                active_sources,
+                check_source_ready
+            )
 
-                for source_attempt in range(len(sources)):
-                    current_source_idx = (arb_state["current_source"] + source_attempt) % len(sources)
-                    current_source = sources[current_source_idx]
-
-                    # 检查当前源是否有候选flit
-                    for source, flit in candidate_sources:
-                        if source == current_source:
-                            selected_source = source
-                            selected_flit = flit
-                            selected_index = current_source_idx
-                            break
-
-                    if selected_source is not None:
-                        break
-
-                if selected_source and selected_flit:
+            if selected_source:
+                # 获取选中的flit
+                selected_flit = self._peek_flit_from_eject_source(selected_source, channel, inject_input_fifos, ring_bridge)
+                
+                if selected_flit:
                     # 保存传输计划
                     self._eject_transfer_plan.append((selected_source, channel, selected_flit, ip_id))
-                    arb_state["last_served_source"][selected_source] = cycle
-
-                    # 从available_flits中移除已选择的flit，避免重复分配
-                    if selected_source in available_flits:
-                        available_flits[selected_source] = [(f, t) for f, t in available_flits[selected_source] if f != selected_flit or t != ip_id]
-                        if not available_flits[selected_source]:
-                            del available_flits[selected_source]
-
-                # 更新该IP通道的轮询指针：从刚才命中的源位置+1
-                if selected_index is not None:
-                    arb_state["current_source"] = (selected_index + 1) % len(sources)
 
     def execute_arbitration(self, cycle: int, inject_input_fifos: Dict, ring_bridge) -> None:
         """

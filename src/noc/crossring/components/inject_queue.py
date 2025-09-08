@@ -11,6 +11,7 @@ CrossRing注入队列管理。
 from typing import Dict, List, Optional, Tuple
 
 from src.noc.base.ip_interface import PipelinedFIFO
+from src.noc.utils.round_robin import RoundRobinScheduler
 from ..flit import CrossRingFlit
 from ..config import CrossRingConfig, RoutingStrategy
 
@@ -47,12 +48,8 @@ class InjectQueue:
         # 方向化的注入队列
         self.inject_input_fifos = self._create_direction_fifos()
 
-        # 注入仲裁状态 - 按通道和输出方向二维独立轮询IP
-        self.inject_arbitration_state = {}
-        for channel in ["req", "rsp", "data"]:
-            self.inject_arbitration_state[channel] = {}
-            for direction in ["TR", "TL", "TU", "TD", "EQ"]:
-                self.inject_arbitration_state[channel][direction] = {"current_ip_index": 0, "ip_list": []}
+        # 使用标准轮询调度器替代原有的仲裁状态管理
+        self.inject_scheduler = RoundRobinScheduler()
 
         # 传输计划（两阶段执行用）
         self._inject_transfer_plan = []
@@ -96,11 +93,7 @@ class InjectQueue:
                 fifo._stats_sample_interval = sample_interval
                 self.ip_inject_channel_buffers[ip_id][channel] = fifo
 
-            # 为每个(channel, direction)组合添加该IP到轮询列表
-            for channel in ["req", "rsp", "data"]:
-                for direction in ["TR", "TL", "TU", "TD", "EQ"]:
-                    if ip_id not in self.inject_arbitration_state[channel][direction]["ip_list"]:
-                        self.inject_arbitration_state[channel][direction]["ip_list"].append(ip_id)
+            # 注入IP成功（轮询调度器无需显式管理IP列表）
 
             return True
         else:
@@ -153,60 +146,47 @@ class InjectQueue:
         # 按(channel, direction)组合进行独立轮询
         for channel in ["req", "rsp", "data"]:
             for direction in ["TR", "TL", "TU", "TD", "EQ"]:
-                arb_state = self.inject_arbitration_state[channel][direction]
-                ip_list = arb_state["ip_list"]
+                # 为每个(channel, direction)生成唯一的调度器key
+                scheduler_key = f"IQ_{channel}_{direction}_{self.node_id}"
+                
+                # 检查目标方向FIFO是否可用
+                direction_fifo = self.inject_input_fifos[channel][direction]
+                if not direction_fifo.ready_signal():
+                    continue
 
-                if not ip_list:
-                    continue  # 该(channel, direction)没有IP
-
-                # 在该(channel, direction)内轮询IP
-                current_ip_index = arb_state["current_ip_index"]
-                selected_ip = None
-                selected_flit = None
-                selected_ip_index = None
-
-                for ip_offset in range(len(ip_list)):
-                    ip_index = (current_ip_index + ip_offset) % len(ip_list)
-                    ip_id = ip_list[ip_index]
-
+                # 定义IP检查函数
+                def check_ip_ready(ip_id):
                     if ip_id not in self.ip_inject_channel_buffers:
-                        continue
-
+                        return False
+                    
                     # 检查该IP的channel buffer
                     channel_buffer = self.ip_inject_channel_buffers[ip_id][channel]
                     if not channel_buffer.valid_signal():
-                        continue
-
+                        return False
+                    
                     flit = channel_buffer.peek_output()
                     if flit is None:
-                        continue
-
+                        return False
+                    
                     # 确定flit的目标方向
                     target_direction = self._find_target_direction_for_flit(flit, channel)
-                    if target_direction != direction:
-                        continue  # 不是当前轮询的方向
+                    return target_direction == direction
 
-                    # 检查目标方向FIFO是否可用
-                    direction_fifo = self.inject_input_fifos[channel][direction]
-                    if not direction_fifo.ready_signal():
-                        continue
+                # 使用轮询调度器选择IP
+                selected_ip, _ = self.inject_scheduler.select(
+                    scheduler_key, 
+                    self.connected_ips, 
+                    check_ip_ready
+                )
 
-                    # 找到了可传输的flit
-                    selected_ip = ip_id
-                    selected_flit = flit
-                    selected_ip_index = ip_index
-                    break
-
-                if selected_ip and selected_flit:
-                    # 计划传输
-                    self._inject_transfer_plan.append((selected_ip, channel, selected_flit, direction))
-
-                # 更新该(channel, direction)的轮询指针
-                # 命中时：从刚才命中的索引+1；未命中时：从当前位置+1
-                if selected_ip_index is not None:
-                    arb_state["current_ip_index"] = (selected_ip_index + 1) % len(ip_list)
-                else:
-                    arb_state["current_ip_index"] = (arb_state["current_ip_index"] + 1) % len(ip_list)
+                if selected_ip:
+                    # 获取选中的flit
+                    channel_buffer = self.ip_inject_channel_buffers[selected_ip][channel]
+                    selected_flit = channel_buffer.peek_output()
+                    
+                    if selected_flit:
+                        # 计划传输
+                        self._inject_transfer_plan.append((selected_ip, channel, selected_flit, direction))
 
     def execute_arbitration(self, cycle: int) -> None:
         """
