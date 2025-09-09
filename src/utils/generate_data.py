@@ -365,7 +365,7 @@ def generate_data(topo, interval_count, file_name, sdma_map, gdma_map, cdma_map,
 if __name__ == "__main__":
     # 参数配置
     TOPO = "3x3"
-    INTERVAL_COUNT = 50
+    INTERVAL_COUNT = 10
     FILE_NAME = r"../../traffic_data/test1.txt"
     np.random.seed(715)
 
@@ -447,27 +447,25 @@ if __name__ == "__main__":
             # ],
         }
         GDMA_MAP = {
-            # "gdma_0": [
-            #     0,
-            #     2,
-            #     6,
-            #     8,
-            # ],
-            "gdma_1": list(range(9)),
+            "gdma_0": [
+                # 0,
+                1,
+                # 3,
+                # 4,
+            ],
+            # "gdma_1": list(range(4)),
         }
         CDMA_MAP = {
             # "cdma_0": [0, 2, 6, 8],
         }
         DDR_MAP = {
-            # "ddr_0": [
-            # 4,
-            # 2,
-            # 3,
-            # 1,
-            # 6,
-            # 8,
-            # ],
-            "ddr_1": list(range(9)),
+            "ddr_0": [
+                0,
+                # 1,
+                # 3,
+                # 4,
+            ],
+            # "ddr_1": list(range(4)),
             # "ddr_1": [
             # 4,
             # 2,

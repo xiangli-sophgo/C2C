@@ -1034,8 +1034,12 @@ CrossRing可视化控制键:
             if self.history:
                 latest_cycle, latest_snapshot = self.history[-1]
                 self._render_from_snapshot(latest_snapshot)
-                # 节点视图也从最新快照获取数据
-                self.node_vis.render_node_from_snapshot(self._selected_node, latest_cycle)
+                # 节点视图使用实时网络数据（包含CP links更新）
+                if hasattr(self.node_vis, 'render_node_from_network'):
+                    self.node_vis.render_node_from_network(self._selected_node, network)
+                else:
+                    # 回退到快照方式
+                    self.node_vis.render_node_from_snapshot(self._selected_node, latest_cycle)
 
         # 更新状态显示
         self._update_status_display()
@@ -1102,6 +1106,7 @@ CrossRing可视化控制键:
 
                                     # 方法1：尝试获取当前slot（输出位置）
                                     current_slot = slice_obj.peek_current_slot(channel) if hasattr(slice_obj, "peek_current_slot") else None
+                                    
                                     if current_slot:
                                         slot_info = extract_flit_from_slot(current_slot, channel)
 

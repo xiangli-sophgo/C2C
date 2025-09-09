@@ -101,8 +101,22 @@ class CrossRingNodeVisualizer:
         self.cph_patches, self.cph_texts = {}, {}
         self.cpv_patches, self.cpv_texts = {}, {}
 
+        # CP链路可视化相关
+        self.cp_link_arrows = {}  # 存储link箭头patches
+        self.cp_link_slots = {}  # 存储link的slice patches
+        self.cp_link_mapping = {}  # 存储CP link的映射关系: {key: link_id}
+        self.cp_link_texts = {}  # 存储link的文本标注
+        self.cp_positions = {}  # 存储CP模块位置
+
+        # 预计算所有节点的链路映射关系
+        self._precompute_link_mappings()
+
         # 画出三个模块的框和 FIFO 槽
         self._draw_modules()
+        
+        # 初始化CP链路框架（持久化显示）
+        self.current_node_id = None
+        self._clear_cp_links()  # 确保初始化时清空
 
         # 点击显示 flit 信息
         self.patch_info_map = {}  # patch -> (text_obj, info_str)
@@ -267,6 +281,9 @@ class CrossRingNodeVisualizer:
         self._draw_node_module(CPH_x, CPH_y, self.cp_module_size[::-1], cross_point_horizontal_config)
         self._draw_node_module(CPV_x, CPV_y, self.cp_module_size, cross_point_vertical_config)
 
+        # 记录CP模块位置以便后续绘制link
+        self.cp_positions = {"horizontal": (CPH_x, CPH_y, self.cp_module_size[::-1]), "vertical": (CPV_x, CPV_y, self.cp_module_size)}  # (x, y, (width, height))
+
     def _auto_adjust_axis_limits(self, IQ_x, IQ_y, RB_x, RB_y, EQ_x, EQ_y, CPH_x, CPH_y, CPV_x, CPV_y):
         """自动调整坐标轴范围以适应所有模块"""
         all_positions = [
@@ -283,10 +300,10 @@ class CrossRingNodeVisualizer:
         min_y = min(y for x, y, (h, w) in all_positions)
         max_y = max(y + h for x, y, (h, w) in all_positions)
 
-        # 添加边距
-        margin = 2
+        # 添加边距（考虑到CP links会延伸出去，现在有8个link）
+        margin = 4  # 进一步增加边距以容纳更多的link
         self.ax.set_xlim(min_x - margin, max_x + margin)
-        self.ax.set_ylim(min_y - margin * 4, max_y + margin * 0)
+        self.ax.set_ylim(min_y - margin, max_y + margin)
 
     def _draw_node_module(self, x, y, module_size, module_config):
         """绘制节点模块"""
@@ -305,8 +322,8 @@ class CrossRingNodeVisualizer:
         gap = self.gap
         fontsize = self.fontsize
         if title == "CP":
-            square *= 2
-            gap *= 20
+            square *= 1.5  # 调整CP slot大小，使其与link更协调
+            gap *= 15  # 调整gap比例
             fontsize = 8
 
         # 处理方向参数
@@ -517,7 +534,6 @@ class CrossRingNodeVisualizer:
             else:
                 raise ValueError(f"Unknown orientation: {orient}")
 
-
     def _on_click(self, event):
         """处理点击事件"""
         if event.inaxes != self.ax:
@@ -556,19 +572,22 @@ class CrossRingNodeVisualizer:
         self.use_highlight = use_highlight
         self.highlight_pid = highlight_pid
 
-        # 更新所有patch的颜色和文本可见性
-        for patch, (txt, flit) in self.patch_info_map.items():
+        # 更新所有patch的颜色和文本可见性（包括CP links）
+        all_patches = list(self.patch_info_map.items())
+
+        # 添加CP link slots的patch
+        for direction_slots in self.cp_link_slots.values():
+            for patch in direction_slots:
+                if patch in self.patch_info_map:
+                    all_patches.append((patch, self.patch_info_map[patch]))
+
+        for patch, (txt, flit) in all_patches:
             if flit:
                 attrs = self.style_manager._extract_flit_attributes(flit)
                 pid = attrs["packet_id"]
-                
+
                 # 使用样式管理器应用样式
-                self.style_manager.apply_style_to_patch(
-                    patch, flit, 
-                    use_highlight=self.use_highlight,
-                    expected_packet_id=self.highlight_pid,
-                    show_tags_mode=self.show_tags_mode
-                )
+                self.style_manager.apply_style_to_patch(patch, flit, use_highlight=self.use_highlight, expected_packet_id=self.highlight_pid, show_tags_mode=self.show_tags_mode)
 
                 # 更新文本可见性
                 if self.use_highlight and pid == self.highlight_pid:
@@ -595,12 +614,7 @@ class CrossRingNodeVisualizer:
         for patch, (txt, flit) in self.patch_info_map.items():
             # 使用样式管理器重新计算并应用样式
             if flit:
-                self.style_manager.apply_style_to_patch(
-                    patch, flit,
-                    use_highlight=self.use_highlight,
-                    expected_packet_id=self.highlight_pid,
-                    show_tags_mode=self.show_tags_mode
-                )
+                self.style_manager.apply_style_to_patch(patch, flit, use_highlight=self.use_highlight, expected_packet_id=self.highlight_pid, show_tags_mode=self.show_tags_mode)
 
         # 触发重绘
         self.fig.canvas.draw_idle()
@@ -858,6 +872,29 @@ class CrossRingNodeVisualizer:
         except Exception as e:
             self._show_no_data_message(node_id, f"历史数据错误: {str(e)}")
 
+    def render_node_from_network(self, node_id, network):
+        """从实时网络数据渲染节点"""
+        try:
+            # 保存实时快照
+            self.save_history_snapshot(network, getattr(network, "cycle", 0))
+
+            # 从最新快照渲染
+            if self.node_history:
+                latest_cycle, latest_snapshot = self.node_history[-1]
+                nodes_data = latest_snapshot.get("nodes", {})
+                node_data = nodes_data.get(node_id)
+
+                if node_data:
+                    current_channel = getattr(self.parent, "current_channel", "data") if self.parent else "data"
+                    self._render_from_snapshot_data(node_id, node_data, current_channel)
+                else:
+                    self._show_no_data_message(node_id, "节点数据不存在")
+            else:
+                self._show_no_data_message(node_id, "无数据")
+
+        except Exception as e:
+            self._show_no_data_message(node_id, f"渲染错误: {str(e)}")
+
     def _clear_all_components(self, current_channel):
         """清空所有组件的显示"""
         # 统一清空所有组件
@@ -872,6 +909,15 @@ class CrossRingNodeVisualizer:
             for lane_name, patches in patches_dict.items():
                 if patches:
                     self._clear_and_render_patches(patches, texts_dict.get(lane_name, []), [])
+
+        # 清空CP link的显示
+        for direction_slots in self.cp_link_slots.values():
+            for patch in direction_slots:
+                patch.set_facecolor("white")
+                patch.set_edgecolor("gray")
+                patch.set_alpha(0.7)
+                if patch in self.patch_info_map:
+                    del self.patch_info_map[patch]
 
     def _render_from_snapshot_data(self, node_id, node_data, current_channel):
         """直接从快照数据渲染节点组件"""
@@ -888,6 +934,12 @@ class CrossRingNodeVisualizer:
 
         # 先清空所有组件的显示（确保没有数据时也能清空）
         self._clear_all_components(current_channel)
+
+        # 只有当切换节点时才重新绘制CP links框架
+        if self.current_node_id != node_id:
+            self._clear_cp_links()  # 先清除旧的links
+            self._draw_cp_links(node_id)  # 再绘制新的links
+            self.current_node_id = node_id
 
         # 直接从快照数据渲染各个组件
         try:
@@ -923,6 +975,9 @@ class CrossRingNodeVisualizer:
 
             if crosspoint_v:
                 self._render_component_from_snapshot("CP_V", crosspoint_v, node_id)
+
+            # 6. 更新CP链路slice的flit显示（只更新flit内容，不重绘框架）
+            self._update_all_link_slices(node_id)
 
         except Exception as e:
             # 渲染失败时显示错误信息
@@ -1048,12 +1103,7 @@ class CrossRingNodeVisualizer:
                 flit_id = attrs["flit_id"]
 
                 # 应用样式
-                self.style_manager.apply_style_to_patch(
-                    p, flit,
-                    use_highlight=self.use_highlight,
-                    expected_packet_id=self.highlight_pid,
-                    show_tags_mode=self.show_tags_mode
-                )
+                self.style_manager.apply_style_to_patch(p, flit, use_highlight=self.use_highlight, expected_packet_id=self.highlight_pid, show_tags_mode=self.show_tags_mode)
 
                 info = f"{packet_id}-{flit_id}"
                 t.set_text(info)
@@ -1101,3 +1151,659 @@ class CrossRingNodeVisualizer:
         """显示无数据消息"""
         self.ax.clear()
         self.ax.text(0.5, 0.5, f"节点 {node_id}\n{message}", ha="center", va="center", transform=self.ax.transAxes, fontsize=12, family="sans-serif")
+
+    def _should_show_link(self, node_id, direction, slice_type):
+        """判断是否应该显示某个方向的link（边缘检测）
+        
+        Args:
+            node_id: 节点ID
+            direction: 方向 ("TL", "TR", "TU", "TD")
+            slice_type: slice类型 ("arrival", "departure")
+        """
+        if node_id is None:
+            return False
+
+        row = node_id // self.cols
+        col = node_id % self.cols
+
+        # 左边缘节点（col == 0）
+        if col == 0:
+            if direction == "TL" and slice_type == "departure":
+                return False  # 左边缘，TL departure没有（无法向左发送）
+            if direction == "TR" and slice_type == "arrival":
+                return False  # 左边缘，TR arrival没有（左边没有节点向右发送）
+        
+        # 右边缘节点（col == cols-1）
+        if col == self.cols - 1:
+            if direction == "TR" and slice_type == "departure":
+                return False  # 右边缘，TR departure没有（无法向右发送）
+            if direction == "TL" and slice_type == "arrival":
+                return False  # 右边缘，TL arrival没有（右边没有节点向左发送）
+        
+        # 上边缘节点（row == 0）
+        if row == 0:
+            if direction == "TU" and slice_type == "departure":
+                return False  # 上边缘，TU departure没有（无法向上发送）
+            if direction == "TD" and slice_type == "arrival":
+                return False  # 上边缘，TD arrival没有（上面没有节点向下发送）
+        
+        # 下边缘节点（row == rows-1）
+        if row == self.rows - 1:
+            if direction == "TD" and slice_type == "departure":
+                return False  # 下边缘，TD departure没有（无法向下发送）
+            if direction == "TU" and slice_type == "arrival":
+                return False  # 下边缘，TU arrival没有（下面没有节点向上发送）
+        
+        return True
+
+    def _clear_cp_links(self):
+        """清除所有CP links的可视化元素"""
+        # 清除箭头patches
+        for key, patches in self.cp_link_arrows.items():
+            if isinstance(patches, list):
+                for patch in patches:
+                    try:
+                        patch.remove()
+                    except:
+                        pass
+            else:
+                try:
+                    patches.remove()
+                except:
+                    pass
+        self.cp_link_arrows.clear()
+        
+        # 清除slice patches
+        for key, patches in self.cp_link_slots.items():
+            if isinstance(patches, list):
+                for patch in patches:
+                    try:
+                        patch.remove()
+                    except:
+                        pass
+            else:
+                try:
+                    patches.remove()
+                except:
+                    pass
+        self.cp_link_slots.clear()
+        
+        # 清除文本标注
+        for key, texts in self.cp_link_texts.items():
+            if isinstance(texts, list):
+                for text in texts:
+                    try:
+                        text.remove()
+                    except:
+                        pass
+            else:
+                try:
+                    texts.remove()
+                except:
+                    pass
+        self.cp_link_texts.clear()
+
+    def _draw_cp_links(self, node_id):
+        """绘制CP连接的links和slices
+
+        CrossRing架构说明：
+        - 每个节点有2个CP：水平CP和垂直CP
+        - 水平CP：管理TL和TR两个方向，每个方向连接2个link（arrival和departure）
+        - 垂直CP：管理TU和TD两个方向，每个方向连接2个link（arrival和departure）
+        - 总共每个节点有8个link连接
+        """
+        if node_id is None or not self.cp_positions:
+            return
+
+        # 清空之前的link可视化
+        self.cp_link_arrows.clear()
+        self.cp_link_slots.clear()
+        self.cp_link_texts.clear()
+
+        # 获取CP模块位置
+        cph_x, cph_y, cph_size = self.cp_positions["horizontal"]  # (x, y, (width, height))
+        cpv_x, cpv_y, cpv_size = self.cp_positions["vertical"]
+
+        # 水平CP：绘制TL和TR方向的arrival和departure links
+        for direction in ["TL", "TR"]:
+            # 绘制departure link（从CP出去）
+            if self._should_show_link(node_id, direction, "departure"):
+                self._draw_single_cp_link(cph_x, cph_y, cph_size, direction, node_id, "horizontal", "departure")
+            # 绘制arrival link（到达CP）
+            if self._should_show_link(node_id, direction, "arrival"):
+                self._draw_single_cp_link(cph_x, cph_y, cph_size, direction, node_id, "horizontal", "arrival")
+
+        # 垂直CP：绘制TU和TD方向的arrival和departure links
+        for direction in ["TU", "TD"]:
+            # 绘制departure link（从CP出去）
+            if self._should_show_link(node_id, direction, "departure"):
+                self._draw_single_cp_link(cpv_x, cpv_y, cpv_size, direction, node_id, "vertical", "departure")
+            # 绘制arrival link（到达CP）
+            if self._should_show_link(node_id, direction, "arrival"):
+                self._draw_single_cp_link(cpv_x, cpv_y, cpv_size, direction, node_id, "vertical", "arrival")
+
+    def _draw_single_cp_link(self, cp_x, cp_y, cp_size, direction, node_id, cp_type, slice_type):
+        """绘制单个方向的link和slices - 基于single_cp_visualization.py的正确实现"""
+
+        # 获取slice数量配置
+        slice_num = getattr(self.config.basic_config, "SLICE_PER_LINK", 5) - 2
+        slice_size = 0.5  # 增大slice尺寸
+        slice_gap = 0.1  # 增大slice间距
+        slice_offset = 0.3  # 增大slice偏移量
+        arrow_length = 7  # 增大箭头长度
+
+        cp_width, cp_height = cp_size
+
+        if cp_type == "horizontal":
+            # 基于single_cp_visualization.py的水平CP实现
+            self._draw_horizontal_cp_link(cp_x, cp_y, cp_width, cp_height, direction, slice_type, slice_size, slice_gap, slice_num, slice_offset, arrow_length, node_id)
+        else:
+            # 基于single_vertical_cp_visualization.py的垂直CP实现
+            self._draw_vertical_cp_link(cp_x, cp_y, cp_width, cp_height, direction, slice_type, slice_size, slice_gap, slice_num, slice_offset, arrow_length, node_id)
+
+    def _draw_horizontal_cp_link(self, cp_x, cp_y, cp_width, cp_height, direction, slice_type, slice_size, slice_gap, slice_num, slice_offset, arrow_length, node_id):
+        """绘制水平CP的link - 直接移植single_cp_visualization.py的逻辑"""
+
+        # 确定link位置（按single_cp_visualization.py的布局）
+        if direction == "TL":
+            link_y = cp_y + cp_height * 0.3  # TL在上方
+        else:  # TR
+            link_y = cp_y + cp_height * 0.7  # TR在下方
+
+        # 构建direction参数（兼容single_cp的命名）
+        if direction == "TL":
+            if slice_type == "departure":
+                direction_param = "departure_left"
+            else:
+                direction_param = "arrival_left"
+        else:  # TR
+            if slice_type == "departure":
+                direction_param = "departure_right"
+            else:
+                direction_param = "arrival_right"
+
+        # 使用single_cp_visualization.py的核心绘制逻辑
+        self._draw_horizontal_link_core(cp_x, link_y, f"{direction}-{slice_type}", direction_param, slice_size, slice_gap, slice_num, slice_offset, arrow_length, node_id, cp_width, cp_height)
+
+    def _draw_horizontal_link_core(self, cp_x, link_y, label, direction, slice_size, slice_gap, slice_num, slice_offset, arrow_length, node_id, cp_width, cp_height):
+        """水平链路核心绘制逻辑 - 移植自single_cp_visualization.py"""
+
+        # CP参数 - 使用节点可视化器中的实际CP尺寸
+        cp_center_x = cp_x + cp_width / 2
+        cp_center_y = link_y
+
+        # 节点半径 - 基于实际CP尺寸
+        node_radius = cp_width / 2
+
+        if direction == "departure_left":
+            # TL Departure：从CP中心向左
+            unit_dx = -1.0
+            unit_dy = 0.0
+            cp_connection_x = cp_center_x + unit_dx * node_radius
+            cp_connection_y = cp_center_y
+            arrow_end_x = cp_connection_x + unit_dx * arrow_length
+            arrow_end_y = cp_connection_y
+            arrow_start = (cp_connection_x, cp_connection_y)
+            arrow_end = (arrow_end_x, arrow_end_y)
+
+        elif direction == "departure_right":
+            # TR Departure：从CP中心向右
+            unit_dx = 1.0
+            unit_dy = 0.0
+            cp_connection_x = cp_center_x + unit_dx * node_radius
+            cp_connection_y = cp_center_y
+            arrow_end_x = cp_connection_x + unit_dx * arrow_length
+            arrow_end_y = cp_connection_y
+            arrow_start = (cp_connection_x, cp_connection_y)
+            arrow_end = (arrow_end_x, arrow_end_y)
+
+        elif direction == "arrival_left":
+            # TL Arrival：也是向左的箭头
+            unit_dx = 1.0
+            unit_dy = 0.0
+            cp_connection_x = cp_center_x + unit_dx * node_radius
+            cp_connection_y = cp_center_y
+            arrow_end_x = cp_connection_x + unit_dx * arrow_length
+            arrow_end_y = cp_connection_y
+            arrow_start = (arrow_end_x, arrow_end_y)
+            arrow_end = (cp_connection_x, cp_connection_y)
+
+        elif direction == "arrival_right":
+            # TR Arrival：也是向右的箭头
+            unit_dx = -1.0
+            unit_dy = 0.0
+            cp_connection_x = cp_center_x + unit_dx * node_radius
+            cp_connection_y = cp_center_y
+            arrow_end_x = cp_connection_x + unit_dx * arrow_length
+            arrow_end_y = cp_connection_y
+            arrow_start = (arrow_end_x, arrow_end_y)
+            arrow_end = (cp_connection_x, cp_connection_y)
+
+        # 绘制箭头 - 调整尺寸参数
+        arrow = FancyArrowPatch(arrow_start, arrow_end, arrowstyle="->", mutation_scale=12, color="black", linewidth=1.0)  # 减小箭头头部和线宽
+        self.ax.add_patch(arrow)
+        
+        # 存储箭头以便后续清除
+        arrow_key = f"{node_id}_{label}"
+        if arrow_key not in self.cp_link_arrows:
+            self.cp_link_arrows[arrow_key] = []
+        self.cp_link_arrows[arrow_key].append(arrow)
+
+        # 绘制slice序列
+        arrow_center_x = (arrow_start[0] + arrow_end[0]) / 2
+        self._draw_horizontal_slice_sequence(arrow_center_x, link_y, slice_size, slice_gap, slice_num, slice_offset, label, direction, node_id)
+
+    def _draw_horizontal_slice_sequence(self, center_x, arrow_y, slice_size, slice_gap, slice_num, slice_offset, link_label, direction, node_id):
+        """绘制水平link的slice序列 - 移植自single_cp_visualization.py"""
+
+        total_width = slice_num * slice_size + (slice_num - 1) * slice_gap
+
+        # slice的X位置
+        if "left" in direction:
+            start_x = center_x - total_width / 2
+        else:
+            start_x = center_x - total_width / 2
+
+        # slice的Y位置
+        if "left" in direction:
+            # 向右的link，slice在箭头下方
+            slice_y = arrow_y - slice_offset * 0.7 - slice_size
+        else:
+            # 向左的link，slice在箭头上方
+            slice_y = arrow_y + slice_offset * 0.7
+
+        # 创建slot key
+        slot_key = f"{node_id}_{link_label}"
+        self.cp_link_slots[slot_key] = []
+
+        # 绘制slice
+        for i in range(slice_num):
+            slice_x = start_x + i * (slice_size + slice_gap)
+            slot = self._draw_single_slice(slice_x, slice_y, slice_size, i, link_label)
+            self.cp_link_slots[slot_key].append(slot)
+
+    def _draw_vertical_cp_link(self, cp_x, cp_y, cp_width, cp_height, direction, slice_type, slice_size, slice_gap, slice_num, slice_offset, arrow_length, node_id):
+        """绘制垂直CP的link - 基于single_vertical_cp_visualization.py的逻辑"""
+
+        # 确定link位置（按single_vertical_cp_visualization.py的布局）
+        if direction == "TU":
+            link_x = cp_x + cp_width * 0.3  # TU在左方
+        else:  # TD
+            link_x = cp_x + cp_width * 0.7  # TD在右方
+
+        # 构建direction参数（兼容single_vertical_cp的命名）
+        if direction == "TU":
+            if slice_type == "departure":
+                direction_param = "departure_up"
+            else:
+                direction_param = "arrival_up"
+        else:  # TD
+            if slice_type == "departure":
+                direction_param = "departure_down"
+            else:
+                direction_param = "arrival_down"
+
+        # 使用single_vertical_cp_visualization.py的核心绘制逻辑
+        self._draw_vertical_link_core(link_x, cp_y, f"{direction}-{slice_type}", direction_param, slice_size, slice_gap, slice_num, slice_offset, arrow_length, node_id, cp_width, cp_height)
+
+    def _draw_vertical_link_core(self, link_x, cp_y, label, direction, slice_size, slice_gap, slice_num, slice_offset, arrow_length, node_id, cp_width, cp_height):
+        """垂直链路核心绘制逻辑 - 移植自single_vertical_cp_visualization.py"""
+
+        # CP参数 - 使用节点可视化器中的实际CP尺寸
+        cp_center_x = link_x
+        cp_center_y = cp_y + cp_height / 2
+
+        # 节点半径 - 基于实际CP尺寸
+        node_radius = cp_height / 2
+
+        if direction == "departure_up":
+            # TU Departure：从CP中心向上
+            unit_dx = 0.0
+            unit_dy = 1.0
+            cp_connection_x = cp_center_x
+            cp_connection_y = cp_center_y + unit_dy * node_radius
+            arrow_end_x = cp_connection_x
+            arrow_end_y = cp_connection_y + unit_dy * arrow_length
+            arrow_start = (cp_connection_x, cp_connection_y)
+            arrow_end = (arrow_end_x, arrow_end_y)
+
+        elif direction == "departure_down":
+            # TD Departure：从CP中心向下
+            unit_dx = 0.0
+            unit_dy = -1.0
+            cp_connection_x = cp_center_x
+            cp_connection_y = cp_center_y + unit_dy * node_radius
+            arrow_end_x = cp_connection_x
+            arrow_end_y = cp_connection_y + unit_dy * arrow_length
+            arrow_start = (cp_connection_x, cp_connection_y)
+            arrow_end = (arrow_end_x, arrow_end_y)
+
+        elif direction == "arrival_up":
+            # TU Arrival：也是向上的箭头
+            unit_dx = 0.0
+            unit_dy = -1.0
+            cp_connection_x = cp_center_x
+            cp_connection_y = cp_center_y + unit_dy * node_radius
+            arrow_end_x = cp_connection_x
+            arrow_end_y = cp_connection_y + unit_dy * arrow_length
+            arrow_start = (arrow_end_x, arrow_end_y)
+            arrow_end = (cp_connection_x, cp_connection_y)
+
+        elif direction == "arrival_down":
+            # TD Arrival：也是向下的箭头
+            unit_dx = 0.0
+            unit_dy = 1.0
+            cp_connection_x = cp_center_x
+            cp_connection_y = cp_center_y + unit_dy * node_radius
+            arrow_end_x = cp_connection_x
+            arrow_end_y = cp_connection_y + unit_dy * arrow_length
+            arrow_start = (arrow_end_x, arrow_end_y)
+            arrow_end = (cp_connection_x, cp_connection_y)
+
+        # 绘制箭头 - 调整尺寸参数
+        arrow = FancyArrowPatch(arrow_start, arrow_end, arrowstyle="->", mutation_scale=12, color="black", linewidth=1.0)  # 减小箭头头部和线宽
+        self.ax.add_patch(arrow)
+        
+        # 存储箭头以便后续清除
+        arrow_key = f"{node_id}_{label}"
+        if arrow_key not in self.cp_link_arrows:
+            self.cp_link_arrows[arrow_key] = []
+        self.cp_link_arrows[arrow_key].append(arrow)
+
+        # 绘制slice序列
+        arrow_center_y = (arrow_start[1] + arrow_end[1]) / 2
+        self._draw_vertical_slice_sequence(link_x, arrow_center_y, slice_size, slice_gap, slice_num, slice_offset, label, direction, node_id)
+
+    def _draw_vertical_slice_sequence(self, arrow_x, center_y, slice_size, slice_gap, slice_num, slice_offset, link_label, direction, node_id):
+        """绘制垂直link的slice序列 - 移植自single_vertical_cp_visualization.py"""
+
+        total_height = slice_num * slice_size + (slice_num - 1) * slice_gap
+
+        # slice的Y位置
+        if "up" in direction:
+            start_y = center_y - total_height / 2
+        else:
+            start_y = center_y - total_height / 2
+
+        # slice的X位置
+        if "up" in direction:
+            # 向上的link，slice在箭头左边
+            slice_x = arrow_x - slice_offset * 0.7 - slice_size
+        else:
+            # 向下的link，slice在箭头右边
+            slice_x = arrow_x + slice_offset * 0.7
+
+        # 创建slot key
+        slot_key = f"{node_id}_{link_label}"
+        self.cp_link_slots[slot_key] = []
+
+        # 绘制slice
+        for i in range(slice_num):
+            slice_y = start_y + i * (slice_size + slice_gap)
+            slot = self._draw_single_slice(slice_x, slice_y, slice_size, i, link_label)
+            self.cp_link_slots[slot_key].append(slot)
+
+    def _draw_single_slice(self, x, y, size, index, link_label):
+        """绘制单个slice - 移植自single_cp_visualization.py"""
+
+        # 外框（默认为空slice，使用虚线边框）
+        outer_rect = Rectangle((x, y), size, size, linewidth=1, edgecolor="gray", facecolor="white", linestyle="--", alpha=0.8)
+        self.ax.add_patch(outer_rect)
+
+        return outer_rect
+
+    def _precompute_link_mappings(self):
+        """预计算所有节点的CP链路映射关系"""
+        for node_id in range(self.rows * self.cols):
+            row = node_id // self.cols  
+            col = node_id % self.cols
+            
+            # 为每个方向和类型计算链路ID
+            for direction in ["TL", "TR", "TU", "TD"]:
+                for link_type in ["arrival", "departure"]:
+                    key = f"{node_id}_{direction}-{link_type}"
+                    
+                    # 计算对应的link_id
+                    link_id = self._calculate_link_id(node_id, direction, link_type, row, col)
+                    if link_id:
+                        self.cp_link_mapping[key] = link_id
+
+    def _calculate_link_id(self, node_id, direction, link_type, row, col):
+        """计算特定节点方向的链路ID"""
+        if link_type == "departure":
+            # Departure链路：从当前节点发出
+            if direction == "TL":
+                if col == 0:
+                    return None  # 左边缘没有向左的链路
+                return f"link_{node_id}_TL_{node_id - 1}"
+            elif direction == "TR":
+                if col == self.cols - 1:
+                    return None  # 右边缘没有向右的链路
+                return f"link_{node_id}_TR_{node_id + 1}"
+            elif direction == "TU":
+                if row == 0:
+                    return None  # 上边缘没有向上的链路
+                return f"link_{node_id}_TU_{node_id - self.cols}"
+            elif direction == "TD":
+                if row == self.rows - 1:
+                    return None  # 下边缘没有向下的链路
+                return f"link_{node_id}_TD_{node_id + self.cols}"
+        else:  # arrival
+            # Arrival链路：从其他节点到当前节点
+            if direction == "TL":
+                if col == self.cols - 1:
+                    return None  # 右边缘没有来自右边的链路
+                return f"link_{node_id + 1}_TL_{node_id}"
+            elif direction == "TR":
+                if col == 0:
+                    return None  # 左边缘没有来自左边的链路
+                return f"link_{node_id - 1}_TR_{node_id}"
+            elif direction == "TU":
+                if row == self.rows - 1:
+                    return None  # 下边缘没有来自下边的链路
+                return f"link_{node_id + self.cols}_TU_{node_id}"
+            elif direction == "TD":
+                if row == 0:
+                    return None  # 上边缘没有来自上边的链路
+                return f"link_{node_id - self.cols}_TD_{node_id}"
+        return None
+
+    def _update_all_link_slices(self, node_id):
+        """更新当前节点所有CP链路的slice显示"""
+        current_channel = getattr(self.parent, "current_channel", 0) if self.parent else 0
+        
+        # 更新所有方向的link slices
+        for direction in ["TL", "TR", "TU", "TD"]:
+            self._update_link_slices(node_id, direction, current_channel)
+
+    def _update_link_slices(self, node_id, direction, channel):
+        """更新link中slice的显示状态"""        
+        # 分别处理arrival和departure链路
+        for slice_type in ["arrival", "departure"]:
+            key = f"{node_id}_{direction}-{slice_type}"
+            if key not in self.cp_link_slots:
+                continue
+                
+            patches = self.cp_link_slots[key]
+            if not patches:
+                continue
+                
+            # 直接从预计算的映射中获取link_id
+            link_id = self.cp_link_mapping.get(key)
+            if not link_id:
+                # 没有对应链路（如边缘节点），清空显示
+                self._clear_link_patches(patches)
+                continue
+                
+            # 从link snapshot获取数据
+            channel_data = self._get_link_data_by_id(link_id, channel)
+            
+            self._update_single_link_patches(patches, channel_data, channel, slice_type)
+    
+    def _get_link_data_by_id(self, link_id, channel):
+        """通过link_id直接获取链路数据"""
+        if not hasattr(self.parent, "history") or not self.parent.history:
+            return None
+            
+        # 获取最新的link snapshot
+        latest_cycle, snapshot_data = self.parent.history[-1]
+        links_data = snapshot_data.get("links", {})
+        
+        # 将数字通道索引转换为字符串名称
+        channel_names = ["req", "rsp", "data"]
+        if isinstance(channel, int) and 0 <= channel < len(channel_names):
+            channel_name = channel_names[channel]
+        elif isinstance(channel, str):
+            channel_name = channel
+        else:
+            return None
+            
+        # 获取链路数据
+        link_data = links_data.get(link_id, {})
+        channel_data = link_data.get(channel_name, {})
+        
+        if link_data and channel_data and len([s for s in channel_data.values() if s.get('slots', {}).get(channel_name)]):
+            print(f"🔍 找到链路数据: link_id={link_id}, channel={channel_name}, 有效slice数量: {len([s for s in channel_data.values() if s.get('slots', {}).get(channel_name)])}")
+        
+        return channel_data
+    
+    def _clear_link_patches(self, patches):
+        """清空链路patches显示"""
+        for patch in patches:
+            patch.set_facecolor("white")
+            patch.set_edgecolor("gray")
+            patch.set_linestyle("--")
+            patch.set_alpha(0.7)
+            if patch in self.patch_info_map:
+                del self.patch_info_map[patch]
+    
+    def _update_single_link_patches(self, patches, channel_data, channel, slice_type):
+        """更新单个链路的patches显示"""
+        # 如果没有链路数据，清空所有slots
+        if not channel_data:
+            self._clear_link_patches(patches)
+            return
+
+        # 获取通道名称用于数据访问
+        channel_names = ["req", "rsp", "data"]
+        if isinstance(channel, int) and 0 <= channel < len(channel_names):
+            channel_name = channel_names[channel]
+        elif isinstance(channel, str):
+            channel_name = channel
+        else:
+            return
+        
+        # 更新每个slot的显示 - 跳过首尾slice，只显示中间slice
+        for i, patch in enumerate(patches):
+            # 将显示的slot索引映射到实际的slice索引：跳过slice_idx=0，从slice_idx=1开始
+            actual_slice_idx = i + 1
+            
+            # 从channel_data中获取对应slice的数据 
+            # 数据格式: {slice_idx: {slots: {channel: slot_info}, metadata: {...}}}
+            slice_data = channel_data.get(actual_slice_idx, {})
+            slot_data = slice_data.get("slots", {}).get(channel_name, {})
+            
+            # 只在有实际flit时打印调试信息
+            if slot_data and slot_data.get("valid", False) and "flit" in slot_data and i < 3:
+                flit_data = slot_data["flit"] 
+                print(f"   🎯 patch[{i}] slice_{actual_slice_idx}: 发现flit (packet_id={flit_data.get('packet_id')})")
+            
+            # 清除之前的flit显示
+            for child in patch.get_children():
+                if hasattr(child, '_mock_flit'):
+                    child.remove()
+            
+            if slot_data and slot_data.get("valid", False) and "flit" in slot_data:
+                # 有flit数据，创建一个模拟的flit对象用于样式应用
+                flit_data = slot_data["flit"]
+                
+                # 创建一个简单的flit对象用于样式管理
+                class MockFlit:
+                    def __init__(self, data):
+                        for key, value in data.items():
+                            setattr(self, key, value)
+                
+                mock_flit = MockFlit(flit_data)
+                
+                # 应用flit样式
+                self.style_manager.apply_style_to_patch(patch, mock_flit, 
+                    use_highlight=self.use_highlight, 
+                    expected_packet_id=self.highlight_pid, 
+                    show_tags_mode=self.show_tags_mode)
+                # 有flit时设置为实线边框
+                patch.set_linestyle("-")
+                # 设置为可点击
+                text_obj = self.ax.text(0, 0, "", visible=False)
+                self.patch_info_map[patch] = (text_obj, mock_flit)
+                print(f"   ✅ 找到flit并应用样式: patch[{i}], packet_id={flit_data.get('packet_id')}")
+            else:
+                # 空slot
+                patch.set_facecolor("white")
+                patch.set_edgecolor("gray")
+                patch.set_linestyle("--")  # 虚线边框
+                patch.set_alpha(0.7)
+                if patch in self.patch_info_map:
+                    del self.patch_info_map[patch]
+            return
+
+        # 获取通道名称用于数据访问
+        channel_names = ["req", "rsp", "data"]
+        if isinstance(channel, int) and 0 <= channel < len(channel_names):
+            channel_name = channel_names[channel]
+        elif isinstance(channel, str):
+            channel_name = channel
+        else:
+            return
+        
+        # 更新每个slot的显示 - 跳过首尾slice，只显示中间slice
+        for i, patch in enumerate(relevant_patches):
+            # 将显示的slot索引映射到实际的slice索引：跳过slice_idx=0，从slice_idx=1开始
+            actual_slice_idx = i + 1
+            
+            # 从channel_data中获取对应slice的数据 
+            # 数据格式: {slice_idx: {slots: {channel: slot_info}, metadata: {...}}}
+            slice_data = channel_data.get(actual_slice_idx, {})
+            slot_data = slice_data.get("slots", {}).get(channel_name, {})
+            
+            # 只在有实际flit时打印调试信息
+            if slot_data and slot_data.get("valid", False) and "flit" in slot_data and i < 3:
+                flit_data = slot_data["flit"] 
+                print(f"   🎯 patch[{i}] slice_{actual_slice_idx}: 发现flit (packet_id={flit_data.get('packet_id')})")
+            
+            # 清除之前的flit显示
+            for child in patch.get_children():
+                if hasattr(child, '_mock_flit'):
+                    child.remove()
+            
+            if slot_data and slot_data.get("valid", False) and "flit" in slot_data:
+                # 有flit数据，创建一个模拟的flit对象用于样式应用
+                flit_data = slot_data["flit"]
+                
+                # 创建一个简单的flit对象用于样式管理
+                class MockFlit:
+                    def __init__(self, data):
+                        for key, value in data.items():
+                            setattr(self, key, value)
+                
+                mock_flit = MockFlit(flit_data)
+                
+                # 应用flit样式
+                self.style_manager.apply_style_to_patch(patch, mock_flit, 
+                    use_highlight=self.use_highlight, 
+                    expected_packet_id=self.highlight_pid, 
+                    show_tags_mode=self.show_tags_mode)
+                # 有flit时设置为实线边框
+                patch.set_linestyle("-")
+                # 设置为可点击
+                text_obj = self.ax.text(0, 0, "", visible=False)
+                self.patch_info_map[patch] = (text_obj, mock_flit)
+                print(f"   ✅ 找到flit并应用样式: patch[{i}], packet_id={flit_data.get('packet_id')}")
+            else:
+                # 空slot
+                patch.set_facecolor("white")
+                patch.set_edgecolor("gray")
+                patch.set_linestyle("--")  # 虚线边框
+                patch.set_alpha(0.7)
+                if patch in self.patch_info_map:
+                    del self.patch_info_map[patch]
+
