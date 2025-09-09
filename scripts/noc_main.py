@@ -14,16 +14,16 @@ def main():
     traffic_file_path = str(Path(__file__).parent.parent / "traffic_data")
     traffic_chains = [
         [
-            # "LLama2_AllReduce.txt",
-            "test1.txt",
+            "LLama2_AllReduce.txt",
+            # "test1.txt",
             # "R_5x2.txt",
         ]
     ]
 
     # 2. 创建模型
     # config = create_5x2_config()
-    config = create_3x3_config()
-    # config = create_5x4_config()
+    # config = create_3x3_config()
+    config = create_5x4_config()
     model = CrossRingModel(config)
     np.random.seed(811)
 

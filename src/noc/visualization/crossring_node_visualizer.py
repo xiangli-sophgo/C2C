@@ -9,16 +9,9 @@ CrossRing节点可视化器
 - Tag机制显示
 """
 
-import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle, FancyArrowPatch, Circle
-from matplotlib.collections import PatchCollection
-from typing import Dict, List, Any, Optional, Tuple, Union, Callable
+from matplotlib.patches import Rectangle, FancyArrowPatch
 from collections import defaultdict
-import logging
-from dataclasses import dataclass, field
-from enum import Enum
-import copy
 from src.noc.crossring.config import CrossRingConfig
 from src.utils.font_config import configure_matplotlib_fonts
 from .color_manager import ColorManager
@@ -880,7 +873,7 @@ class CrossRingNodeVisualizer:
 
             # 从最新快照渲染
             if self.node_history:
-                latest_cycle, latest_snapshot = self.node_history[-1]
+                _, latest_snapshot = self.node_history[-1]
                 nodes_data = latest_snapshot.get("nodes", {})
                 node_data = nodes_data.get(node_id)
 
@@ -1123,7 +1116,6 @@ class CrossRingNodeVisualizer:
         """渲染CrossPoint类型patch的slice数据 - 拆分版本"""
         # CrossPoint数据结构: [arrival_slots, departure_slots]
         if not isinstance(slice_data, list) or len(slice_data) < 2:
-            print(f"🚫 调试: CrossPoint {direction}方向 slice_data格式错误: {slice_data}")
             return
 
         arrival_slots = slice_data[0] if slice_data[0] else []
@@ -1419,8 +1411,10 @@ class CrossRingNodeVisualizer:
         # 绘制slice
         for i in range(slice_num):
             slice_x = start_x + i * (slice_size + slice_gap)
-            slot = self._draw_single_slice(slice_x, slice_y, slice_size, i, link_label)
-            self.cp_link_slots[slot_key].append(slot)
+            # 内联绘制单个slice
+            outer_rect = Rectangle((slice_x, slice_y), slice_size, slice_size, linewidth=1, edgecolor="gray", facecolor="white", linestyle="--", alpha=0.8)
+            self.ax.add_patch(outer_rect)
+            self.cp_link_slots[slot_key].append(outer_rect)
 
     def _draw_vertical_cp_link(self, cp_x, cp_y, cp_width, cp_height, direction, slice_type, slice_size, slice_gap, slice_num, slice_offset, arrow_length, node_id):
         """绘制垂直CP的link - 基于single_vertical_cp_visualization.py的逻辑"""
@@ -1540,17 +1534,11 @@ class CrossRingNodeVisualizer:
         # 绘制slice
         for i in range(slice_num):
             slice_y = start_y + i * (slice_size + slice_gap)
-            slot = self._draw_single_slice(slice_x, slice_y, slice_size, i, link_label)
-            self.cp_link_slots[slot_key].append(slot)
+            # 内联绘制单个slice
+            outer_rect = Rectangle((slice_x, slice_y), slice_size, slice_size, linewidth=1, edgecolor="gray", facecolor="white", linestyle="--", alpha=0.8)
+            self.ax.add_patch(outer_rect)
+            self.cp_link_slots[slot_key].append(outer_rect)
 
-    def _draw_single_slice(self, x, y, size, index, link_label):
-        """绘制单个slice - 移植自single_cp_visualization.py"""
-
-        # 外框（默认为空slice，使用虚线边框）
-        outer_rect = Rectangle((x, y), size, size, linewidth=1, edgecolor="gray", facecolor="white", linestyle="--", alpha=0.8)
-        self.ax.add_patch(outer_rect)
-
-        return outer_rect
 
     def _precompute_link_mappings(self):
         """预计算所有节点的CP链路映射关系"""
@@ -1638,7 +1626,7 @@ class CrossRingNodeVisualizer:
             # 从link snapshot获取数据
             channel_data = self._get_link_data_by_id(link_id, channel)
             
-            self._update_single_link_patches(patches, channel_data, channel, slice_type)
+            self._update_single_link_patches(patches, channel_data, channel, slice_type, direction)
     
     def _get_link_data_by_id(self, link_id, channel):
         """通过link_id直接获取链路数据"""
@@ -1646,7 +1634,7 @@ class CrossRingNodeVisualizer:
             return None
             
         # 获取最新的link snapshot
-        latest_cycle, snapshot_data = self.parent.history[-1]
+        _, snapshot_data = self.parent.history[-1]
         links_data = snapshot_data.get("links", {})
         
         # 将数字通道索引转换为字符串名称
@@ -1662,8 +1650,6 @@ class CrossRingNodeVisualizer:
         link_data = links_data.get(link_id, {})
         channel_data = link_data.get(channel_name, {})
         
-        if link_data and channel_data and len([s for s in channel_data.values() if s.get('slots', {}).get(channel_name)]):
-            print(f"🔍 找到链路数据: link_id={link_id}, channel={channel_name}, 有效slice数量: {len([s for s in channel_data.values() if s.get('slots', {}).get(channel_name)])}")
         
         return channel_data
     
@@ -1677,7 +1663,7 @@ class CrossRingNodeVisualizer:
             if patch in self.patch_info_map:
                 del self.patch_info_map[patch]
     
-    def _update_single_link_patches(self, patches, channel_data, channel, slice_type):
+    def _update_single_link_patches(self, patches, channel_data, channel, slice_type, direction):
         """更新单个链路的patches显示"""
         # 如果没有链路数据，清空所有slots
         if not channel_data:
@@ -1695,81 +1681,21 @@ class CrossRingNodeVisualizer:
         
         # 更新每个slot的显示 - 跳过首尾slice，只显示中间slice
         for i, patch in enumerate(patches):
-            # 将显示的slot索引映射到实际的slice索引：跳过slice_idx=0，从slice_idx=1开始
-            actual_slice_idx = i + 1
+            # 根据direction调整索引映射：
+            # TL: 右→左(反向), TR: 左→右(正向), TU: 下→上(正向), TD: 上→下(反向)
+            is_positive_direction = direction in ["TR", "TU"]
             
-            # 从channel_data中获取对应slice的数据 
-            # 数据格式: {slice_idx: {slots: {channel: slot_info}, metadata: {...}}}
-            slice_data = channel_data.get(actual_slice_idx, {})
-            slot_data = slice_data.get("slots", {}).get(channel_name, {})
-            
-            # 只在有实际flit时打印调试信息
-            if slot_data and slot_data.get("valid", False) and "flit" in slot_data and i < 3:
-                flit_data = slot_data["flit"] 
-                print(f"   🎯 patch[{i}] slice_{actual_slice_idx}: 发现flit (packet_id={flit_data.get('packet_id')})")
-            
-            # 清除之前的flit显示
-            for child in patch.get_children():
-                if hasattr(child, '_mock_flit'):
-                    child.remove()
-            
-            if slot_data and slot_data.get("valid", False) and "flit" in slot_data:
-                # 有flit数据，创建一个模拟的flit对象用于样式应用
-                flit_data = slot_data["flit"]
-                
-                # 创建一个简单的flit对象用于样式管理
-                class MockFlit:
-                    def __init__(self, data):
-                        for key, value in data.items():
-                            setattr(self, key, value)
-                
-                mock_flit = MockFlit(flit_data)
-                
-                # 应用flit样式
-                self.style_manager.apply_style_to_patch(patch, mock_flit, 
-                    use_highlight=self.use_highlight, 
-                    expected_packet_id=self.highlight_pid, 
-                    show_tags_mode=self.show_tags_mode)
-                # 有flit时设置为实线边框
-                patch.set_linestyle("-")
-                # 设置为可点击
-                text_obj = self.ax.text(0, 0, "", visible=False)
-                self.patch_info_map[patch] = (text_obj, mock_flit)
-                print(f"   ✅ 找到flit并应用样式: patch[{i}], packet_id={flit_data.get('packet_id')}")
+            if is_positive_direction:
+                # TR/TU：flit向正方向移动（左到右/下到上）
+                actual_slice_idx = i + 1  # 正向：跳过slice_idx=0，从slice_idx=1开始
             else:
-                # 空slot
-                patch.set_facecolor("white")
-                patch.set_edgecolor("gray")
-                patch.set_linestyle("--")  # 虚线边框
-                patch.set_alpha(0.7)
-                if patch in self.patch_info_map:
-                    del self.patch_info_map[patch]
-            return
-
-        # 获取通道名称用于数据访问
-        channel_names = ["req", "rsp", "data"]
-        if isinstance(channel, int) and 0 <= channel < len(channel_names):
-            channel_name = channel_names[channel]
-        elif isinstance(channel, str):
-            channel_name = channel
-        else:
-            return
-        
-        # 更新每个slot的显示 - 跳过首尾slice，只显示中间slice
-        for i, patch in enumerate(relevant_patches):
-            # 将显示的slot索引映射到实际的slice索引：跳过slice_idx=0，从slice_idx=1开始
-            actual_slice_idx = i + 1
+                # TL/TD：flit向负方向移动（右到左/上到下）
+                total_slices = len(patches) + 2  # 加上跳过的首尾slice
+                actual_slice_idx = total_slices - 2 - i  # 反向映射
             
             # 从channel_data中获取对应slice的数据 
-            # 数据格式: {slice_idx: {slots: {channel: slot_info}, metadata: {...}}}
             slice_data = channel_data.get(actual_slice_idx, {})
             slot_data = slice_data.get("slots", {}).get(channel_name, {})
-            
-            # 只在有实际flit时打印调试信息
-            if slot_data and slot_data.get("valid", False) and "flit" in slot_data and i < 3:
-                flit_data = slot_data["flit"] 
-                print(f"   🎯 patch[{i}] slice_{actual_slice_idx}: 发现flit (packet_id={flit_data.get('packet_id')})")
-            
             # 清除之前的flit显示
             for child in patch.get_children():
                 if hasattr(child, '_mock_flit'):
@@ -1797,7 +1723,6 @@ class CrossRingNodeVisualizer:
                 # 设置为可点击
                 text_obj = self.ax.text(0, 0, "", visible=False)
                 self.patch_info_map[patch] = (text_obj, mock_flit)
-                print(f"   ✅ 找到flit并应用样式: patch[{i}], packet_id={flit_data.get('packet_id')}")
             else:
                 # 空slot
                 patch.set_facecolor("white")
