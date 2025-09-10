@@ -477,9 +477,7 @@ class LinkStateVisualizer:
                         offset_start_y, offset_end_y = offset_end_y, offset_start_y
 
                     # 绘制箭头
-                    arrow = FancyArrowPatch(
-                        (offset_start_x, offset_start_y), (offset_end_x, offset_end_y), arrowstyle="-|>", mutation_scale=15, color="black", linewidth=1.5, alpha=0.8, zorder=1
-                    )
+                    arrow = FancyArrowPatch((offset_start_x, offset_start_y), (offset_end_x, offset_end_y), arrowstyle="-|>", mutation_scale=15, color="black", linewidth=1.5, alpha=0.8, zorder=1)
                     self.link_ax.add_patch(arrow)
 
             # 绘制slice slots
@@ -605,9 +603,7 @@ class LinkStateVisualizer:
         """重新应用所有flit的样式，用于高亮状态改变后"""
         for rect, (rect_link_ids, flit, rect_slot_idx) in self.rect_info_map.items():
             # 使用样式管理器重新应用样式
-            self.style_manager.apply_style_to_patch(
-                rect, flit, use_highlight=self.use_highlight, expected_packet_id=self.tracked_pid, highlight_color="red", show_tags_mode=self.show_tags_mode
-            )
+            self.style_manager.apply_style_to_patch(rect, flit, use_highlight=self.use_highlight, expected_packet_id=self.tracked_pid, highlight_color="red", show_tags_mode=self.show_tags_mode)
 
     def _format_flit_info(self, flit):
         """Format flit information display - use flit's repr for detailed info"""
@@ -1035,7 +1031,7 @@ CrossRing可视化控制键:
                 latest_cycle, latest_snapshot = self.history[-1]
                 self._render_from_snapshot(latest_snapshot)
                 # 节点视图使用实时网络数据（包含CP links更新）
-                if hasattr(self.node_vis, 'render_node_from_network'):
+                if hasattr(self.node_vis, "render_node_from_network"):
                     self.node_vis.render_node_from_network(self._selected_node, network)
                 else:
                     # 回退到快照方式
@@ -1106,7 +1102,7 @@ CrossRing可视化控制键:
 
                                     # 方法1：尝试获取当前slot（输出位置）
                                     current_slot = slice_obj.peek_current_slot(channel) if hasattr(slice_obj, "peek_current_slot") else None
-                                    
+
                                     if current_slot:
                                         slot_info = extract_flit_from_slot(current_slot, channel)
 

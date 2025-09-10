@@ -106,7 +106,7 @@ class CrossRingNodeVisualizer:
 
         # 画出三个模块的框和 FIFO 槽
         self._draw_modules()
-        
+
         # 初始化CP链路框架（持久化显示）
         self.current_node_id = None
         self._clear_cp_links()  # 确保初始化时清空
@@ -402,7 +402,9 @@ class CrossRingNodeVisualizer:
                     if "_arr" in lane:
                         # 为水平方向的CrossPoint调整标签位置，使其居中对齐
                         (label_x, label_y) = (
-                            (x + module_width / 2 + square / 5, y + module_height / 2 - square) if lane[:2] in ["TL"] else (x + module_width / 2 - square * 4 / 5, y + module_height / 2 + square / 2)
+                            (x + module_width / 2 + square * 3 / 4, y + module_height / 2 - square * 3 / 2)
+                            if lane[:2] in ["TL"]
+                            else (x + module_width / 2 - square * 4 / 5, y + module_height / 2 + square / 2)
                         )
                         self.ax.text(label_x, label_y, lane[:2].upper(), ha=ha, va="center", fontsize=fontsize, family="serif")
                 elif lane[:2] in ["TL", "TR", "TU", "TD", "EQ"]:
@@ -483,7 +485,7 @@ class CrossRingNodeVisualizer:
                     if "_arr" in lane:
                         # 为垂直方向的CrossPoint调整标签位置，使其居中对齐
                         (label_x, label_y) = (
-                            (x + module_width / 2 - square, y + module_height / 2 - square * 5 / 7) if lane[:2] in ["TU"] else (x + module_width / 2 + square / 3, y + module_height / 2)
+                            (x + module_width / 2 - square * 3 / 2, y + module_height / 2 - square) if lane[:2] in ["TU"] else (x + module_width / 2 + square / 3, y + module_height / 2 + square*1/4)
                         )
                         self.ax.text(label_x, label_y, lane[:2].upper(), ha="center", va=va, fontsize=fontsize, family="serif")
                 elif lane[:2] in ["TL", "TR", "TU", "TD", "EQ"]:
@@ -617,6 +619,14 @@ class CrossRingNodeVisualizer:
         if not flit:
             return "No flit info"
 
+        # 检查是否是MockFlit对象（CP链路中的flit）
+        if hasattr(flit, "__class__") and flit.__class__.__name__ == "MockFlit":
+            # 优先使用保存的原始flit repr
+            if hasattr(flit, "flit_repr") and flit.flit_repr:
+                return flit.flit_repr
+            # 否则使用MockFlit的__repr__
+            return repr(flit)
+
         # 对于字典格式的flit（来自快照），检查是否有保存的repr
         if isinstance(flit, dict):
             # 优先使用保存的repr
@@ -638,7 +648,11 @@ class CrossRingNodeVisualizer:
 
             return "\n".join(info_lines) if info_lines else "No valid info"
 
-        # 对于活动的flit对象，直接使用repr
+        # 对于活动的flit对象，优先使用保存的flit_repr
+        if hasattr(flit, "flit_repr") and flit.flit_repr:
+            return flit.flit_repr
+
+        # 否则直接使用repr
         try:
             return repr(flit)
         except Exception as e:
@@ -855,8 +869,8 @@ class CrossRingNodeVisualizer:
                 if node_data:
                     # 获取当前显示的通道
                     current_channel = getattr(self.parent, "current_channel", "data") if self.parent else "data"
-                    # 直接从快照数据渲染节点
-                    self._render_from_snapshot_data(node_id, node_data, current_channel)
+                    # 直接从快照数据渲染节点，传递目标周期信息
+                    self._render_from_snapshot_data(node_id, node_data, current_channel, cycle)
                 else:
                     self._show_no_data_message(node_id, "节点数据不存在")
             else:
@@ -879,6 +893,7 @@ class CrossRingNodeVisualizer:
 
                 if node_data:
                     current_channel = getattr(self.parent, "current_channel", "data") if self.parent else "data"
+                    # 实时模式不需要指定target_cycle，使用最新数据
                     self._render_from_snapshot_data(node_id, node_data, current_channel)
                 else:
                     self._show_no_data_message(node_id, "节点数据不存在")
@@ -912,7 +927,7 @@ class CrossRingNodeVisualizer:
                 if patch in self.patch_info_map:
                     del self.patch_info_map[patch]
 
-    def _render_from_snapshot_data(self, node_id, node_data, current_channel):
+    def _render_from_snapshot_data(self, node_id, node_data, current_channel, target_cycle=None):
         """直接从快照数据渲染节点组件"""
         # 清空旧的 patch->info 映射
         self.patch_info_map.clear()
@@ -970,7 +985,8 @@ class CrossRingNodeVisualizer:
                 self._render_component_from_snapshot("CP_V", crosspoint_v, node_id)
 
             # 6. 更新CP链路slice的flit显示（只更新flit内容，不重绘框架）
-            self._update_all_link_slices(node_id)
+            # 使用传递的目标周期参数，确保暂停时使用正确的历史数据
+            self._update_all_link_slices(node_id, target_cycle)
 
         except Exception as e:
             # 渲染失败时显示错误信息
@@ -1146,7 +1162,7 @@ class CrossRingNodeVisualizer:
 
     def _should_show_link(self, node_id, direction, slice_type):
         """判断是否应该显示某个方向的link（边缘检测）
-        
+
         Args:
             node_id: 节点ID
             direction: 方向 ("TL", "TR", "TU", "TD")
@@ -1164,28 +1180,28 @@ class CrossRingNodeVisualizer:
                 return False  # 左边缘，TL departure没有（无法向左发送）
             if direction == "TR" and slice_type == "arrival":
                 return False  # 左边缘，TR arrival没有（左边没有节点向右发送）
-        
+
         # 右边缘节点（col == cols-1）
         if col == self.cols - 1:
             if direction == "TR" and slice_type == "departure":
                 return False  # 右边缘，TR departure没有（无法向右发送）
             if direction == "TL" and slice_type == "arrival":
                 return False  # 右边缘，TL arrival没有（右边没有节点向左发送）
-        
+
         # 上边缘节点（row == 0）
         if row == 0:
             if direction == "TU" and slice_type == "departure":
                 return False  # 上边缘，TU departure没有（无法向上发送）
             if direction == "TD" and slice_type == "arrival":
                 return False  # 上边缘，TD arrival没有（上面没有节点向下发送）
-        
+
         # 下边缘节点（row == rows-1）
         if row == self.rows - 1:
             if direction == "TD" and slice_type == "departure":
                 return False  # 下边缘，TD departure没有（无法向下发送）
             if direction == "TU" and slice_type == "arrival":
                 return False  # 下边缘，TU arrival没有（下面没有节点向上发送）
-        
+
         return True
 
     def _clear_cp_links(self):
@@ -1204,7 +1220,7 @@ class CrossRingNodeVisualizer:
                 except:
                     pass
         self.cp_link_arrows.clear()
-        
+
         # 清除slice patches
         for key, patches in self.cp_link_slots.items():
             if isinstance(patches, list):
@@ -1219,7 +1235,7 @@ class CrossRingNodeVisualizer:
                 except:
                     pass
         self.cp_link_slots.clear()
-        
+
         # 清除文本标注
         for key, texts in self.cp_link_texts.items():
             if isinstance(texts, list):
@@ -1374,7 +1390,7 @@ class CrossRingNodeVisualizer:
         # 绘制箭头 - 调整尺寸参数
         arrow = FancyArrowPatch(arrow_start, arrow_end, arrowstyle="->", mutation_scale=12, color="black", linewidth=1.0)  # 减小箭头头部和线宽
         self.ax.add_patch(arrow)
-        
+
         # 存储箭头以便后续清除
         arrow_key = f"{node_id}_{label}"
         if arrow_key not in self.cp_link_arrows:
@@ -1497,7 +1513,7 @@ class CrossRingNodeVisualizer:
         # 绘制箭头 - 调整尺寸参数
         arrow = FancyArrowPatch(arrow_start, arrow_end, arrowstyle="->", mutation_scale=12, color="black", linewidth=1.0)  # 减小箭头头部和线宽
         self.ax.add_patch(arrow)
-        
+
         # 存储箭头以便后续清除
         arrow_key = f"{node_id}_{label}"
         if arrow_key not in self.cp_link_arrows:
@@ -1539,18 +1555,17 @@ class CrossRingNodeVisualizer:
             self.ax.add_patch(outer_rect)
             self.cp_link_slots[slot_key].append(outer_rect)
 
-
     def _precompute_link_mappings(self):
         """预计算所有节点的CP链路映射关系"""
         for node_id in range(self.rows * self.cols):
-            row = node_id // self.cols  
+            row = node_id // self.cols
             col = node_id % self.cols
-            
+
             # 为每个方向和类型计算链路ID
             for direction in ["TL", "TR", "TU", "TD"]:
                 for link_type in ["arrival", "departure"]:
                     key = f"{node_id}_{direction}-{link_type}"
-                    
+
                     # 计算对应的link_id
                     link_id = self._calculate_link_id(node_id, direction, link_type, row, col)
                     if link_id:
@@ -1596,47 +1611,59 @@ class CrossRingNodeVisualizer:
                 return f"link_{node_id - self.cols}_TD_{node_id}"
         return None
 
-    def _update_all_link_slices(self, node_id):
+    def _update_all_link_slices(self, node_id, target_cycle=None):
         """更新当前节点所有CP链路的slice显示"""
         current_channel = getattr(self.parent, "current_channel", 0) if self.parent else 0
-        
+
         # 更新所有方向的link slices
         for direction in ["TL", "TR", "TU", "TD"]:
-            self._update_link_slices(node_id, direction, current_channel)
+            self._update_link_slices(node_id, direction, current_channel, target_cycle)
 
-    def _update_link_slices(self, node_id, direction, channel):
-        """更新link中slice的显示状态"""        
+    def _update_link_slices(self, node_id, direction, channel, target_cycle=None):
+        """更新link中slice的显示状态"""
         # 分别处理arrival和departure链路
         for slice_type in ["arrival", "departure"]:
             key = f"{node_id}_{direction}-{slice_type}"
             if key not in self.cp_link_slots:
                 continue
-                
+
             patches = self.cp_link_slots[key]
             if not patches:
                 continue
-                
+
             # 直接从预计算的映射中获取link_id
             link_id = self.cp_link_mapping.get(key)
             if not link_id:
                 # 没有对应链路（如边缘节点），清空显示
                 self._clear_link_patches(patches)
                 continue
-                
-            # 从link snapshot获取数据
-            channel_data = self._get_link_data_by_id(link_id, channel)
-            
+
+            # 从link snapshot获取数据，支持指定周期
+            channel_data = self._get_link_data_by_id(link_id, channel, target_cycle)
+
             self._update_single_link_patches(patches, channel_data, channel, slice_type, direction)
-    
-    def _get_link_data_by_id(self, link_id, channel):
+
+    def _get_link_data_by_id(self, link_id, channel, target_cycle=None):
         """通过link_id直接获取链路数据"""
         if not hasattr(self.parent, "history") or not self.parent.history:
             return None
-            
-        # 获取最新的link snapshot
-        _, snapshot_data = self.parent.history[-1]
+
+        # 确定要使用的快照数据
+        snapshot_data = None
+
+        if target_cycle is not None:
+            # 查找指定周期的快照数据
+            for hist_cycle, hist_snapshot in self.parent.history:
+                if hist_cycle == target_cycle:
+                    snapshot_data = hist_snapshot
+                    break
+
+        if snapshot_data is None:
+            # 回退到最新的link snapshot
+            _, snapshot_data = self.parent.history[-1]
+
         links_data = snapshot_data.get("links", {})
-        
+
         # 将数字通道索引转换为字符串名称
         channel_names = ["req", "rsp", "data"]
         if isinstance(channel, int) and 0 <= channel < len(channel_names):
@@ -1645,14 +1672,13 @@ class CrossRingNodeVisualizer:
             channel_name = channel
         else:
             return None
-            
+
         # 获取链路数据
         link_data = links_data.get(link_id, {})
         channel_data = link_data.get(channel_name, {})
-        
-        
+
         return channel_data
-    
+
     def _clear_link_patches(self, patches):
         """清空链路patches显示"""
         for patch in patches:
@@ -1662,7 +1688,7 @@ class CrossRingNodeVisualizer:
             patch.set_alpha(0.7)
             if patch in self.patch_info_map:
                 del self.patch_info_map[patch]
-    
+
     def _update_single_link_patches(self, patches, channel_data, channel, slice_type, direction):
         """更新单个链路的patches显示"""
         # 如果没有链路数据，清空所有slots
@@ -1678,13 +1704,13 @@ class CrossRingNodeVisualizer:
             channel_name = channel
         else:
             return
-        
+
         # 更新每个slot的显示 - 跳过首尾slice，只显示中间slice
         for i, patch in enumerate(patches):
             # 根据direction调整索引映射：
             # TL: 右→左(反向), TR: 左→右(正向), TU: 下→上(正向), TD: 上→下(反向)
             is_positive_direction = direction in ["TR", "TU"]
-            
+
             if is_positive_direction:
                 # TR/TU：flit向正方向移动（左到右/下到上）
                 actual_slice_idx = i + 1  # 正向：跳过slice_idx=0，从slice_idx=1开始
@@ -1692,32 +1718,42 @@ class CrossRingNodeVisualizer:
                 # TL/TD：flit向负方向移动（右到左/上到下）
                 total_slices = len(patches) + 2  # 加上跳过的首尾slice
                 actual_slice_idx = total_slices - 2 - i  # 反向映射
-            
-            # 从channel_data中获取对应slice的数据 
+
+            # 从channel_data中获取对应slice的数据
             slice_data = channel_data.get(actual_slice_idx, {})
             slot_data = slice_data.get("slots", {}).get(channel_name, {})
             # 清除之前的flit显示
             for child in patch.get_children():
-                if hasattr(child, '_mock_flit'):
+                if hasattr(child, "_mock_flit"):
                     child.remove()
-            
+
             if slot_data and slot_data.get("valid", False) and "flit" in slot_data:
                 # 有flit数据，创建一个模拟的flit对象用于样式应用
                 flit_data = slot_data["flit"]
-                
+
                 # 创建一个简单的flit对象用于样式管理
                 class MockFlit:
                     def __init__(self, data):
                         for key, value in data.items():
                             setattr(self, key, value)
-                
+
+                    def __repr__(self):
+                        # 优先使用保存的原始flit repr信息
+                        if hasattr(self, "flit_repr") and self.flit_repr:
+                            return self.flit_repr
+                        # 回退到基本信息（与_FlitProxy保持一致的格式）
+                        pid = getattr(self, "packet_id", "N/A")
+                        fid = getattr(self, "flit_id", "N/A")
+                        etag = getattr(self, "etag_priority", "T2")
+                        itag_h = getattr(self, "itag_h", False)
+                        itag_v = getattr(self, "itag_v", False)
+                        itag = "H" if itag_h else ("V" if itag_v else "")
+                        return f"(pid={pid}, fid={fid}, ET={etag}, IT={itag})"
+
                 mock_flit = MockFlit(flit_data)
-                
+
                 # 应用flit样式
-                self.style_manager.apply_style_to_patch(patch, mock_flit, 
-                    use_highlight=self.use_highlight, 
-                    expected_packet_id=self.highlight_pid, 
-                    show_tags_mode=self.show_tags_mode)
+                self.style_manager.apply_style_to_patch(patch, mock_flit, use_highlight=self.use_highlight, expected_packet_id=self.highlight_pid, show_tags_mode=self.show_tags_mode)
                 # 有flit时设置为实线边框
                 patch.set_linestyle("-")
                 # 设置为可点击
@@ -1731,4 +1767,3 @@ class CrossRingNodeVisualizer:
                 patch.set_alpha(0.7)
                 if patch in self.patch_info_map:
                     del self.patch_info_map[patch]
-
